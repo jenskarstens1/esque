@@ -1,7 +1,14 @@
-import { SegmentedControl, IconButton } from '../design/Controls'
+import { SegmentedControl, IconButton, IconLink } from '../design/Controls'
 import { Tooltip } from '../design/Tooltip'
-import { Logo, ExportIcon, SettingsIcon } from '../design/icons'
+import { Logo, ExportIcon, GitHubIcon, SettingsIcon } from '../design/icons'
 import { useUI, type Module } from '../state/ui'
+
+/*
+ * esque is AGPL-3.0, which asks a network-served build to offer its source to
+ * the people using it. A permanent link in the chrome is the plainest way to
+ * do that, and it is where anyone would look for the repo anyway.
+ */
+const REPO_URL = 'https://github.com/jenskarstens1/esque'
 
 export function TitleBar({
   onExport,
@@ -44,6 +51,16 @@ export function TitleBar({
           <IconButton label="Settings" onClick={onSettings}>
             <SettingsIcon />
           </IconButton>
+        </Tooltip>
+        <Tooltip content="Source on GitHub">
+          <IconLink
+            label="Source on GitHub"
+            href={REPO_URL}
+            target="_blank"
+            rel="noreferrer"
+          >
+            <GitHubIcon />
+          </IconLink>
         </Tooltip>
       </div>
     </header>

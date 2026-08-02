@@ -1,4 +1,4 @@
-import { forwardRef, useEffect, useRef, useState, type ButtonHTMLAttributes, type ReactNode } from 'react'
+import { forwardRef, useEffect, useRef, useState, type AnchorHTMLAttributes, type ButtonHTMLAttributes, type ReactNode } from 'react'
 import { cn } from '../lib/cn'
 
 // ---------------------------------------------------------------------------
@@ -65,6 +65,17 @@ export interface IconButtonProps extends ButtonHTMLAttributes<HTMLButtonElement>
   size?: 'sm' | 'md'
 }
 
+/** Shared between the button and its anchor twin, so a link never drifts from
+ *  the controls it sits beside. */
+const iconChrome = (size: 'sm' | 'md', active?: boolean) =>
+  cn(
+    'inline-flex shrink-0 items-center justify-center rounded-md',
+    'transition-[background-color,color,scale] duration-[--duration-fast] ease-[--ease-out]',
+    'active:scale-90',
+    size === 'sm' ? 'size-6' : 'size-7',
+    active ? 'bg-accent-soft text-accent' : 'text-icon-secondary hover:bg-raised hover:text-icon',
+  )
+
 export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(function IconButton(
   { label, active, size = 'md', className, children, ...rest },
   ref,
@@ -77,19 +88,41 @@ export const IconButton = forwardRef<HTMLButtonElement, IconButtonProps>(functio
       aria-label={label}
       aria-pressed={active}
       className={cn(
-        'inline-flex shrink-0 items-center justify-center rounded-md',
-        'transition-[background-color,color,scale] duration-[--duration-fast] ease-[--ease-out]',
-        'active:scale-90 disabled:pointer-events-none disabled:opacity-30',
-        size === 'sm' ? 'size-6' : 'size-7',
-        active
-          ? 'bg-accent-soft text-accent'
-          : 'text-icon-secondary hover:bg-raised hover:text-icon',
+        iconChrome(size, active),
+        'disabled:pointer-events-none disabled:opacity-30',
         className,
       )}
       {...rest}
     >
       {children}
     </button>
+  )
+})
+
+export interface IconLinkProps extends AnchorHTMLAttributes<HTMLAnchorElement> {
+  label: string
+  size?: 'sm' | 'md'
+}
+
+/**
+ * The icon button's twin for destinations rather than actions. A real anchor,
+ * so middle-click, ⌘-click and "copy link" all behave the way the rest of the
+ * web does. A `<button>` with a `window.open` quietly takes all of that away.
+ */
+export const IconLink = forwardRef<HTMLAnchorElement, IconLinkProps>(function IconLink(
+  { label, size = 'md', className, children, ...rest },
+  ref,
+) {
+  return (
+    <a
+      ref={ref}
+      title={label}
+      aria-label={label}
+      className={cn(iconChrome(size), className)}
+      {...rest}
+    >
+      {children}
+    </a>
   )
 })
 
