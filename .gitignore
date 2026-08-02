@@ -30,6 +30,3 @@ node_modules
 
 # Large binary RAW test fixtures (~100MB); fetched/kept locally, not committed.
 public/raw-fixtures
-
-# Machine-local tooling cache (absolute paths, session ids).
-.impeccable/hook.cache.json
