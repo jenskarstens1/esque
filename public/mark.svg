@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none">
+  <rect width="24" height="24" rx="5.4" fill="#0b0b0d"/>
+  <!-- Same geometry as the Mark component, inset just enough that the longest
+       shard's tip clears the chip's corner radius instead of spilling past it. -->
+  <g transform="translate(12 12) scale(0.948) translate(-12 -12)">
+    <path d="M9.55 22.34A0.12 0.12 0 0 0 9.76 22.46L22.15 5.2A0.75 0.75 0 0 0 21.56 4.01L18.33 3.88A0.75 0.75 0 0 0 17.61 4.33Z" fill="#c9dffb"/>
+    <path d="M9.14 22.24A0.12 0.12 0 0 0 9.38 22.29L14 5.92A0.75 0.75 0 0 0 13 5.01L10.77 5.88A0.75 0.75 0 0 0 10.29 6.52Z" fill="#94c5ff"/>
+    <path d="M8.73 22.28A0.12 0.12 0 0 0 8.97 22.24L8.01 9.05A0.75 0.75 0 0 0 6.77 8.53L5.6 9.54A0.75 0.75 0 0 0 5.36 10.31Z" fill="#58a6ff"/>
+    <path d="M8.35 22.47A0.12 0.12 0 0 0 8.56 22.34L4.31 12.82A0.75 0.75 0 0 0 2.99 12.71L2.49 13.46A0.75 0.75 0 0 0 2.51 14.31Z" fill="#0a84ff"/>
+  </g>
+</svg>

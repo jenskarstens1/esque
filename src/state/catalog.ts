@@ -1,0 +1,199 @@
+import { create } from 'zustand'
+import type { ColorLabel, PickFlag, Photo } from '../core/types'
+
+export type Source =
+  | { kind: 'all' }
+  | { kind: 'folder'; id: string }
+  | { kind: 'collection'; id: string }
+  | { kind: 'previousImport' }
+
+export type SortKey = 'capture' | 'filename' | 'rating' | 'added' | 'modified' | 'iso'
+
+export interface Filters {
+  rating: number
+  ratingOp: 'gte' | 'eq' | 'lte'
+  flags: PickFlag[]
+  labels: ColorLabel[]
+  text: string
+  cameras: string[]
+  lenses: string[]
+  fileType: 'all' | 'raw' | 'rendered'
+  edited: 'all' | 'edited' | 'unedited'
+  keywords: string[]
+}
+
+export const emptyFilters = (): Filters => ({
+  rating: 0,
+  ratingOp: 'gte',
+  flags: [],
+  labels: [],
+  text: '',
+  cameras: [],
+  lenses: [],
+  fileType: 'all',
+  edited: 'all',
+  keywords: [],
+})
+
+export const filtersActive = (f: Filters) =>
+  f.rating > 0 ||
+  f.flags.length > 0 ||
+  f.labels.length > 0 ||
+  f.text.trim().length > 0 ||
+  f.cameras.length > 0 ||
+  f.lenses.length > 0 ||
+  f.fileType !== 'all' ||
+  f.edited !== 'all' ||
+  f.keywords.length > 0
+
+interface CatalogState {
+  source: Source
+  filters: Filters
+  sortKey: SortKey
+  sortAsc: boolean
+
+  /** IDs in current view order — kept in sync by the Library module. */
+  visibleIds: string[]
+  selected: string[]
+  /** The photo shown in Loupe/Develop; always a member of `selected`. */
+  primaryId: string | null
+  /** Anchor for shift-click ranges. */
+  anchorId: string | null
+
+  setSource: (s: Source) => void
+  setFilters: (patch: Partial<Filters>) => void
+  clearFilters: () => void
+  setSort: (key: SortKey, asc?: boolean) => void
+  setVisible: (ids: string[]) => void
+
+  select: (id: string, mode?: 'replace' | 'toggle' | 'range') => void
+  selectMany: (ids: string[]) => void
+  selectAll: () => void
+  clearSelection: () => void
+  step: (delta: number) => void
+  setPrimary: (id: string | null) => void
+}
+
+export const useCatalog = create<CatalogState>((set, get) => ({
+  source: { kind: 'all' },
+  filters: emptyFilters(),
+  sortKey: 'capture',
+  sortAsc: true,
+
+  visibleIds: [],
+  selected: [],
+  primaryId: null,
+  anchorId: null,
+
+  setSource: (source) => set({ source, selected: [], primaryId: null, anchorId: null }),
+  setFilters: (patch) => set((s) => ({ filters: { ...s.filters, ...patch } })),
+  clearFilters: () => set({ filters: emptyFilters() }),
+  setSort: (sortKey, asc) => set((s) => ({ sortKey, sortAsc: asc ?? (sortKey === s.sortKey ? !s.sortAsc : true) })),
+
+  setVisible: (visibleIds) =>
+    set((s) => {
+      const alive = new Set(visibleIds)
+      const selected = s.selected.filter((id) => alive.has(id))
+      let primaryId = s.primaryId && alive.has(s.primaryId) ? s.primaryId : null
+      // Keep something selected so Develop always has a subject.
+      if (!primaryId && visibleIds.length) primaryId = selected[0] ?? visibleIds[0]
+      return {
+        visibleIds,
+        selected: selected.length ? selected : primaryId ? [primaryId] : [],
+        primaryId,
+      }
+    }),
+
+  select: (id, mode = 'replace') => {
+    const { selected, visibleIds, anchorId } = get()
+    if (mode === 'toggle') {
+      const has = selected.includes(id)
+      const next = has ? selected.filter((x) => x !== id) : [...selected, id]
+      set({
+        selected: next,
+        primaryId: has ? (next[next.length - 1] ?? null) : id,
+        anchorId: id,
+      })
+      return
+    }
+    if (mode === 'range' && anchorId) {
+      const a = visibleIds.indexOf(anchorId)
+      const b = visibleIds.indexOf(id)
+      if (a >= 0 && b >= 0) {
+        const [lo, hi] = a < b ? [a, b] : [b, a]
+        set({ selected: visibleIds.slice(lo, hi + 1), primaryId: id })
+        return
+      }
+    }
+    set({ selected: [id], primaryId: id, anchorId: id })
+  },
+
+  selectMany: (ids) => set({ selected: ids, primaryId: ids[ids.length - 1] ?? null }),
+  selectAll: () => set((s) => ({ selected: [...s.visibleIds], primaryId: s.visibleIds[0] ?? null })),
+  clearSelection: () => set({ selected: [], primaryId: null }),
+
+  step: (delta) => {
+    const { visibleIds, primaryId } = get()
+    if (!visibleIds.length) return
+    const i = primaryId ? visibleIds.indexOf(primaryId) : -1
+    const next = visibleIds[Math.max(0, Math.min(visibleIds.length - 1, i + delta))]
+    if (next) set({ selected: [next], primaryId: next, anchorId: next })
+  },
+
+  setPrimary: (primaryId) => set({ primaryId }),
+}))
+
+// ---------------------------------------------------------------------------
+// Filtering & sorting, applied client-side over the Dexie result set.
+// ---------------------------------------------------------------------------
+
+export function applyFilters(photos: Photo[], f: Filters): Photo[] {
+  const text = f.text.trim().toLowerCase()
+  return photos.filter((p) => {
+    if (f.rating > 0) {
+      if (f.ratingOp === 'gte' && p.rating < f.rating) return false
+      if (f.ratingOp === 'lte' && p.rating > f.rating) return false
+      if (f.ratingOp === 'eq' && p.rating !== f.rating) return false
+    }
+    if (f.flags.length && !f.flags.includes(p.flag)) return false
+    if (f.labels.length && !f.labels.includes(p.label)) return false
+    if (f.fileType === 'raw' && !p.isRaw) return false
+    if (f.fileType === 'rendered' && p.isRaw) return false
+    if (f.edited === 'edited' && !p.edits) return false
+    if (f.edited === 'unedited' && p.edits) return false
+    if (f.cameras.length && !f.cameras.includes(p.meta.cameraModel)) return false
+    if (f.lenses.length && !f.lenses.includes(p.meta.lens)) return false
+    if (f.keywords.length && !f.keywords.every((k) => p.keywords.includes(k))) return false
+    if (text) {
+      const hay = `${p.filename} ${p.title} ${p.caption} ${p.keywords.join(' ')} ${p.meta.cameraModel} ${p.meta.lens}`.toLowerCase()
+      if (!hay.includes(text)) return false
+    }
+    return true
+  })
+}
+
+export function sortPhotos(photos: Photo[], key: SortKey, asc: boolean): Photo[] {
+  const dir = asc ? 1 : -1
+  const value = (p: Photo): number | string => {
+    switch (key) {
+      case 'capture':
+        return p.meta.captureTime ?? p.modifiedAt
+      case 'filename':
+        return p.filename.toLowerCase()
+      case 'rating':
+        return p.rating
+      case 'added':
+        return p.addedAt
+      case 'modified':
+        return p.modifiedAt
+      case 'iso':
+        return p.meta.iso
+    }
+  }
+  return [...photos].sort((a, b) => {
+    const va = value(a)
+    const vb = value(b)
+    if (va === vb) return a.filename.localeCompare(b.filename) * dir
+    return (va < vb ? -1 : 1) * dir
+  })
+}

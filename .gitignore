@@ -1,0 +1,35 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+/dist
+/dist-ssr
+*.local
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+
+# Emscripten build tree for tools/build-libraw.sh (the output in
+# vendor/libraw-wasm is committed; this scratch tree is not).
+.libraw-build
+
+# Large binary RAW test fixtures (~100MB); fetched/kept locally, not committed.
+public/raw-fixtures
+
+# Machine-local tooling cache (absolute paths, session ids).
+.impeccable/hook.cache.json

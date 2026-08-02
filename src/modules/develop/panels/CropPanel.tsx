@@ -1,0 +1,135 @@
+import { PanelSection, MiniAction } from '../../../design/Panel'
+import { Button, Checkbox, Select } from '../../../design/Controls'
+import { cropMenuItems, panelMenuItems } from '../../../shell/appMenus'
+import { useUI } from '../../../state/ui'
+import { EditSlider } from '../EditSlider'
+import { isSectionModified } from '../../../develop/modified'
+import { Group } from './BasicPanel'
+import { useDevelop } from '../../../develop/session'
+import { ASPECT_LABELS, fitCropToAspect, frameAspect } from '../../../gpu/geometry'
+import type { CropAspect } from '../../../core/types'
+
+const ASPECTS = Object.keys(ASPECT_LABELS) as CropAspect[]
+
+export function CropPanel() {
+  const modified = useDevelop((s) => isSectionModified(s.edits, 'crop', s.kind))
+  const crop = useDevelop((s) => s.edits.crop)
+  const reset = useDevelop((s) => s.resetSection)
+  const update = useDevelop((s) => s.update)
+  const tool = useUI((s) => s.developTool)
+  const setTool = useUI((s) => s.setDevelopTool)
+  const fa = useDevelop((s) => frameAspect(s.sourceSize.width, s.sourceSize.height, s.edits))
+
+  const setAspect = (aspect: CropAspect) =>
+    update(
+      'crop.aspect',
+      'Crop Aspect',
+      (e) => {
+        e.crop.aspect = aspect
+        // Snapping on choice is what makes a preset feel like a preset; the
+        // frame's own proportions are the reference for 'original'.
+        if (aspect !== 'free') {
+          Object.assign(e.crop, fitCropToAspect(e.crop, aspect, fa))
+        }
+      },
+      false,
+    )
+
+  const turn = (by: number) =>
+    update(
+      'crop.quarterTurns',
+      by > 0 ? 'Rotate Right' : 'Rotate Left',
+      (e) => {
+        e.crop.quarterTurns = (((e.crop.quarterTurns + by) % 4) + 4) % 4
+      },
+      false,
+    )
+
+  const flip = (axis: 'flipH' | 'flipV') =>
+    update(
+      `crop.${axis}`,
+      axis === 'flipH' ? 'Flip Horizontal' : 'Flip Vertical',
+      (e) => {
+        e.crop[axis] = !e.crop[axis]
+      },
+      false,
+    )
+
+  return (
+    <PanelSection
+      menuItems={() => [...cropMenuItems(), { kind: 'separator' }, ...panelMenuItems('crop')]}
+      title="Crop & Straighten"
+      defaultOpen={false}
+      modified={modified}
+      actions={<MiniAction onClick={() => reset('crop')}>Reset</MiniAction>}
+    >
+      <Button
+        variant={tool === 'crop' ? 'primary' : 'secondary'}
+        full
+        className="mb-2"
+        onClick={() => setTool(tool === 'crop' ? 'none' : 'crop')}
+      >
+        {tool === 'crop' ? 'Done' : 'Crop Photo'}
+        <span className="ml-1.5 text-label-tertiary">R</span>
+      </Button>
+
+      <div className="mb-1.5 flex items-center gap-2">
+        <span className="w-[44px] shrink-0 text-mini text-label-tertiary">Aspect</span>
+        <Select
+          value={crop.aspect}
+          onChange={setAspect}
+          options={ASPECTS.map((a) => ({ value: a, label: ASPECT_LABELS[a] }))}
+          className="min-w-0 flex-1"
+        />
+      </div>
+      <div className="mb-2">
+        <Checkbox
+          label="Lock aspect"
+          checked={crop.aspectLocked}
+          onChange={(v) =>
+            update(
+              'crop.aspectLocked',
+              'Lock Aspect',
+              (e) => {
+                e.crop.aspectLocked = v
+              },
+              false,
+            )
+          }
+        />
+      </div>
+
+      <EditSlider path="crop.angle" label="Straighten" min={-45} max={45} step={0.1} />
+
+      <div className="mt-2 grid grid-cols-4 gap-1">
+        <Button variant="secondary" onClick={() => turn(-1)} title="Rotate left 90°">
+          ⟲
+        </Button>
+        <Button variant="secondary" onClick={() => turn(1)} title="Rotate right 90°">
+          ⟳
+        </Button>
+        <Button
+          variant={crop.flipH ? 'primary' : 'secondary'}
+          onClick={() => flip('flipH')}
+          title="Flip horizontal"
+        >
+          ⇄
+        </Button>
+        <Button
+          variant={crop.flipV ? 'primary' : 'secondary'}
+          onClick={() => flip('flipV')}
+          title="Flip vertical"
+        >
+          ⇅
+        </Button>
+      </div>
+
+      <Group label="Edges">
+        <EditSlider path="crop.left" label="Left" min={0} max={1} step={0.001} origin={0} />
+        <EditSlider path="crop.top" label="Top" min={0} max={1} step={0.001} origin={0} />
+        <EditSlider path="crop.right" label="Right" min={0} max={1} step={0.001} origin={1} />
+        <EditSlider path="crop.bottom" label="Bottom" min={0} max={1} step={0.001} origin={1} />
+      </Group>
+    </PanelSection>
+  )
+}

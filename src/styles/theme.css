@@ -1,0 +1,221 @@
+/*
+ * esque design tokens
+ *
+ * Apple pro-app vocabulary (Final Cut / Aperture): strictly neutral greys so the
+ * chrome never biases colour perception next to the image, Apple's label opacity
+ * hierarchy, system blue accent, and SF Pro via -apple-system (real SF Pro on
+ * macOS, zero webfont cost).
+ */
+
+@theme {
+  /* ---- Surfaces ------------------------------------------------------- */
+  /* Neutral with a hair of blue, matching Apple's dark system greys. */
+  --color-canvas: #0b0b0d; /* the surround the photo sits on */
+  --color-base: #151517; /* app background behind panels */
+  --color-panel: #1c1c1f; /* sidebars, toolbars, filmstrip */
+  --color-raised: #26262a; /* rows, cards, wells, inputs */
+  --color-control: #2f2f34; /* buttons, slider tracks */
+  --color-hover: #3a3a40;
+  --color-active: #45454c;
+  --color-scrim: rgb(0 0 0 / 0.55);
+
+  /* ---- Labels (Apple's opacity hierarchy) ----------------------------- */
+  --color-label: rgb(255 255 255 / 0.92);
+  --color-label-secondary: rgb(235 235 245 / 0.6);
+  --color-label-tertiary: rgb(235 235 245 / 0.32);
+  --color-label-quaternary: rgb(235 235 245 / 0.18);
+
+  /* ---- Icons ----------------------------------------------------------- */
+  /*
+   * A separate, fully opaque ramp.
+   *
+   * The label hierarchy is translucent white, which is right for text: a
+   * letterform is a solid mass, so 32% of it still reads as a definite shape.
+   * A 1.75px stroke has no mass to spare — at the same alpha the glyph stops
+   * looking dim and starts looking ghosted, like it failed to finish drawing.
+   * These are the same tones set solid, one step up in presence, so an icon is
+   * always a drawn object rather than a faint one.
+   */
+  --color-icon: #ebebf0;
+  --color-icon-secondary: #a2a2aa;
+  --color-icon-tertiary: #82828c;
+  --color-icon-quaternary: #5c5c65;
+
+  /* ---- Separators ------------------------------------------------------ */  --color-hairline: rgb(255 255 255 / 0.09);
+  --color-hairline-strong: rgb(255 255 255 / 0.15);
+
+  /* ---- Slider (React Spectrum S2 greys, dark set) ---------------------- */
+  /* Lifted from @adobe/spectrum-tokens so the control reads exactly like S2's
+     thick-track / precise-thumb slider, nudged a hair blue to sit in esque's
+     neutral family. */
+  --color-slider-track: #393a3f; /* S2 gray-300 */
+  --color-slider-fill: #aeaeb4; /* S2 gray-700 */
+  --color-slider-thumb: #131316; /* S2 gray-25  */
+  --color-slider-thumb-ring: #dbdbde; /* S2 gray-800 */
+  --color-slider-thumb-ring-hover: #f2f2f4; /* S2 gray-900 */
+
+  /* ---- Accent & semantics --------------------------------------------- */
+  --color-accent: #0a84ff;
+  --color-accent-hover: #3d9dff;
+  --color-accent-press: #0060df;
+  --color-accent-soft: rgb(10 132 255 / 0.18);
+
+  --color-red: #ff453a;
+  --color-orange: #ff9f0a;
+  --color-yellow: #ffd60a;
+  --color-green: #30d158;
+  --color-teal: #40c8e0;
+  --color-indigo: #5e5ce6;
+  --color-purple: #bf5af2;
+  --color-pink: #ff375f;
+
+  /* Lightroom colour labels */
+  --color-label-red: #e2484a;
+  --color-label-yellow: #e6b422;
+  --color-label-green: #4cae4f;
+  --color-label-blue: #3d8ee0;
+  --color-label-purple: #9b5fd0;
+
+  /* Histogram channels — flat, alpha-blended fills in the library graph. */
+  --color-hist-r: #ff5a4f;
+  --color-hist-g: #4ade6b;
+  --color-hist-b: #4d9bff;
+
+  /*
+   * The develop graph stacks the same three channels in screen blend, where the
+   * pairs have to land on a clean gold, cyan and magenta and all three together
+   * on a neutral grey. That only works with near-pure primaries: the softened
+   * ones above turn every overlap into the same olive mud.
+   */
+  --color-hist-mix-r: #8d0c0c;
+  --color-hist-mix-g: #12832a;
+  --color-hist-mix-b: #123f8d;
+
+  /* ---- Brand ------------------------------------------------------------ */
+  /*
+   * The mark's four shards. Anchored on the accent and climbing in even OKLCH
+   * lightness steps (0.624 → 0.722 → 0.814 → 0.896) at a fixed hue of 255.5°,
+   * with chroma tapering as it lightens so the pale end reads as light rather
+   * than as a washed-out cyan. Ordered short shard → long shard, so the fan
+   * opens into light and the saturated accent stays a spark rather than a slab.
+   */
+  --color-mark-1: #0a84ff;
+  --color-mark-2: #58a6ff;
+  --color-mark-3: #94c5ff;
+  --color-mark-4: #c9dffb;
+
+  /* ---- Type ------------------------------------------------------------ */
+  /*
+   * Pinned in fonts.css. The stacks below are only a bridge for the handful of
+   * environments that block webfonts — the app is not meant to render in them.
+   * `--font-ui` and `--font-display` resolve to the same family on purpose:
+   * Inter's optical-size axis covers what SF Pro splits into Text and Display,
+   * so the distinction is made by `font-size`, not by picking a file.
+   */
+  --font-ui: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  --font-display: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /*
+   * A dense pro-app scale. 12px is the workhorse.
+   *
+   * Every step carries its own tracking, because Inter set solid at one value
+   * reads tight-and-crowded at 10px and loose-and-airy at 28px — the exact
+   * thing SF Pro's per-size optical tracking exists to prevent. The numbers
+   * follow Inter's own dynamic-tracking curve (-0.0223 + 0.185·e^(-0.1745·px)),
+   * which is what makes a column of 10/11/12px labels look like one typeface
+   * instead of three.
+   */
+  --text-micro: 0.625rem; /* 10 — uppercase section eyebrows */
+  --text-micro--line-height: 1.2;
+  --text-micro--letter-spacing: 0.01em;
+  --text-mini: 0.6875rem; /* 11 — slider labels, readouts */
+  --text-mini--line-height: 1.3;
+  --text-mini--letter-spacing: 0.005em;
+  --text-ui: 0.75rem; /* 12 — default */
+  --text-ui--line-height: 1.4;
+  --text-ui--letter-spacing: 0em;
+  --text-ui-lg: 0.8125rem; /* 13 — emphasis */
+  --text-ui-lg--line-height: 1.4;
+  --text-ui-lg--letter-spacing: -0.003em;
+  --text-title: 0.9375rem; /* 15 */
+  --text-title--line-height: 1.35;
+  --text-title--letter-spacing: -0.009em;
+  --text-headline: 1.0625rem; /* 17 */
+  --text-headline--line-height: 1.3;
+  --text-headline--letter-spacing: -0.013em;
+  --text-display: 1.75rem; /* 28 */
+  --text-display--line-height: 1.15;
+  --text-display--letter-spacing: -0.021em;
+
+  /* ---- Shape ----------------------------------------------------------- */
+  --radius-xs: 3px;
+  --radius-sm: 5px;
+  --radius-md: 7px;
+  --radius-lg: 10px;
+  --radius-xl: 14px;
+  --radius-2xl: 20px;
+
+  /* ---- Elevation ------------------------------------------------------- */
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.4);
+  --shadow-md: 0 4px 12px rgb(0 0 0 / 0.35), 0 1px 3px rgb(0 0 0 / 0.3);
+  --shadow-lg: 0 16px 48px rgb(0 0 0 / 0.55), 0 2px 8px rgb(0 0 0 / 0.35);
+  --shadow-popover:
+    0 12px 32px rgb(0 0 0 / 0.6), 0 2px 6px rgb(0 0 0 / 0.4), 0 0 0 0.5px rgb(255 255 255 / 0.12);
+  /*
+   * Pills that float directly over the photo — zoom readout, mask names, the
+   * crop angle, the before/after captions. A hairline plus a shallow drop
+   * shadow is what separates them from the image underneath, and it has to work
+   * over a white sky and a black shadow alike, so it never goes opaque.
+   */
+  --shadow-hud: 0 1px 3px rgb(0 0 0 / 0.35), 0 0 0 0.5px rgb(255 255 255 / 0.08);
+
+  /* ---- Motion ---------------------------------------------------------- */
+  /* Apple's signature deceleration curve. */
+  --ease-out: cubic-bezier(0.32, 0.72, 0, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --ease-snap: cubic-bezier(0.2, 0.9, 0.25, 1);
+
+  --duration-instant: 90ms;
+  --duration-fast: 140ms;
+  --duration-base: 220ms;
+  --duration-slow: 340ms;
+
+  /* ---- Layout ---------------------------------------------------------- */
+  --spacing-panel: 15rem; /* 240px default side panel */
+  --spacing-filmstrip: 5.75rem;
+  --spacing-toolbar: 2.25rem;
+}
+
+/* Vibrancy material, used on floating panels and HUDs. */
+@utility material {
+  background-color: color-mix(in srgb, var(--color-panel) 72%, transparent);
+  backdrop-filter: blur(30px) saturate(180%);
+  -webkit-backdrop-filter: blur(30px) saturate(180%);
+}
+
+@utility material-thick {
+  background-color: color-mix(in srgb, var(--color-panel) 88%, transparent);
+  backdrop-filter: blur(40px) saturate(180%);
+  -webkit-backdrop-filter: blur(40px) saturate(180%);
+}
+
+/* Numeric readouts must not jitter while a slider is being scrubbed. */
+@utility tnum {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1;
+}
+
+/* True hairlines on retina, not chunky 1px CSS borders. */
+@utility hairline-b {
+  box-shadow: inset 0 -0.5px 0 var(--color-hairline);
+}
+@utility hairline-t {
+  box-shadow: inset 0 0.5px 0 var(--color-hairline);
+}
+@utility hairline-r {
+  box-shadow: inset -0.5px 0 0 var(--color-hairline);
+}
+@utility hairline-l {
+  box-shadow: inset 0.5px 0 0 var(--color-hairline);
+}

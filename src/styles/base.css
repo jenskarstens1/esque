@@ -1,0 +1,122 @@
+/* Base layer: reset, typography defaults, focus, scrollbars, selection. */
+
+@layer base {
+  *,
+  *::before,
+  *::after {
+    box-sizing: border-box;
+    /* A pro tool is full of drag interactions; stray text selection ruins them. */
+    -webkit-user-select: none;
+    user-select: none;
+  }
+
+  html {
+    color-scheme: dark;
+    -webkit-text-size-adjust: 100%;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+    margin: 0;
+    overflow: hidden;
+    overscroll-behavior: none;
+  }
+
+  body {
+    background: var(--color-base);
+    color: var(--color-label);
+    font-family: var(--font-ui);
+    font-size: var(--text-ui);
+    line-height: var(--text-ui--line-height);
+    /* 12px is the one size on the scale that wants none; see theme.css. */
+    letter-spacing: 0;
+    /* Lets Inter's opsz axis track font-size, the way SF Pro switches between
+       its Text and Display cuts. Default in every engine that supports it, but
+       stated here because the whole point of shipping the opsz build. */
+    font-optical-sizing: auto;
+    /* Inter is drawn for this; without it the UI renders a notch heavier. */
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4 {
+    font-family: var(--font-display);
+    font-weight: 590;
+    /* Matches the 17px step; anything set with a text-* utility overrides it. */
+    letter-spacing: -0.013em;
+    margin: 0;
+  }
+
+  input,
+  button,
+  select,
+  textarea {
+    font: inherit;
+    letter-spacing: inherit;
+    color: inherit;
+  }
+
+  button {
+    background: none;
+    border: 0;
+    padding: 0;
+    cursor: default; /* macOS apps use the arrow cursor on buttons, not a pointer */
+  }
+
+  input,
+  textarea {
+    -webkit-user-select: text;
+    user-select: text;
+  }
+
+  ::selection {
+    background: var(--color-accent-soft);
+    color: var(--color-label);
+  }
+
+  /* Apple's focus ring: a soft accent halo, never a hard outline. */
+  :focus {
+    outline: none;
+  }
+  :focus-visible {
+    outline: none;
+    box-shadow:
+      0 0 0 1px var(--color-accent),
+      0 0 0 3.5px color-mix(in srgb, var(--color-accent) 35%, transparent);
+  }
+
+  /*
+   * No native scrollbar anywhere. A styled `::-webkit-scrollbar` is a *classic*
+   * scrollbar in Chromium — it reserves 11px inside the padding box, so content
+   * reflows the instant an area starts or stops overflowing. `Scroller` paints
+   * an overlay thumb instead, which costs no layout space.
+   */
+  * {
+    scrollbar-width: none;
+  }
+  ::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+    display: none;
+  }
+
+  [hidden] {
+    display: none !important;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}

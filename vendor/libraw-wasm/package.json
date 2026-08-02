@@ -1,0 +1,9 @@
+{
+  "name": "libraw-wasm",
+  "version": "1.6.0-omp",
+  "description": "LibRaw compiled to WebAssembly with OpenMP enabled. Built by tools/build-libraw.sh.",
+  "main": "dist/index.js",
+  "type": "module",
+  "types": "dist/index.d.ts",
+  "license": "ISC"
+}

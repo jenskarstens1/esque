@@ -1,0 +1,418 @@
+/*
+ * Bespoke controls that Tailwind utilities can't express cleanly.
+ * Everything else is composed with utilities in the components themselves.
+ */
+
+@layer components {
+  /* ---- Slider ---------------------------------------------------------- */
+  /*
+   * Geometry replicated from React Spectrum S2's Slider with
+   * trackStyle="thick" + thumbStyle="precise": a 16px trough with 4px corners
+   * and a narrow 6px pill thumb carrying a 2px ring. Size scale (S/M/L/XL)
+   * and the press "push-back" are S2's too.
+   *
+   * The interaction stays esque's own — Lightroom muscle memory: centre detent
+   * (alt bypasses), shift slows the drag, double-click resets, drag-scrub value.
+   */
+  .esq-slider {
+    /* S2 size scale — container height and thumb box. */
+    --sl-h: 32px;
+    --sl-thumb-box: 20px;
+    --sl-thumb-w: 6px; /* thumbStyle: precise */
+    --sl-thumb-h: 22px;
+    --sl-track-h: 16px; /* trackStyle: thick */
+    --sl-track-r: 4px; /* S2 corner-radius-small */
+
+    position: relative;
+    width: 100%;
+    height: var(--sl-h);
+    cursor: default;
+    touch-action: none;
+    outline: none;
+  }
+
+  .esq-slider[data-size='S'] {
+    --sl-h: 24px;
+    --sl-thumb-box: 18px;
+    --sl-thumb-h: 20px;
+  }
+  .esq-slider[data-size='L'] {
+    --sl-h: 40px;
+    --sl-thumb-box: 22px;
+    --sl-thumb-h: 24px;
+  }
+  .esq-slider[data-size='XL'] {
+    --sl-h: 48px;
+    --sl-thumb-box: 24px;
+    --sl-thumb-h: 26px;
+  }
+
+  /* thumbStyle="default" — a round knob filling the thumb box. */
+  .esq-slider[data-thumb='default'] {
+    --sl-thumb-w: var(--sl-thumb-box);
+    --sl-thumb-h: var(--sl-thumb-box);
+  }
+
+  /* trackStyle="thin" */
+  .esq-slider[data-track='thin'] {
+    --sl-track-h: 4px;
+    --sl-track-r: 999px;
+  }
+
+  .esq-slider__track {
+    position: absolute;
+    top: 50%;
+    inset-inline: 0;
+    height: var(--sl-track-h);
+    translate: 0 -50%;
+    box-sizing: border-box;
+    border-radius: var(--sl-track-r);
+    background: var(--color-slider-track);
+    /* S2 carries a hairline outline so the trough survives forced colours. */
+    outline: 0.5px solid transparent;
+    outline-offset: -0.5px;
+  }
+
+  /* The filled portion grows from the slider's zero point, not always from the
+     left — that's how you read "+0.35 exposure" at a glance. */
+  .esq-slider__fill {
+    position: absolute;
+    top: 0;
+    height: 100%;
+    box-sizing: border-box;
+    border: 0.5px solid transparent;
+    border-radius: var(--sl-track-r);
+    background: var(--color-slider-fill);
+    background-clip: padding-box;
+    transition: background-color var(--duration-fast) var(--ease-out);
+  }
+
+  .esq-slider[data-emphasized='true'] .esq-slider__fill {
+    background: var(--color-accent);
+  }
+
+  .esq-slider__detent {
+    position: absolute;
+    top: 0;
+    width: 1px;
+    height: 100%;
+    translate: -50% 0;
+    background: rgb(0 0 0 / 0.55);
+    box-shadow: 0 0 0 0.5px rgb(255 255 255 / 0.3);
+    pointer-events: none;
+  }
+
+  .esq-slider__thumb {
+    position: absolute;
+    top: 50%;
+    width: var(--sl-thumb-box);
+    height: var(--sl-thumb-box);
+    display: grid;
+    place-items: center;
+    transform: translate(-50%, -50%);
+    transition: transform var(--duration-fast) var(--ease-out);
+    will-change: transform;
+  }
+
+  /* S2's pressScale: perspective(24px) translate3d(0, 0, -2px) — a ~0.92
+     push-back rather than a scale, so the ring weight stays put. */
+  .esq-slider[data-active='true'] .esq-slider__thumb {
+    transform: translate(-50%, -50%) perspective(24px) translate3d(0, 0, -2px);
+  }
+
+  .esq-slider__knob {
+    width: var(--sl-thumb-w);
+    height: var(--sl-thumb-h);
+    box-sizing: border-box;
+    border-radius: 999px;
+    border: 2px solid var(--color-slider-thumb-ring);
+    background: var(--color-slider-thumb);
+    transition: border-color var(--duration-fast) var(--ease-out);
+  }
+
+  .esq-slider:hover .esq-slider__knob,
+  .esq-slider[data-active='true'] .esq-slider__knob {
+    border-color: var(--color-slider-thumb-ring-hover);
+  }
+
+  .esq-slider:focus-visible .esq-slider__knob {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+  }
+
+  .esq-slider[data-disabled='true'] {
+    opacity: 0.4;
+    pointer-events: none;
+  }
+
+  /* Hue/saturation gradient tracks in the Colour Mixer read better without a
+     fill; a dark inset hairline keeps the ramp's ends legible on dark chrome.
+     With no fill to mark it, the origin needs an explicit tick — on Temp that's
+     the as-shot Kelvin, which is worth being able to find again. */
+  .esq-slider[data-gradient='true'] .esq-slider__fill {
+    display: none;
+  }
+  .esq-slider[data-gradient='true'] .esq-slider__track {
+    box-shadow: inset 0 0 0 0.5px rgb(0 0 0 / 0.45);
+    overflow: hidden;
+  }
+
+  /* ---- Numeric field --------------------------------------------------- */
+  .esq-num {
+    font-family: var(--font-mono);
+    font-size: var(--text-mini);
+    font-variant-numeric: tabular-nums;
+    color: var(--color-label-secondary);
+    text-align: right;
+    min-width: 3.25rem;
+    padding: 1px 4px;
+    border-radius: var(--radius-xs);
+    background: transparent;
+    cursor: ew-resize;
+    transition:
+      background-color var(--duration-fast) var(--ease-out),
+      color var(--duration-fast) var(--ease-out);
+  }
+  .esq-num:hover {
+    background: var(--color-raised);
+    color: var(--color-label);
+  }
+  .esq-num:focus-within,
+  .esq-num[data-editing='true'] {
+    background: var(--color-raised);
+    color: var(--color-label);
+    cursor: text;
+  }
+
+  /* ---- Text field ------------------------------------------------------ */
+  /*
+   * Shares Select's well: same fill, radius, inner highlight and lift shadow,
+   * so a row of mixed inputs reads as one control family. The focus ring is
+   * declared here because a Tailwind shadow utility would otherwise win over
+   * the global :focus-visible rule in the base layer.
+   */
+  .esq-field {
+    height: 28px;
+    min-width: 0;
+    padding-inline: 8px;
+    border-radius: var(--radius-sm);
+    background: var(--color-control);
+    color: var(--color-label);
+    font-size: var(--text-ui);
+    box-shadow:
+      0 1px 2px rgb(0 0 0 / 0.25),
+      inset 0 0.5px 0 rgb(255 255 255 / 0.07);
+    outline: none;
+    transition:
+      background-color var(--duration-fast) var(--ease-out),
+      box-shadow var(--duration-fast) var(--ease-out);
+  }
+  .esq-field[data-size='sm'] {
+    height: 24px;
+    font-size: var(--text-mini);
+  }
+  .esq-field::placeholder {
+    color: var(--color-label-tertiary);
+  }
+  .esq-field:hover:not(:disabled) {
+    background: var(--color-hover);
+  }
+  .esq-field:focus-visible {
+    box-shadow:
+      0 0 0 1px var(--color-accent),
+      0 0 0 3.5px color-mix(in srgb, var(--color-accent) 35%, transparent);
+  }
+  .esq-field:disabled {
+    pointer-events: none;
+    opacity: 0.35;
+  }
+  .esq-field--numeric {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+  }
+
+  /* ---- Transparency checkerboard --------------------------------------- */
+  .esq-checker {
+    background-image:
+      linear-gradient(45deg, #2a2a2e 25%, transparent 25%),
+      linear-gradient(-45deg, #2a2a2e 25%, transparent 25%),
+      linear-gradient(45deg, transparent 75%, #2a2a2e 75%),
+      linear-gradient(-45deg, transparent 75%, #2a2a2e 75%);
+    background-size: 16px 16px;
+    background-position:
+      0 0,
+      0 8px,
+      8px -8px,
+      -8px 0;
+    background-color: #202024;
+  }
+
+  /* ---- Panel section --------------------------------------------------- */
+  /*
+   * A collapsible panel header is the thing you navigate the sidebar by, so it
+   * is set as a heading — sentence case at the UI size, in the primary label
+   * colour, above everything it governs. Tracked caps at ten pixels would put
+   * it below its own sliders in the hierarchy and read as a caption.
+   */
+  .esq-panel-title {
+    font-size: var(--text-ui);
+    font-weight: 590;
+    /* A hair under the 12px step's zero: semibold sets a touch wider optically. */
+    letter-spacing: -0.005em;
+    color: var(--color-label);
+  }
+
+  /*
+   * The tracked-caps eyebrow, kept for the rungs *below* a panel title: menu
+   * group headers, dialog field groups, and the readout tags on the graphs.
+   */
+  .esq-section-title {
+    font-size: var(--text-micro);
+    font-weight: 590;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--color-label-tertiary);
+  }
+
+  /* ---- Checkbox -------------------------------------------------------- */
+  /* The checkbox lives in `Controls.tsx`; nothing here styles a native one. */
+
+  /* ---- Overlay scrollbar ------------------------------------------------ */
+  /*
+   * Painted over the content, never beside it, so a frame keeps exactly the same
+   * width whether or not it overflows and nothing reflows. macOS behaviour: the
+   * thumb shows while scrolling, lingers, then fades — and stays up for as long
+   * as the pointer is inside the area.
+   */
+  .esq-scroller {
+    position: relative;
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+  }
+
+  .esq-scroll-thumb {
+    position: absolute;
+    /* Under the panel resizers (z-20) so the 4px grab band at a panel edge wins. */
+    z-index: 10;
+    border-radius: 999px;
+    /* A transparent border widens the grab target without fattening the ink. */
+    border: 2px solid transparent;
+    background-color: rgb(255 255 255 / 0.22);
+    background-clip: content-box;
+    opacity: 0;
+    pointer-events: none;
+    cursor: default;
+    touch-action: none;
+    transition:
+      opacity var(--duration-slow) var(--ease-out),
+      background-color var(--duration-fast) var(--ease-out);
+  }
+
+  .esq-scroll-thumb.is-y {
+    top: 2px;
+    right: 1px;
+    width: 11px;
+  }
+
+  .esq-scroll-thumb.is-x {
+    bottom: 1px;
+    left: 2px;
+    height: 11px;
+  }
+
+  .esq-scroller:hover .esq-scroll-thumb,
+  .esq-scroll-thumb[data-active] {
+    opacity: 1;
+  }
+
+  /* Grabbable only while the pointer is in the area, so an invisible thumb
+     never swallows a click meant for the content underneath it. */
+  .esq-scroller:hover .esq-scroll-thumb {
+    pointer-events: auto;
+  }
+
+  .esq-scroll-thumb:hover,
+  .esq-scroll-thumb[data-dragging] {
+    background-color: rgb(255 255 255 / 0.38);
+  }
+
+  /* ---- Grain for empty states / onboarding ----------------------------- */
+  .esq-grain::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    opacity: 0.035;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)'/%3E%3C/svg%3E");
+  }
+}
+
+/* Scroll containers: contain overscroll so panels never bounce the page. */
+@utility esq-scroll {
+  overscroll-behavior: contain;
+}
+
+/* Indeterminate progress sweep for the import HUD. */
+@keyframes esq-indeterminate {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(300%);
+  }
+}
+
+@keyframes esq-spoke {
+  0% {
+    opacity: 0.85;
+  }
+  100% {
+    opacity: 0.16;
+  }
+}
+
+/* A toast rises into the bottom-centre HUD column. */
+@keyframes esq-toast-in {
+  from {
+    opacity: 0;
+    translate: 0 10px;
+    scale: 0.97;
+  }
+  to {
+    opacity: 1;
+    translate: 0 0;
+    scale: 1;
+  }
+}
+
+/*
+ * A photo tier rising over the one it replaces. A keyframe rather than a
+ * transition: a decode that lands inside the frame it was attached in leaves a
+ * transition with no start value to run from, and the rise silently vanishes.
+ */
+@keyframes esq-resolve-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/*
+ * A status pill surfacing over the photo it is describing. Rises on `transform`
+ * rather than `translate` because the pill is centred with `-translate-x-1/2`,
+ * which owns that property.
+ */
+@keyframes esq-hud-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
