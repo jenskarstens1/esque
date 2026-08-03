@@ -30,11 +30,6 @@ npm run dev
 | `npm run preview` | Serve the production build locally |
 | `npm run lint` | oxlint |
 
-The build is static and can be hosted anywhere, as long as the host sends the
-two headers in `public/_headers`. Without them the page is not cross-origin
-isolated, `SharedArrayBuffer` is unavailable, and RAW decoding drops to a single
-core.
-
 ## What it does
 
 - **Import.** Every stills RAW format LibRaw can open (Canon, Nikon, Sony,

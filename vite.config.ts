@@ -4,7 +4,8 @@ import tailwindcss from '@tailwindcss/vite'
 
 // LibRaw is compiled with OpenMP, so its demosaic threads need SharedArrayBuffer,
 // which the browser only hands out to cross-origin-isolated documents. Static
-// hosts need the same two headers; see public/_headers.
+// hosts need the same two headers; see vercel.json (Vercel) and public/_headers
+// (Cloudflare Pages, Netlify).
 const crossOriginIsolation = {
   'Cross-Origin-Opener-Policy': 'same-origin',
   'Cross-Origin-Embedder-Policy': 'require-corp',
