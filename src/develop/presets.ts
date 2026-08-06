@@ -787,7 +787,7 @@ const TOOLS = [
   make(
     'sharpen-detail',
     'Tools',
-    'Sharpen — Detail',
+    'Detail Sharpen',
     'For landscape and architecture: small radius, high detail, masked off flat areas.',
     ['detail'],
     (e) => {
@@ -800,7 +800,7 @@ const TOOLS = [
   make(
     'sharpen-portrait',
     'Tools',
-    'Sharpen — Portrait',
+    'Portrait Sharpen',
     'Wider radius and a heavy mask, so skin stays smooth and eyes stay sharp.',
     ['detail'],
     (e) => {
@@ -813,7 +813,7 @@ const TOOLS = [
   make(
     'grain-35mm',
     'Tools',
-    'Grain — 35mm',
+    '35mm Grain',
     'Standard 35mm colour negative grain, at a realistic size.',
     ['effects'],
     (e) => {
@@ -825,7 +825,7 @@ const TOOLS = [
   make(
     'grain-medium-format',
     'Tools',
-    'Grain — Medium Format',
+    'Medium Format Grain',
     'The same emulsion on a much bigger negative: about half the apparent grain.',
     ['effects'],
     (e) => {
@@ -837,7 +837,7 @@ const TOOLS = [
   make(
     'vignette-classic',
     'Tools',
-    'Vignette — Classic',
+    'Classic Vignette',
     'Wide and feathered. You should feel it, not see it.',
     ['effects'],
     (e) => {

@@ -9,12 +9,17 @@
  *
  *   node tools/browsercheck.mjs /checks/comparecheck.html [safari|edge|chrome] [timeoutMs]
  *
- * Requires the vite dev server; it is started if nothing answers on 5173.
+ * Requires the vite dev server; it is started if nothing answers on the origin.
+ * The origin defaults to port 5173 and is overridden with `ESQUE_ORIGIN` — vite
+ * moves to the next free port when 5173 is taken, and a driver that keeps
+ * asking for 5173 regardless will happily run the whole check against whatever
+ * else is sitting there.
  */
 import { createServer } from 'node:http'
 import { spawn } from 'node:child_process'
 
 const PORT = 8951
+const ORIGIN = (process.env.ESQUE_ORIGIN ?? 'http://localhost:5173').replace(/\/$/, '')
 const page = process.argv[2] ?? '/checks/comparecheck.html'
 const which = (process.argv[3] ?? 'edge').toLowerCase()
 const timeout = Number(process.argv[4] ?? 300_000)
@@ -32,7 +37,7 @@ if (!app) {
 
 async function devServerUp() {
   try {
-    const r = await fetch('http://localhost:5173/', { method: 'HEAD' })
+    const r = await fetch(`${ORIGIN}/`, { method: 'HEAD' })
     return r.ok || r.status === 404
   } catch {
     return false
@@ -42,7 +47,7 @@ async function devServerUp() {
 let vite = null
 if (!(await devServerUp())) {
   console.log('starting vite...')
-  vite = spawn('npx', ['vite', '--port', '5173', '--strictPort'], {
+  vite = spawn('npx', ['vite', '--port', new URL(ORIGIN).port || '5173', '--strictPort'], {
     cwd: new URL('..', import.meta.url).pathname,
     stdio: 'ignore',
     detached: false,
@@ -52,7 +57,7 @@ if (!(await devServerUp())) {
     await new Promise((r) => setTimeout(r, 400))
   }
   if (!(await devServerUp())) {
-    console.error('vite did not come up on 5173')
+    console.error(`vite did not come up on ${ORIGIN}`)
     process.exit(1)
   }
 }
@@ -88,7 +93,7 @@ const collector = createServer((req, res) => {
 })
 collector.listen(PORT)
 
-const url = `http://localhost:5173${page}?report=${encodeURIComponent(`http://localhost:${PORT}/r`)}`
+const url = `${ORIGIN}${page}?report=${encodeURIComponent(`http://localhost:${PORT}/r`)}`
 console.log(`opening ${app}: ${url}`)
 // -g keeps the window from stealing focus.
 spawn('open', ['-g', '-a', app, url], { stdio: 'ignore' })

@@ -36,6 +36,7 @@ import {
   Folder,
   FolderPlus,
   Columns2,
+  Funnel,
   Grid2x2,
   Grid3x3,
   LayoutDashboard,
@@ -46,9 +47,11 @@ import {
   ImageUp,
   Images,
   Info,
+  Keyboard,
   Layers,
   Link2,
   Lock,
+  MapPin,
   Minus,
   Monitor,
   PanelsTopLeft,
@@ -62,6 +65,7 @@ import {
   Search,
   Settings,
   SlidersHorizontal,
+  Sparkles,
   SquareSplitHorizontal,
   Star,
   Tag,
@@ -149,7 +153,7 @@ export function Mark({ size = 20, ...rest }: LucideProps) {
   )
 }
 
-/** The full-colour mark. Branding only: the title bar and the favicon. */
+/** The full-colour mark. Branding only: the title bar, the welcome dialog, and the favicon. */
 export function Logo({ size = 20, ...rest }: LucideProps) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden {...rest}>
@@ -187,6 +191,10 @@ export const ZoomIcon = wrap(ZoomIn)
 // — Library —
 
 export const CollectionIcon = wrap(Images)
+/** A collection whose membership is a saved question rather than a list. */
+export const SmartCollectionIcon = wrap(Sparkles)
+/** The Library's filter row. */
+export const FilterIcon = wrap(Funnel)
 export const CompareIcon = wrap(Columns2)
 export const ExportIcon = wrap(ImageUp)
 export const FolderIcon = wrap(Folder)
@@ -200,6 +208,8 @@ export const WaterfallIcon = wrap(LayoutPanelLeft)
 export const ImportIcon = wrap(Download)
 export const KeywordIcon = wrap(Tag)
 export const LoupeIcon = wrap(Image)
+/** Where the shot was taken — the GPS block in Metadata. */
+export const LocationIcon = wrap(MapPin)
 export const PresetIcon = wrap(WandSparkles)
 export const RejectIcon = wrap(FlagOff)
 export const StackIcon = wrap(Layers)
@@ -244,6 +254,7 @@ export const WarningIcon = wrap(TriangleAlert)
 export const CacheIcon = wrap(Database)
 export const DisplayIcon = wrap(Monitor)
 export const InterfaceIcon = wrap(PanelsTopLeft)
+export const KeyboardIcon = wrap(Keyboard)
 
 /** Visibility toggle. `off` is the struck-through state. */
 const EyeBase = wrap(Eye)

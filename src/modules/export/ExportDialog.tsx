@@ -214,17 +214,20 @@ function PresetRail() {
   )
 
   return (
-    <div className="flex w-[208px] shrink-0 flex-col hairline-r">
-      <div className="flex h-8 shrink-0 items-center px-5">
-        <span className="esq-section-title min-w-0 flex-1">Presets</span>
-      </div>
-      <Scroller frameClassName="min-h-0 flex-1" className="px-2 pb-2 pl-3">
-        <ul>{builtIn.map(item)}</ul>
+    // A column of named presets needs no heading to say so; the names carry it.
+    // The groups keep their labels for assistive tech and separate by space.
+    // Below `lg` the dialog stacks, so the rail becomes a capped strip along the
+    // top rather than a column that would leave no room for the settings.
+    <nav
+      aria-label="Presets"
+      className="flex max-h-[38%] w-full shrink-0 flex-col max-lg:hairline-b lg:max-h-none lg:w-[208px] lg:hairline-r"
+    >
+      <Scroller edgeFade frameClassName="min-h-0 flex-1" className="px-2 pt-3 pb-2 pl-3">
+        <ul aria-label="Built-in presets">{builtIn.map(item)}</ul>
         {presets.length > 0 && (
-          <>
-            <p className="esq-section-title mt-4 mb-1.5 px-2">Yours</p>
-            <ul>{presets.map(item)}</ul>
-          </>
+          <ul aria-label="Your presets" className="mt-3">
+            {presets.map(item)}
+          </ul>
         )}
       </Scroller>
       {/*
@@ -268,7 +271,7 @@ function PresetRail() {
           </button>
         )}
       </div>
-    </div>
+    </nav>
   )
 }
 
@@ -360,7 +363,8 @@ export function ExportDialog() {
       width={740}
       height={620}
       scrollable={false}
-      bodyClassName="items-stretch [--field-measure:360px]"
+      dividers={false}
+      bodyClassName="items-stretch max-lg:flex-col [--field-measure:360px]"
       footer={
         <div className="flex w-full items-center gap-3">
           {running ? (
@@ -390,9 +394,9 @@ export function ExportDialog() {
               <span className="min-w-0 flex-1 truncate text-mini text-label-secondary tabular-nums">
                 {preview && !isOriginal && (
                   <>
-                    {preview.size.width} × {preview.size.height} · about{' '}
-                    {formatBytes(preview.each)} each
-                    {selected.length > 1 && <> · {formatBytes(preview.total)} total</>}
+                    {preview.size.width} × {preview.size.height}, about{' '}
+                    {formatBytes(preview.each)}
+                    {selected.length > 1 && <> each ({formatBytes(preview.total)} total)</>}
                   </>
                 )}
                 {preview && isOriginal && 'Original files copied unchanged'}
@@ -415,8 +419,8 @@ export function ExportDialog() {
       ) : (
         <>
           <PresetRail />
-          <Scroller frameClassName="min-h-0 flex-1" className="px-5 pt-1 pb-4">
-            <FieldGroup title="Destination">
+          <Scroller edgeFade frameClassName="min-h-0 flex-1" className="px-5 pt-1 pb-4">
+            <FieldGroup label="Destination">
               <Field label="Folder">
                 <button
                   type="button"
@@ -456,19 +460,20 @@ export function ExportDialog() {
               </Field>
             </FieldGroup>
 
-            <FieldGroup title="File naming">
+            <FieldGroup label="File naming">
               <Field
                 label="Template"
                 hint={
                   <>
                     {/* Broken deliberately rather than left to wrap: seven
-                        tokens reflow into a six-and-one orphan at this measure. */}
-                    <span className="block font-mono text-label-secondary">
+                        tokens reflow into a six-and-one orphan at this measure.
+                        They inherit the hint's colour — a reference list set
+                        brighter than the template it documents was the loudest
+                        block in the dialog. */}
+                    <span className="block font-mono">
                       {'{name} {seq:3} {date:YYYY-MM-DD}'}
                     </span>
-                    <span className="block font-mono text-label-secondary">
-                      {'{camera} {lens} {iso} {custom}'}
-                    </span>
+                    <span className="block font-mono">{'{camera} {lens} {iso} {custom}'}</span>
                     {preview && (
                       <span className="mt-1.5 block">
                         Each file lands as <span className="text-label">{preview.name}</span>
@@ -523,7 +528,7 @@ export function ExportDialog() {
               </Field>
             </FieldGroup>
 
-            <FieldGroup title="File settings">
+            <FieldGroup label="File settings">
               <Field
                 label="Format"
                 hint={isDng ? '16-bit negative; edits ride along as XMP, not baked in.' : undefined}
@@ -652,7 +657,7 @@ export function ExportDialog() {
             </FieldGroup>
 
             {rendered && (
-              <FieldGroup title="Image sizing">
+              <FieldGroup label="Image sizing">
                 <Field label="Resize">
                   <Select
                     value={settings.resizeMode}
@@ -746,7 +751,7 @@ export function ExportDialog() {
             )}
 
             {rendered && (
-              <FieldGroup title="Output sharpening">
+              <FieldGroup label="Output sharpening">
                 <Field label="Sharpen for">
                   <Select
                     value={settings.sharpenTarget}
@@ -775,7 +780,7 @@ export function ExportDialog() {
               </FieldGroup>
             )}
 
-            <FieldGroup title="Metadata">
+            <FieldGroup label="Metadata">
               <Field label="Include">
                 <Select
                   value={settings.metadata}
@@ -832,7 +837,7 @@ export function ExportDialog() {
 
             {rendered && (
               <FieldGroup
-                title="Watermark"
+                label="Watermark"
                 aside={
                   <Switch
                     checked={settings.watermark.enabled}

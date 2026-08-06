@@ -187,6 +187,22 @@
   --spacing-toolbar: 2.25rem;
 }
 
+/* ---- Input-capability variants ------------------------------------------ */
+/*
+ * The two questions worth asking about an input device, as Tailwind variants so
+ * a component can answer them inline instead of reaching for a hook:
+ *
+ *   coarse:py-2.5   a finger is driving — give it a real target
+ *   touch:opacity-100  nothing can hover — don't hide anything behind one
+ *
+ * Deliberately not named for devices. A desktop with a touchscreen is `coarse`
+ * while a finger is on it, and a tablet with a trackpad attached is not.
+ */
+@custom-variant coarse (@media (pointer: coarse));
+@custom-variant fine (@media (pointer: fine));
+@custom-variant touch (@media (hover: none));
+@custom-variant hoverable (@media (hover: hover));
+
 /* Vibrancy material, used on floating panels and HUDs. */
 @utility material {
   background-color: color-mix(in srgb, var(--color-panel) 72%, transparent);

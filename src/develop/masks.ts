@@ -7,6 +7,7 @@ import type {
   Edits,
 } from '../core/types'
 import { defaultMaskAdjustments } from '../core/defaults'
+import { defaultModelFor } from '../ai/models'
 
 /**
  * Mask bookkeeping: factories, naming and the mutations the UI performs.
@@ -32,13 +33,31 @@ export const MASK_KIND_LABELS: Record<MaskGeometry['kind'], string> = {
   aiObjects: 'Objects',
 }
 
-/** The kinds that are actually implemented, in the order Lightroom lists them. */
+/**
+ * The kinds that are actually implemented.
+ *
+ * Shapes first, then the detected ones, which is the order they are reached
+ * for: a gradient is placed without thinking about it, and a subject mask is a
+ * decision — it may cost a download, and it is worth a moment's pause. Sky and
+ * Objects stay out until there is a model behind them; a kind that appears in
+ * the menu and then does nothing is worse than one that is not there yet.
+ */
 export const MASK_KINDS: Array<MaskGeometry['kind']> = [
   'linear',
   'radial',
   'brush',
   'colorRange',
   'luminanceRange',
+  'aiSubject',
+  'aiBackground',
+  'aiPerson',
+]
+
+/** The subset that runs a model, for menus that separate the two. */
+export const DETECTED_KINDS: Array<MaskGeometry['kind']> = [
+  'aiSubject',
+  'aiBackground',
+  'aiPerson',
 ]
 
 export const BLEND_LABELS: Record<MaskBlend, string> = {
@@ -66,8 +85,20 @@ export function newGeometry(kind: MaskGeometry['kind'], at: Point2 = { x: 0.5, y
     case 'luminanceRange':
       return { kind, range: [0, 0.15, 0.85, 1], smoothness: 50 }
     default:
-      return { kind, cacheKey: null, refine: 50 }
+      // Detected kinds start with no coverage and no key: the model has not
+      // run, and until the user asks for it the mask is a declared intention
+      // rather than a shape. The tier is recorded now so the panel opens on
+      // the one that will actually be used.
+      return { kind, cacheKey: null, model: modelForKind(kind), refine: 50 }
   }
+}
+
+/** The default tier for a detected kind, or undefined for the rest. */
+function modelForKind(kind: MaskGeometry['kind']): string | undefined {
+  if (kind === 'aiSubject' || kind === 'aiBackground' || kind === 'aiPerson') {
+    return defaultModelFor(kind)
+  }
+  return undefined
 }
 
 export function newComponent(kind: MaskGeometry['kind'], at?: Point2, blend: MaskBlend = 'add'): MaskComponent {

@@ -2,16 +2,18 @@ import type { MenuItem } from '../design/Menu'
 import {
   CheckIcon,
   CollectionIcon,
+  FilterIcon,
   FolderIcon,
   GridIcon,
   ImportIcon,
   LoupeIcon,
+  SmartCollectionIcon,
   SortAscIcon,
   SyncIcon,
   TileFillIcon,
   WaterfallIcon,
 } from '../design/icons'
-import { useCatalog, type SortKey } from '../state/catalog'
+import { filtersActive, useCatalog, type SortKey } from '../state/catalog'
 import { useUI, BEFORE_AFTER_LABELS, type BeforeAfter } from '../state/ui'
 import { useDevelop, ALL_SECTIONS } from '../develop/session'
 import { useImporter } from '../state/importer'
@@ -25,10 +27,18 @@ import { toast } from '../design/toast'
 import { confirmAction, promptText } from '../design/prompt'
 import { db } from '../catalog/db'
 import { addToCollection, createCollection, removeFolder } from '../catalog/actions'
+import { editSmartCollection } from '../state/smartEditor'
 import { zoomCommands } from '../lib/useZoomPan'
 import { useMasking } from '../develop/masking'
 import { useRetouch } from '../develop/retouch'
-import { MASK_KINDS, MASK_KIND_LABELS, duplicateMask, newMask } from '../develop/masks'
+import {
+  DETECTED_KINDS,
+  MASK_KINDS,
+  MASK_KIND_LABELS,
+  duplicateMask,
+  newMask,
+} from '../develop/masks'
+import { aiSupportNow, type AiSupport } from '../ai/models'
 import type {
   CatalogFolder,
   Collection,
@@ -132,7 +142,15 @@ export function gridBackgroundMenuItems(): MenuItem[] {
       onSelect: () => ui.setViewMode('loupe'),
     },
     {
+      label: 'Filter Bar',
+      icon: <FilterIcon size={12} />,
+      shortcut: '\\',
+      checked: ui.filterBarOpen,
+      onSelect: () => ui.toggleFilterBar(),
+    },
+    {
       label: 'Clear Filters',
+      disabled: !filtersActive(cat.filters),
       onSelect: () => cat.clearFilters(),
     },
     { kind: 'separator' },
@@ -244,6 +262,42 @@ export function cropMenuItems(): MenuItem[] {
 }
 
 /** The develop canvas menu: what you can do to the image you are looking at. */
+/**
+ * The mask-kind menu, with the detected kinds gated on what the browser can do.
+ *
+ * A menu cannot carry a tooltip, so an unsupported kind states its reason in
+ * the label instead of being hidden. Hiding it would be the tidier design and
+ * the wrong one: "Subject" missing from a menu reads as a feature esque does
+ * not have, rather than one this browser cannot run, and the user has no way
+ * to tell those apart or to know that switching browsers would fix it.
+ */
+export function maskKindItems(
+  support: AiSupport | null,
+  onSelect: (kind: MaskGeometryKind) => void,
+): MenuItem[] {
+  // Only a known refusal disables anything. While the probe is still out,
+  // `support` is null and the kind stays available: a capable browser briefly
+  // shown a greyed-out "Subject" with no explanation is a worse outcome than an
+  // incapable one being told why in the panel a moment later.
+  const blocked = support ? !support.ok : false
+  const items: MenuItem[] = []
+
+  for (const kind of MASK_KINDS) {
+    const detected = (DETECTED_KINDS as readonly MaskGeometryKind[]).includes(kind)
+    if (detected && kind === DETECTED_KINDS[0]) items.push({ kind: 'separator' })
+    const off = detected && blocked
+    items.push({
+      label:
+        off && support?.reason
+          ? `${MASK_KIND_LABELS[kind]} — ${support.reason}`
+          : MASK_KIND_LABELS[kind],
+      disabled: off,
+      onSelect: () => onSelect(kind),
+    })
+  }
+  return items
+}
+
 /** Mask creation, selection and overlay — the viewport's masking submenu. */
 export function maskMenuItems(): MenuItem[] {
   const ui = useUI.getState()
@@ -271,10 +325,7 @@ export function maskMenuItems(): MenuItem[] {
     },
     {
       label: 'Create Mask',
-      submenu: MASK_KINDS.map((k) => ({
-        label: MASK_KIND_LABELS[k],
-        onSelect: () => create(k),
-      })),
+      submenu: maskKindItems(aiSupportNow(), create),
     },
   ]
 
@@ -735,6 +786,15 @@ export function sourceMenuItems(
           },
         ] as MenuItem[])),
     { kind: 'separator' },
+    ...(collection.smart
+      ? ([
+          {
+            label: 'Edit Rules…',
+            icon: <SmartCollectionIcon size={12} />,
+            onSelect: () => editSmartCollection(collection),
+          },
+        ] as MenuItem[])
+      : []),
     {
       label: 'Rename…',
       onSelect: async () => {
@@ -750,14 +810,12 @@ export function sourceMenuItems(
     {
       label: 'Duplicate',
       onSelect: async () => {
-        const id = await createCollection(`${collection.name} Copy`, [...collection.photoIds])
-        if (collection.smart)
-          await db.collections.update(id, {
-            smart: true,
-            rules: collection.rules,
-            match: collection.match,
-            photoIds: [],
-          })
+        const id = collection.smart
+          ? await createCollection(`${collection.name} Copy`, [], {
+              rules: collection.rules,
+              match: collection.match,
+            })
+          : await createCollection(`${collection.name} Copy`, [...collection.photoIds])
         cat.setSource({ kind: 'collection', id })
       },
     },

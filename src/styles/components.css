@@ -107,8 +107,13 @@
     top: 50%;
     width: var(--sl-thumb-box);
     height: var(--sl-thumb-box);
-    display: grid;
-    place-items: center;
+    /* Flex, not grid: the precise knob is *taller* than its hit box, and a grid
+       row that overflows its container is pinned to the start — which put the
+       whole 2px of overhang below the track and left every slider's knob
+       sitting a pixel low. Flex centring splits an overflow across both ends. */
+    display: flex;
+    align-items: center;
+    justify-content: center;
     transform: translate(-50%, -50%);
     transition: transform var(--duration-fast) var(--ease-out);
     will-change: transform;
@@ -338,6 +343,28 @@
     background-color: rgb(255 255 255 / 0.38);
   }
 
+  /* ---- Scroll edge fade -------------------------------------------------- */
+  /*
+   * A mask, not a pair of gradient overlays: the panels it runs in sit on
+   * translucent material, so anything painted over the content would have to
+   * guess at a backdrop it can't see. Depth is driven per edge from JS.
+   */
+  .esq-scroll-fade {
+    --esq-fade-a: 0px;
+    --esq-fade-b: 0px;
+    mask-image: linear-gradient(
+      var(--esq-fade-axis, to bottom),
+      transparent 0,
+      #000 var(--esq-fade-a),
+      #000 calc(100% - var(--esq-fade-b)),
+      transparent 100%
+    );
+  }
+
+  .esq-scroll-fade.is-x {
+    --esq-fade-axis: to right;
+  }
+
   /* ---- Grain for empty states / onboarding ----------------------------- */
   .esq-grain::after {
     content: '';
@@ -354,7 +381,131 @@
   overscroll-behavior: contain;
 }
 
-/* Indeterminate progress sweep for the import HUD. */
+/* ---- Safe areas --------------------------------------------------------- */
+/*
+ * `viewport-fit=cover` in index.html runs the app edge to edge, under the notch
+ * and the home indicator with it. These put the inset back on the chrome that
+ * touches an edge — the title bar, the toolbar, the filmstrip, the sheets — and
+ * nowhere else, so the photo still uses the whole panel.
+ *
+ * `max()` rather than a bare inset: the padding a control already needs is the
+ * floor, and only a device with a bigger inset than that raises it.
+ */
+@utility esq-safe-t {
+  padding-top: env(safe-area-inset-top, 0px);
+}
+
+@utility esq-safe-b {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+@utility esq-safe-x {
+  padding-left: env(safe-area-inset-left, 0px);
+  padding-right: env(safe-area-inset-right, 0px);
+}
+
+/* For chrome that already carries its own padding and must not lose it. */
+@utility esq-safe-px-3 {
+  padding-left: max(0.75rem, env(safe-area-inset-left, 0px));
+  padding-right: max(0.75rem, env(safe-area-inset-right, 0px));
+}
+
+@utility esq-safe-pb-2 {
+  padding-bottom: max(0.5rem, env(safe-area-inset-bottom, 0px));
+}
+
+/* ---- Touch targets ------------------------------------------------------ */
+/*
+ * Apple asks for 44pt, Material for 48dp; esque's icon buttons are 24–28px
+ * because a dense pro sidebar is unusable at 44. Rather than inflate the ink,
+ * a transparent pseudo-element centred on the control grows the *hit box* to
+ * 44px on touch and leaves the drawing exactly where it was.
+ *
+ * Only under `pointer: coarse`, so a mouse keeps the tight geometry the layout
+ * was spaced for and no invisible box overlaps its neighbour.
+ */
+@utility esq-tap {
+  @media (pointer: coarse) {
+    /*
+     * Scoped to coarse alongside the pseudo-element it anchors. Applying it
+     * unconditionally would promote the control into the positioned paint
+     * order on desktop too, where positioned boxes paint above their static
+     * siblings — silently changing which element receives a click.
+     */
+    position: relative;
+
+    &::after {
+      content: '';
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      width: max(100%, 44px);
+      height: max(100%, 44px);
+      translate: -50% -50%;
+      /* Behind the control's own children, so it never eats an inner click. */
+      z-index: -1;
+    }
+  }
+}
+
+/* ---- Touch adaptations --------------------------------------------------- */
+/*
+ * Deliberately unlayered. Tailwind v4 emits everything into cascade layers, and
+ * an unlayered rule outranks every layered one no matter how specific — which is
+ * exactly what is wanted here, because each of these has to beat a utility
+ * (`opacity-0`, a height) sitting on the same element.
+ */
+
+/*
+ * Anything the desktop reveals on hover — a thumbnail's badges, a panel header's
+ * actions, a row's buttons. With no hovering input those controls simply never
+ * appear, so on touch they are always shown, held one step back in the hierarchy
+ * so a grid of photos doesn't turn into a grid of buttons.
+ */
+@media (hover: none) {
+  .esq-reveal {
+    opacity: 0.75;
+  }
+
+  /* For reveals done by `hidden` → `group-hover:flex` rather than by opacity. */
+  .esq-reveal-flex {
+    display: flex;
+  }
+}
+
+/*
+ * A slider is the control esque has most of and the hardest one to hit with a
+ * thumb. The *container* grows to a comfortable 44px band while the trough keeps
+ * its 16px weight — it is centred on the container, so only the hit area moves.
+ */
+@media (pointer: coarse) {
+  .esq-slider {
+    --sl-h: 44px;
+    --sl-thumb-box: 28px;
+    --sl-thumb-h: 30px;
+  }
+
+  .esq-slider[data-size='S'] {
+    --sl-h: 40px;
+    --sl-thumb-box: 26px;
+    --sl-thumb-h: 28px;
+  }
+
+  .esq-slider[data-thumb='precise'] {
+    /* A 6px pill is a fine mouse target and an invisible one under a fingertip. */
+    --sl-thumb-w: 10px;
+  }
+
+  /*
+   * The overlay scrollbar only ever appears on `:hover`, which never fires here,
+   * and a 11px thumb is not a touch control anyway — touch scrolls the content
+   * directly. Hidden rather than left as an invisible strip that eats taps at
+   * the panel edge.
+   */
+  .esq-scroll-thumb {
+    display: none;
+  }
+}
 @keyframes esq-indeterminate {
   0% {
     transform: translateX(-100%);

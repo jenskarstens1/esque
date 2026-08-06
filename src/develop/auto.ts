@@ -29,20 +29,7 @@
  * auto is independent of what the user has already dialled in and lands on the
  * same answer for a given file every time.
  */
-import {
-  PROPHOTO_TO_XYZ_D50,
-  PROPHOTO_D50_TO_SRGB_D65,
-  XYZ_D50_TO_PROPHOTO,
-  apply3,
-  tempTintToXy,
-  whiteBalanceGain,
-  xyToXyz,
-  xyToTempTint,
-  TEMP_MIN,
-  TEMP_MAX,
-  TINT_MIN,
-  TINT_MAX,
-} from '../core/color'
+import { whitePointForGain } from '../core/color'
 import { halfToFloat } from '../core/half'
 import {
   basicInput,
@@ -54,6 +41,7 @@ import {
   type BasicParams,
   type Vec3,
 } from './toneModel'
+import { sourcePeak } from '../core/workingImage'
 import type { SourceImage } from '../core/workingImage'
 import type { CropEdits, Edits } from '../core/types'
 
@@ -96,17 +84,6 @@ interface Samples {
   rgb: Float32Array
   weight: Float32Array
   count: number
-}
-
-/** Peak source-channel code, normalised so the decoder ceiling is always 1. */
-function sourcePeak(image: SourceImage, r: number, g: number, b: number): number {
-  if (image.isRaw) return Math.max(r, g, b) / image.whiteLevel
-  const m = PROPHOTO_D50_TO_SRGB_D65
-  return Math.max(
-    m[0] * r + m[1] * g + m[2] * b,
-    m[3] * r + m[4] * g + m[5] * b,
-    m[6] * r + m[7] * g + m[8] * b,
-  )
 }
 
 const SAMPLE_TARGET = 40000
@@ -302,43 +279,7 @@ export function autoWhiteBalance(
   // The gain that would neutralise the frame, expressed as the white point it
   // implies: the renderer's gain is asShotWhite / targetWhite, normalised on
   // green, so the target white is the as-shot white divided through by it.
-  //
-  // Kelvin and tint are a two-parameter fit to a three-channel gain, and the
-  // Robertson interpolation that maps between them is itself approximate — so
-  // the answer is checked against the gain the renderer will actually derive
-  // from it and corrected until the two agree. Without this an estimate can be
-  // arithmetically perfect and still leave a visible cast on screen.
-  const asShot = image.asShot
-  const src = whitePointRgb(asShot.temp, asShot.tint)
-  let wantR = Math.exp(ur)
-  let wantB = Math.exp(ub)
-  let result: { temp: number; tint: number } | null = null
-
-  for (let i = 0; i < 3; i++) {
-    const dst: Vec3 = [src[0] / wantR, src[1], src[2] / wantB]
-    const xyz = apply3(PROPHOTO_TO_XYZ_D50, dst)
-    const sum = xyz[0] + xyz[1] + xyz[2]
-    if (!(sum > 0)) return result
-    const fit = xyToTempTint(xyz[0] / sum, xyz[1] / sum)
-    result = {
-      temp: Math.round(Math.min(TEMP_MAX, Math.max(TEMP_MIN, fit.temp))),
-      tint: Math.round(Math.min(TINT_MAX, Math.max(TINT_MIN, fit.tint))),
-    }
-
-    const actual = whiteBalanceGain(asShot, result)
-    const errR = Math.exp(ur) / actual[0]
-    const errB = Math.exp(ub) / actual[2]
-    if (Math.abs(Math.log(errR)) < 2e-3 && Math.abs(Math.log(errB)) < 2e-3) break
-    wantR *= errR
-    wantB *= errB
-  }
-  return result
-}
-
-/** Illuminant chromaticity as linear ProPhoto RGB. */
-function whitePointRgb(temp: number, tint: number): Vec3 {
-  const [x, y] = tempTintToXy(temp, tint)
-  return apply3(XYZ_D50_TO_PROPHOTO, xyToXyz(x, Math.max(1e-4, y)))
+  return whitePointForGain(image.asShot, Math.exp(ur), Math.exp(ub))
 }
 
 /** Value at half the weight, walking a pre-sorted index. */

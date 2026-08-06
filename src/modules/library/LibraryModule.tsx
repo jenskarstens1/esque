@@ -2,11 +2,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { cn } from '../../lib/cn'
 import { useUI, setGridColumns } from '../../state/ui'
 import { useCatalog } from '../../state/catalog'
-import { usePhotos, useCollections } from '../../catalog/hooks'
+import { usePhotos, useCollections, usePhotoCount } from '../../catalog/hooks'
 import { Thumbnail } from './Thumbnail'
 import { Scroller } from '../../design/Scroller'
 import { LoupeView } from './LoupeView'
 import { EmptyLibrary } from './EmptyLibrary'
+import { FilterBar } from './FilterBar'
 import { useElementSize } from '../../lib/useElementSize'
 import { useMenu } from '../../design/useMenu'
 import { photoMenuItems, retargetSelection } from '../../shell/photoMenu'
@@ -19,11 +20,28 @@ const OVERSCAN = 600
 
 export function LibraryModule() {
   const viewMode = useUI((s) => s.viewMode)
+  const filterBarOpen = useUI((s) => s.filterBarOpen)
   const photos = usePhotos()
+  const hasCatalog = usePhotoCount() > 0
 
-  if (!photos.length) return <EmptyLibrary />
-  if (viewMode === 'loupe') return <LoupeView photos={photos} />
-  return <PhotoGrid photos={photos} />
+  // The bar stays up over an empty result — it is the only way back from a
+  // filter that matched nothing.
+  const view = !photos.length ? (
+    <EmptyLibrary />
+  ) : viewMode === 'loupe' ? (
+    <LoupeView photos={photos} />
+  ) : (
+    <PhotoGrid photos={photos} />
+  )
+
+  if (!filterBarOpen || !hasCatalog) return view
+
+  return (
+    <div className="flex size-full min-h-0 flex-col">
+      <FilterBar />
+      <div className="relative min-h-0 flex-1">{view}</div>
+    </div>
+  )
 }
 
 function PhotoGrid({ photos }: { photos: Photo[] }) {

@@ -9,6 +9,14 @@ import { db } from '../catalog/db'
 import { cacheDelete, cacheRead, proxyKey } from '../catalog/opfs'
 import type { Photo } from '../core/types'
 import { readProxyCache, writeProxyCache } from '../develop/proxyCache'
+
+/**
+ * The tier this check round-trips under. Any number does — the point is that
+ * reader, writer and key agree on one — so it is stated here rather than read
+ * from the preference, which would make the check's coverage depend on a
+ * setting.
+ */
+const PROXY_TIER = 2560
 import type { Proxy } from '../develop/proxy'
 import { createDemandQueue } from '../lib/demandQueue'
 import { decodeDeepPng } from '../raw/png16'
@@ -307,12 +315,12 @@ async function run() {
     preview: false,
     quality: 'interactive',
   }
-  const linearKey = proxyKey(photo.id, photo.modifiedAt, photo.fileSize)
+  const linearKey = proxyKey(photo.id, photo.modifiedAt, photo.fileSize, PROXY_TIER)
   await db.photos.put(photo)
   try {
-    await writeProxyCache(photo, proxy)
+    await writeProxyCache(photo, proxy, PROXY_TIER)
     const saved = await db.photos.get(photo.id)
-    const hit = saved ? await readProxyCache(saved) : null
+    const hit = saved ? await readProxyCache(saved, PROXY_TIER) : null
     if (
       saved?.proxyKey !== linearKey ||
       !hit ||
@@ -321,7 +329,10 @@ async function run() {
     ) {
       failures.push('linear proxy cache did not round-trip')
     }
-    if (saved && (await readProxyCache({ ...saved, fileSize: saved.fileSize + 1 })) !== null) {
+    if (
+      saved &&
+      (await readProxyCache({ ...saved, fileSize: saved.fileSize + 1 }, PROXY_TIER)) !== null
+    ) {
       failures.push('linear proxy cache ignored the source fingerprint')
     }
   } finally {

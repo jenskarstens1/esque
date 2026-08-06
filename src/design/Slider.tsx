@@ -322,7 +322,7 @@ export function NumberField({
   return (
     <button
       type="button"
-      className={cn('esq-num', disabled && 'pointer-events-none opacity-35')}
+      className={cn('esq-num esq-tap', disabled && 'pointer-events-none opacity-35')}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
@@ -358,26 +358,36 @@ export function SliderRow({
 }: SliderRowProps) {
   const reset = slider.defaultValue ?? slider.origin ?? 0
   const { menu, open } = useMenu()
+  const doReset = () => {
+    slider.onChange(reset)
+    slider.onCommit?.(reset)
+  }
+  /*
+   * Resetting one slider was double-click only, which touch cannot express, so
+   * the row always carries its own reset ahead of whatever the panel adds. Long
+   * press raises this same menu on touch.
+   */
+  const rowMenu = (): MenuItem[] => {
+    const own: MenuItem[] = [
+      { kind: 'item', label: `Reset ${label}`, disabled: slider.disabled, onSelect: doReset },
+    ]
+    const extra = menuItems?.({ reset })
+    return extra?.length ? [...own, { kind: 'separator' }, ...extra] : own
+  }
   return (
-    <div
-      className="group/row select-none"
-      onContextMenu={menuItems ? (e) => open(e, menuItems({ reset })) : undefined}
-    >
+    <div className="group/row select-none" onContextMenu={(e) => open(e, rowMenu())}>
       {/* S2's field layout: label start, output end, track full-width below. */}
       <div className="grid grid-cols-[1fr_auto] items-baseline gap-2">
         <button
           type="button"
           className={cn(
-            'truncate text-left text-mini transition-colors duration-[--duration-fast]',
+            'esq-tap truncate text-left text-mini transition-colors duration-[--duration-fast]',
             modified ? 'text-label' : 'text-label-secondary',
             'group-hover/row:text-label',
             slider.disabled && 'opacity-35',
           )}
-          title={`${label} — double-click to reset`}
-          onDoubleClick={() => {
-            slider.onChange(reset)
-            slider.onCommit?.(reset)
-          }}
+          title={`${label}: double-click to reset`}
+          onDoubleClick={doReset}
         >
           {label}
         </button>

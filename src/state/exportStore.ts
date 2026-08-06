@@ -6,7 +6,8 @@
  * running them in sequence and far more likely to fall over.
  */
 import { create } from 'zustand'
-import { db } from '../catalog/db'
+import { db, getSetting, setSetting } from '../catalog/db'
+import { useUI } from './ui'
 import { formatBytes, nextId } from '../lib/math'
 import { toast } from '../design/toast'
 import {
@@ -121,7 +122,10 @@ export const useExport = create<ExportState>((set, get) => ({
     }
   },
 
-  setDestination: (dir) => set({ destination: dir, destinationName: dir?.name ?? '' }),
+  setDestination: (dir) => {
+    set({ destination: dir, destinationName: dir?.name ?? '' })
+    rememberDestination(dir)
+  },
 
   applyPreset: (id) => {
     const preset = allPresets(get().presets).find((p) => p.id === id)
@@ -177,6 +181,19 @@ export const useExport = create<ExportState>((set, get) => ({
   async start() {
     const { photoIds, settings, destination } = get()
     if (!destination || !photoIds.length || get().running) return
+
+    // A destination restored from a previous session carries no write
+    // permission — Chrome drops it on reload. This click is the user gesture
+    // that can ask for it back, and it is the honest moment to ask, because
+    // the user has just said where the files should go.
+    const { ensurePermission } = await import('../catalog/fs')
+    if (!(await ensurePermission(destination, 'readwrite'))) {
+      toast.error(
+        'Cannot write to that folder',
+        'Choose the export destination again to grant access.',
+      )
+      return
+    }
 
     // The export engine pulls in the ICC generator, TIFF writer and tiled
     // renderer, so it is fetched on the first export rather than at boot.
@@ -318,3 +335,45 @@ export const useExport = create<ExportState>((set, get) => ({
     }
   },
 }))
+
+// ---------------------------------------------------------------------------
+// Remembering where exports go
+//
+// The folder picker is the single most repeated gesture in an export workflow
+// and the least interesting: almost nobody exports to a different place each
+// time. The handle survives a reload because IndexedDB structured-clones it —
+// what does *not* survive is the permission, so a restored destination is a
+// name on a button until the next user gesture can ask for write access again.
+// Asking on restore is impossible: `requestPermission` without a gesture throws.
+// Asking at export time is right anyway, because that is the moment the user
+// has said "yes, write there".
+// ---------------------------------------------------------------------------
+
+const DESTINATION_KEY = 'export.destination'
+
+function rememberDestination(dir: FileSystemDirectoryHandle | null) {
+  if (!useUI.getState().rememberDestination) return
+  void setSetting(DESTINATION_KEY, dir).catch(() => {})
+}
+
+/** Forgets the stored destination. Called when the preference is switched off. */
+export function forgetDestination() {
+  void setSetting(DESTINATION_KEY, null).catch(() => {})
+}
+
+/**
+ * Restores the last export destination on startup.
+ *
+ * Deliberately does not verify the folder still exists — that costs a disk
+ * touch on every launch to answer a question the export itself will answer
+ * anyway, and a missing folder surfaces as one clear failure at export time
+ * rather than a silent reset the user never sees.
+ */
+export async function restoreDestination() {
+  if (!useUI.getState().rememberDestination) return
+  if (useExport.getState().destination) return
+  const dir = await getSetting<FileSystemDirectoryHandle | null>(DESTINATION_KEY, null)
+  if (!dir) return
+  // Bypasses `setDestination` so restoring doesn't write back what it just read.
+  useExport.setState({ destination: dir, destinationName: dir.name })
+}

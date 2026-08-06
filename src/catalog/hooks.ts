@@ -11,15 +11,22 @@ export function usePhotoCount(): number {
   return useLiveQuery(() => db.photos.count(), [], 0) ?? 0
 }
 
-/** Photos for the current source, filtered and sorted. */
-export function usePhotos(): Photo[] {
-  const source = useCatalog((s) => s.source)
-  const filters = useCatalog((s) => s.filters)
-  const sortKey = useCatalog((s) => s.sortKey)
-  const sortAsc = useCatalog((s) => s.sortAsc)
-  const setVisible = useCatalog((s) => s.setVisible)
+/* One shared empty array, so a source that hasn't resolved yet doesn't hand
+   every memo below it a new identity on each render. */
+const NO_PHOTOS: Photo[] = []
 
-  const raw = useLiveQuery(async () => {
+/**
+ * The source query itself, still `undefined` until Dexie has answered it.
+ *
+ * A live query has no result on the render it is created, and every mount
+ * creates a new one — so "nothing yet" and "nothing here" are the same value to
+ * anyone reading `?? []`. `usePhotos` has to tell them apart, because acting on
+ * the first as though it were the second throws away the selection.
+ */
+function useSourceQuery(): Photo[] | undefined {
+  const source = useCatalog((s) => s.source)
+
+  return useLiveQuery(async () => {
     if (source.kind === 'folder') {
       return db.photos.where('folderId').equals(source.id).toArray()
     }
@@ -40,9 +47,24 @@ export function usePhotos(): Photo[] {
     }
     return db.photos.toArray()
   }, [source.kind, 'id' in source ? source.id : ''])
+}
+
+/** Photos for the current source, before filtering — what the filter bar counts. */
+export function useSourcePhotos(): Photo[] {
+  return useSourceQuery() ?? NO_PHOTOS
+}
+
+/** Photos for the current source, filtered and sorted. */
+export function usePhotos(): Photo[] {
+  const filters = useCatalog((s) => s.filters)
+  const sortKey = useCatalog((s) => s.sortKey)
+  const sortAsc = useCatalog((s) => s.sortAsc)
+  const setVisible = useCatalog((s) => s.setVisible)
+
+  const raw = useSourceQuery()
 
   const photos = useMemo(
-    () => sortPhotos(applyFilters(raw ?? [], filters), sortKey, sortAsc),
+    () => sortPhotos(applyFilters(raw ?? NO_PHOTOS, filters), sortKey, sortAsc),
     [raw, filters, sortKey, sortAsc],
   )
 
@@ -56,11 +78,20 @@ export function usePhotos(): Photo[] {
     }
     return h
   }, [ids])
+  // Moving between Library and Develop remounts whoever calls this, and the
+  // fresh live query reads empty for a frame. Publishing that would empty
+  // `visibleIds`, which drops the selection with it; the real answer lands a
+  // moment later, finds no primary, and falls back to the first photo in the
+  // catalogue — so Develop opens someone else's photograph instead of the one
+  // that was on screen. An unresolved query is not a view, so it publishes
+  // nothing and the selection survives the switch.
+  const resolved = raw !== undefined
   useEffect(() => {
+    if (!resolved) return
     setVisible(ids)
     // idKey collapses the array into a stable primitive so this only fires on
     // real membership changes, not on every re-render.
-  }, [idKey]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [idKey, resolved]) // eslint-disable-line react-hooks/exhaustive-deps
 
   return photos
 }
@@ -211,8 +242,12 @@ function ruleMatches(p: Photo, r: SmartRule): boolean {
       return r.op === 'isNot' ? p.flag !== r.value : p.flag === r.value
     case 'label':
       return r.op === 'isNot' ? p.label !== r.value : p.label === r.value
-    case 'edited':
-      return !!p.edits === !!r.value
+    case 'edited': {
+      // The value arrives as a real boolean from a rule built in code and as
+      // "true"/"false" from one built by a `<select>`; both mean the same thing.
+      const want = r.value === true || r.value === 'true'
+      return !!p.edits === want
+    }
     case 'fileType':
       return r.value === 'raw' ? p.isRaw : !p.isRaw
     case 'keyword':
@@ -261,7 +296,11 @@ function compareText(v: string, target: string, op: SmartRule['op']): boolean {
   }
 }
 
-export function applySmartRules(photos: Photo[], c: Collection): Photo[] {
+/** Membership of a smart collection: the rules are the collection. */
+export function applySmartRules<T extends Pick<Collection, 'rules' | 'match'>>(
+  photos: Photo[],
+  c: T,
+): Photo[] {
   if (!c.rules.length) return photos
   return photos.filter((p) =>
     c.match === 'all'

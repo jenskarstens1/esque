@@ -13,9 +13,11 @@
 import { useUI } from '../state/ui'
 import { zoomCommands } from '../lib/useZoomPan'
 import { useCatalog } from '../state/catalog'
+import { useExport } from '../state/exportStore'
 import { useDevelop } from '../develop/session'
 import { useMasking } from '../develop/masking'
 import { useRetouch } from '../develop/retouch'
+import * as wbPicker from '../develop/wbPicker'
 import * as geometry from '../gpu/geometry'
 import * as masks from '../develop/masks'
 import {
@@ -29,9 +31,11 @@ export interface DevBridge {
   useUI: typeof useUI
   zoomCommands: typeof zoomCommands
   useCatalog: typeof useCatalog
+  useExport: typeof useExport
   useDevelop: typeof useDevelop
   useMasking: typeof useMasking
   useRetouch: typeof useRetouch
+  wbPicker: typeof wbPicker
   geometry: typeof geometry
   masks: typeof masks
   menus: {
@@ -54,9 +58,11 @@ export function installDevBridge() {
     useUI,
     zoomCommands,
     useCatalog,
+    useExport,
     useDevelop,
     useMasking,
     useRetouch,
+    wbPicker,
     geometry,
     masks,
     menus: { cropMenuItems, maskMenuItems, retouchMenuItems, viewportMenuItems },

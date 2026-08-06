@@ -10,10 +10,12 @@ import {
   FolderIcon,
   ImportIcon,
   PlusIcon,
+  SmartCollectionIcon,
   SyncIcon,
 } from '../../design/icons'
 import { useMenu } from '../../design/useMenu'
 import { sourceMenuItems } from '../../shell/appMenus'
+import { editSmartCollection } from '../../state/smartEditor'
 import { useCatalog, type Source } from '../../state/catalog'
 import { useCollections, useFolders } from '../../catalog/hooks'
 import { useImporter } from '../../state/importer'
@@ -125,10 +127,27 @@ export function LibraryLeftPanel() {
           <button
             type="button"
             title="New collection"
-            onClick={async (e) => {
+            onClick={(e) => {
               e.stopPropagation()
-              const id = await createCollection('Untitled Collection')
-              setSource({ kind: 'collection', id })
+              const rect = e.currentTarget.getBoundingClientRect()
+              open(
+                { clientX: rect.right, clientY: rect.bottom + 4, preventDefault() {}, stopPropagation() {} },
+                [
+                  {
+                    label: 'New Collection',
+                    icon: <CollectionIcon size={12} />,
+                    onSelect: async () => {
+                      const id = await createCollection('Untitled Collection')
+                      setSource({ kind: 'collection', id })
+                    },
+                  },
+                  {
+                    label: 'New Smart Collection…',
+                    icon: <SmartCollectionIcon size={12} />,
+                    onSelect: () => editSmartCollection(),
+                  },
+                ],
+              )
             }}
             className="text-icon-tertiary transition-colors hover:text-icon"
           >
@@ -150,8 +169,15 @@ export function LibraryLeftPanel() {
               count={c.smart ? undefined : c.photoIds.length}
               active={isActive({ kind: 'collection', id: c.id })}
               onClick={() => setSource({ kind: 'collection', id: c.id })}
+              onDoubleClick={c.smart ? () => editSmartCollection(c) : undefined}
               onContextMenu={(e) => open(e, sourceMenuItems({ kind: 'collection', collection: c }))}
-              icon={<CollectionIcon size={13} className={c.smart ? 'text-accent' : undefined} />}
+              icon={
+                c.smart ? (
+                  <SmartCollectionIcon size={13} className="text-accent" />
+                ) : (
+                  <CollectionIcon size={13} />
+                )
+              }
             />
           ))
         )}
@@ -242,6 +268,7 @@ function Row({
   count,
   active,
   onClick,
+  onDoubleClick,
   onContextMenu,
   icon,
   actions,
@@ -250,6 +277,7 @@ function Row({
   count?: number
   active: boolean
   onClick: () => void
+  onDoubleClick?: () => void
   onContextMenu?: (e: React.MouseEvent) => void
   icon?: React.ReactNode
   actions?: React.ReactNode
@@ -259,6 +287,7 @@ function Row({
       role="button"
       tabIndex={0}
       onClick={onClick}
+      onDoubleClick={onDoubleClick}
       onContextMenu={onContextMenu}
       onKeyDown={(e) => e.key === 'Enter' && onClick()}
       className={cn(
@@ -270,13 +299,18 @@ function Row({
       <span className={cn('shrink-0', active ? 'text-accent' : 'text-icon-tertiary')}>{icon}</span>
       <span className="min-w-0 flex-1 truncate text-mini">{label}</span>
       {actions && (
-        <span className="hidden shrink-0 items-center gap-1.5 group-hover/row:flex">{actions}</span>
+        <span className="esq-reveal-flex hidden shrink-0 items-center gap-1.5 group-hover/row:flex">
+          {actions}
+        </span>
       )}
       {count !== undefined && (
         <span
           className={cn(
             'shrink-0 text-micro tnum text-label-quaternary',
-            actions && 'group-hover/row:hidden',
+            // The count and the row's actions share one slot. With no hover to
+            // trade on, the actions simply win: a folder's count is readable
+            // from the grid, its "sync" button is not reachable anywhere else.
+            actions && 'group-hover/row:hidden touch:hidden',
           )}
         >
           {count.toLocaleString()}

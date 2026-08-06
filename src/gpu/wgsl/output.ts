@@ -34,6 +34,8 @@ struct U {
   uResolution: vec2f,
   uShowShadowClip: f32,
   uShowHighlightClip: f32,
+  uClipHighlight: f32, // display value at or above which a channel counts as blown
+  uClipShadow: f32,    // display value at or below which every channel counts as blocked
   uOutputGamutCompress: f32,
   uCanvasGamutCompress: f32,
   uHdrHeadroom: f32,  // 1 = SDR; 4 = two stops above display white
@@ -132,9 +134,9 @@ fn fs(@builtin(position) pos: vec4f, @location(0) uv: vec2f) -> @location(0) vec
 
   var disp = u.uToOutput * lin;
   let clipHi = u.uShowHighlightClip > 0.5 &&
-    (disp.r >= 0.995 || disp.g >= 0.995 || disp.b >= 0.995);
+    (disp.r >= u.uClipHighlight || disp.g >= u.uClipHighlight || disp.b >= u.uClipHighlight);
   let clipLo = u.uShowShadowClip > 0.5 &&
-    (disp.r <= 0.0025 && disp.g <= 0.0025 && disp.b <= 0.0025);
+    (disp.r <= u.uClipShadow && disp.g <= u.uClipShadow && disp.b <= u.uClipShadow);
 
   disp = clamp(gamutCompress(disp, u.uOutputLuma, u.uOutputGamutCompress), vec3f(0.0), vec3f(1.0));
   if (u.uProofToCanvas > 0.5) {

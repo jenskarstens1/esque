@@ -1,5 +1,6 @@
 import { defaultEdits, ALL_SECTIONS, cloneEdits, defaultMaskAdjustments } from '../core/defaults'
 import { parseXmp, editsToSidecar, presetToXmp } from '../develop/xmp'
+import { applySidecarText, sidecarNames } from '../catalog/sidecar'
 import type { Edits, EditSection, Preset } from '../core/types'
 
 /*
@@ -7,6 +8,11 @@ import type { Edits, EditSection, Preset } from '../core/types'
  * a preset, reads both back, and compares field by field. Anything the writer
  * emits but the reader drops — or vice versa — shows up as a named difference
  * rather than as a setting that silently resets on the next import.
+ *
+ * The last section covers the layer above that: turning a sidecar found on disk
+ * into changes to a catalog record. That layer is the one that can lose a
+ * photographer's work, because it runs unattended at import and it overwrites —
+ * so what it must *not* touch is checked as carefully as what it must.
  */
 
 declare global {
@@ -404,6 +410,96 @@ else {
     fail(`foreign: exposure came back ${readForeign.edits.basic.exposure}`)
   if (readForeign.edits.tone.drcAmount !== defaultEdits().tone.drcAmount)
     fail('foreign: tone drifted off its default')
+}
+
+// --- Applying a sidecar to a photo ----------------------------------------
+
+// Adobe's spelling first, because that is the one that gets written.
+{
+  const names = sidecarNames('trip/IMG_0001.ARW')
+  if (names[0] !== 'trip/IMG_0001.xmp') fail(`sidecar name: got “${names[0]}”`)
+  if (!names.includes('trip/IMG_0001.ARW.xmp')) fail('sidecar name: appended spelling not tried')
+  // A dot in a directory name is not an extension.
+  if (sidecarNames('2024.raw/IMG')[0] !== '2024.raw/IMG.xmp')
+    fail(`sidecar name: a dotted folder confused it — ${sidecarNames('2024.raw/IMG')[0]}`)
+}
+
+// The full article: settings and metadata together, as Lightroom writes it.
+{
+  const full = editsToSidecar(source, ALL_SECTIONS, {
+    filename: 'IMG_0001.ARW',
+    rating: 4,
+    label: 'blue',
+    title: 'Harbour',
+    caption: 'Low tide, late light',
+    keywords: ['coast', 'boats'],
+  })
+  const applied = applySidecarText(full)
+  if (!applied) fail('apply: a full sidecar produced no changes')
+  else {
+    const c = applied.changes
+    if (c.rating !== 4) fail(`apply: rating came back ${c.rating}`)
+    if (c.label !== 'blue') fail(`apply: label came back ${c.label}`)
+    if (c.title !== 'Harbour') fail(`apply: title came back “${c.title}”`)
+    if (c.caption !== 'Low tide, late light') fail(`apply: caption came back “${c.caption}”`)
+    if (JSON.stringify(c.keywords) !== JSON.stringify(['coast', 'boats']))
+      fail(`apply: keywords came back ${JSON.stringify(c.keywords)}`)
+    if (!c.edits) fail('apply: no develop settings')
+    else if (Math.abs(c.edits.basic.exposure - source.basic.exposure) > 0.01)
+      fail(`apply: exposure came back ${c.edits.basic.exposure}`)
+    if (!applied.applied.edits || !applied.applied.metadata)
+      fail(`apply: reported ${JSON.stringify(applied.applied)}`)
+  }
+}
+
+// A sidecar that says nothing about a field must not clear it. This is the one
+// that costs a caption: a rating-only sidecar written by a tagging tool would
+// otherwise blank every text field on the photograph it was meant to describe.
+{
+  const ratingOnly = `<x:xmpmeta xmlns:x="adobe:ns:meta/">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:Rating="3"/>
+ </rdf:RDF>
+</x:xmpmeta>`
+  const applied = applySidecarText(ratingOnly)
+  if (!applied) fail('apply: a rating-only sidecar produced no changes')
+  else {
+    const keys = Object.keys(applied.changes)
+    if (keys.length !== 1 || keys[0] !== 'rating')
+      fail(`apply: a rating-only sidecar also changed ${JSON.stringify(keys)}`)
+    if (applied.applied.edits) fail('apply: a rating-only sidecar claimed develop settings')
+  }
+}
+
+// A preset is not a photograph's settings, however close it is sitting.
+{
+  const asPreset = presetToXmp(
+    { id: 'p', name: 'Not Yours', group: 'G', builtin: false, sections: ROUND_TRIPPED, edits: {}, createdAt: 0 },
+    source,
+  )
+  const applied = applySidecarText(asPreset)
+  if (applied?.changes.edits) fail('apply: a preset was applied as if it were a sidecar')
+}
+
+// Nothing to say means no write at all, so an empty file cannot reset a record.
+{
+  if (applySidecarText('<x:xmpmeta xmlns:x="adobe:ns:meta/"></x:xmpmeta>') !== null)
+    fail('apply: an empty sidecar produced changes')
+  if (applySidecarText('not xml at all') !== null) fail('apply: junk produced changes')
+}
+
+// Ratings and labels arrive from other people's software and cannot be trusted.
+{
+  const odd = `<x:xmpmeta xmlns:x="adobe:ns:meta/">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/"
+   xmp:Rating="9" xmp:Label="Chartreuse"/>
+ </rdf:RDF>
+</x:xmpmeta>`
+  const applied = applySidecarText(odd)
+  if (applied && applied.changes.rating !== 5) fail(`apply: rating 9 became ${applied.changes.rating}`)
+  if (applied && 'label' in applied.changes)
+    fail(`apply: an unknown label was accepted as ${applied.changes.label}`)
 }
 
 window.__result = {

@@ -16,6 +16,7 @@ import { decodedAsShotTempTint } from '../core/color'
 import { RENDERED_WHITE_POINT, type SourceImage } from '../core/workingImage'
 import { createDemandQueue } from '../lib/demandQueue'
 import { readProxyCache, writeProxyCache } from './proxyCache'
+import { useUI, type PreviewQuality } from '../state/ui'
 
 export interface Proxy extends SourceImage {
   photoId: string
@@ -37,8 +38,23 @@ export interface Proxy extends SourceImage {
 /** Carries a human-readable reason up to the viewport. */
 export class ProxyError extends Error {}
 
-/** Long edge of the standard proxy. Zoom and export can request the final tier. */
-export const PROXY_EDGE = 2560
+/**
+ * Long edge of the standard proxy, by quality tier.
+ *
+ * Every tier gets the same full-quality demosaic — this selects how much of the
+ * result is kept, not how it was interpolated. 2560 covers a retina viewport
+ * with room to zoom; 1600 halves the memory a large catalogue holds; 4096
+ * reaches 1:1 on most sensors so a close inspection never waits for a decode.
+ */
+export const PREVIEW_EDGES: Record<PreviewQuality, number> = {
+  standard: 1600,
+  high: 2560,
+  full: 4096,
+}
+
+/** The standard tier as the Display pane currently has it. */
+export const proxyEdge = () =>
+  PREVIEW_EDGES[useUI.getState().previewQuality] ?? PREVIEW_EDGES.high
 
 const LIMIT_BYTES = 420 * 1024 * 1024
 const cache = new Map<string, Proxy>()
@@ -85,13 +101,14 @@ async function decode(
   signal.throwIfAborted()
   // A small RAW reaches 1:1 in the standard tier, so there is no later zoom
   // escalation that could replace its working interpolation with the final one.
+  const standard = proxyEdge()
   const nativeEdge = Math.max(photo.width, photo.height)
   const quality =
-    maxEdge > PROXY_EDGE || (nativeEdge > 0 && nativeEdge <= PROXY_EDGE)
+    maxEdge > standard || (nativeEdge > 0 && nativeEdge <= standard)
       ? 'full'
       : 'interactive'
-  if (photo.isRaw && maxEdge <= PROXY_EDGE) {
-    const cached = await readProxyCache(photo, signal)
+  if (photo.isRaw && maxEdge <= standard) {
+    const cached = await readProxyCache(photo, standard, signal)
     if (
       cached &&
       (cached.scale >= 1 || Math.max(cached.width, cached.height) >= maxEdge) &&
@@ -205,10 +222,10 @@ async function decode(
   if (
     photo.isRaw &&
     proxy.quality !== 'preview' &&
-    maxEdge >= PROXY_EDGE &&
-    Math.max(proxy.width, proxy.height) <= PROXY_EDGE
+    maxEdge >= standard &&
+    Math.max(proxy.width, proxy.height) <= standard
   ) {
-    void writeProxyCache(photo, proxy).catch((error: unknown) => {
+    void writeProxyCache(photo, proxy, standard).catch((error: unknown) => {
       console.warn('[esque] Could not persist the RAW working proxy.', error)
     })
   }
@@ -225,7 +242,7 @@ const requestProxy = createDemandQueue<string, Proxy>({
 
 export function loadProxy(
   photoId: string,
-  maxEdge = PROXY_EDGE,
+  maxEdge = proxyEdge(),
   signal?: AbortSignal,
 ): Promise<Proxy | null> {
   return requestProxy(photoId, maxEdge, signal)
@@ -245,7 +262,7 @@ export function loadProxy(
  */
 export async function loadPreview(
   photoId: string,
-  maxEdge = PROXY_EDGE,
+  maxEdge = proxyEdge(),
   signal?: AbortSignal,
 ): Promise<Proxy | null> {
   const photo = await db.photos.get(photoId)

@@ -72,7 +72,7 @@ export function PanelSection({
     <section className={cn(hairline && 'hairline-b', fill && 'flex min-h-0 flex-1 flex-col', className)}>
       <header
         className={cn(
-          'group/head flex h-8 shrink-0 items-center gap-1.5 px-3 transition-colors duration-[--duration-fast]',
+          'group/head flex h-8 coarse:h-11 shrink-0 items-center gap-1.5 px-3 transition-colors duration-[--duration-fast]',
           collapsible && 'hover:bg-white/[0.028]',
         )}
         onContextMenu={menuItems ? (e) => openMenu(e, menuItems()) : undefined}
@@ -82,7 +82,7 @@ export function PanelSection({
             type="button"
             onClick={toggle}
             aria-expanded={open}
-            className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
+            className="flex h-full min-w-0 flex-1 items-center gap-1.5 text-left"
           >
             {label}
           </button>
@@ -94,7 +94,7 @@ export function PanelSection({
             className={cn(
               'flex shrink-0 items-center gap-1',
               revealActions === 'hover' &&
-                'opacity-0 transition-opacity duration-[--duration-fast] group-hover/head:opacity-100 focus-within:opacity-100',
+                'esq-reveal opacity-0 transition-opacity duration-[--duration-fast] group-hover/head:opacity-100 focus-within:opacity-100',
             )}
           >
             {actions}
@@ -174,7 +174,7 @@ export function MiniAction({
         onClick?.(e)
       }}
       className={cn(
-        'rounded-xs px-1.5 py-0.5 text-micro font-medium uppercase tracking-[0.05em] transition-colors duration-[--duration-fast]',
+        'esq-tap rounded-xs px-1.5 py-0.5 text-micro font-medium uppercase tracking-[0.05em] transition-colors duration-[--duration-fast]',
         active ? 'bg-accent-soft text-accent' : 'text-icon-tertiary hover:bg-raised hover:text-icon',
         disabled && 'pointer-events-none opacity-30',
       )}

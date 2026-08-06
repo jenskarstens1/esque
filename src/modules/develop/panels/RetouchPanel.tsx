@@ -6,7 +6,6 @@ import { Button, Select } from '../../../design/Controls'
 import { SliderRow } from '../../../design/Slider'
 import { useMenu } from '../../../design/useMenu'
 import { panelMenuItems } from '../../../shell/appMenus'
-import { Group } from './BasicPanel'
 import { useDevelop } from '../../../develop/session'
 import { useUI } from '../../../state/ui'
 import {
@@ -107,9 +106,9 @@ export function RetouchPanel() {
         </p>
       )}
 
-      <Group label={`Spots${spots.length ? ` (${spots.length})` : ''}`}>
+      <div className="mt-2.5">
         <div className="mb-1.5 flex items-center gap-1.5">
-          <span className="w-[44px] shrink-0 text-mini text-label-tertiary">Mode</span>
+          <span className="w-[44px] shrink-0 text-mini text-label-tertiary">Spot</span>
           <Select
             value={spot ? spot.mode : rt.spotMode}
             onChange={(v) => {
@@ -124,7 +123,7 @@ export function RetouchPanel() {
           />
         </div>
         <SliderRow
-          label="Size"
+          label="Spot Size"
           min={0.005}
           max={0.4}
           step={0.001}
@@ -138,7 +137,7 @@ export function RetouchPanel() {
           }}
         />
         <SliderRow
-          label="Feather"
+          label="Spot Feather"
           min={0}
           max={100}
           defaultValue={50}
@@ -150,7 +149,7 @@ export function RetouchPanel() {
           }}
         />
         <SliderRow
-          label="Opacity"
+          label="Spot Opacity"
           min={0}
           max={1}
           step={0.01}
@@ -218,11 +217,11 @@ export function RetouchPanel() {
             ))}
           </div>
         )}
-      </Group>
+      </div>
 
-      <Group label={`Red Eye${redEye.length ? ` (${redEye.length})` : ''}`}>
+      <div className="mt-2.5">
         <div className="mb-1.5 flex items-center gap-1.5">
-          <span className="w-[44px] shrink-0 text-mini text-label-tertiary">Type</span>
+          <span className="w-[44px] shrink-0 text-mini text-label-tertiary">Eye</span>
           <Select
             value={eye ? eye.kind : rt.eyeKind}
             onChange={(v) => {
@@ -237,7 +236,7 @@ export function RetouchPanel() {
           />
         </div>
         <SliderRow
-          label="Size"
+          label="Pupil Size"
           min={0.005}
           max={0.3}
           step={0.001}
@@ -251,7 +250,7 @@ export function RetouchPanel() {
           }}
         />
         <SliderRow
-          label="Darken"
+          label="Pupil Darken"
           min={0}
           max={100}
           defaultValue={50}
@@ -303,7 +302,7 @@ export function RetouchPanel() {
             ))}
           </div>
         )}
-      </Group>
+      </div>
     </PanelSection>
   )
 }

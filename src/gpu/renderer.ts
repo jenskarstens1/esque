@@ -53,10 +53,17 @@ import {
   splineLut,
 } from './curves'
 import { geometryOutputSize, isIdentityGeometry } from './geometry'
-import { COLOR_BANDS, type CurvePoint, type Edits, type Mask } from '../core/types'
+import {
+  COLOR_BANDS,
+  isAiGeometry,
+  type CurvePoint,
+  type Edits,
+  type Mask,
+} from '../core/types'
 import { cameraProfile } from '../core/profiles'
 import type { SourceImage } from '../core/workingImage'
 import { floatToHalf, halfToFloat } from '../core/half'
+import { getAlpha } from '../ai/alpha'
 
 export type { SourceImage } from '../core/workingImage'
 
@@ -75,6 +82,14 @@ export interface RenderOptions {
   outputSpace?: OutputSpace
   showShadowClip?: boolean
   showHighlightClip?: boolean
+  /**
+   * Where the overlays start calling a pixel lost, as display values. Default
+   * to the edge of the encodable range, which is the literal reading of
+   * "clipped"; the Display pane can bring them in to ask the looser question of
+   * what will survive a print.
+   */
+  clipHighlight?: number
+  clipShadow?: number
   /** Renders the unedited image, for before/after. */
   bypass?: boolean
   /** Shows one mask's coverage instead of a clean render. */
@@ -145,6 +160,17 @@ const HIST_W = 320
 const HDR_KNEE = 0.75
 
 /**
+ * Where the clipping overlays fall when nobody has said otherwise.
+ *
+ * The literal edges of the encodable range: a channel within half a code value
+ * of white is blown, and a pixel whose three channels all sit within the first
+ * code value of black is blocked. Anything looser is a judgement about output,
+ * which is the caller's to make and the Display pane's to offer.
+ */
+export const CLIP_HIGHLIGHT_DEFAULT = 0.995
+export const CLIP_SHADOW_DEFAULT = 0.0025
+
+/**
  * A frame's shape as a pair whose longer side is 1.
  *
  * Working in these units means a radius is a circle and a rotation doesn't
@@ -198,6 +224,27 @@ export class Renderer {
   private maskScratch: PingPong | null = null
   private maskLut: Tex | null = null
   private maskLutData = new Float32Array(LUT_SIZE * 4)
+  /**
+   * Segmentation coverage, uploaded once per cache key.
+   *
+   * The pixels themselves belong to `ai/alpha`, which holds them for the
+   * session and persists them to OPFS; this is only the GPU's copy, rebuilt
+   * from that whenever a key it has not seen turns up in a mask.
+   */
+  private aiTex = new Map<string, Tex>()
+  /** Framed-space coverage, one per AI component in the current mask. */
+  private aiFramed: PingPong | null = null
+  /**
+   * The geometry stage's uniforms, or null when it was skipped.
+   *
+   * AI coverage is produced on the *sensor* grid — the network reads the proxy,
+   * which knows nothing about the crop — while masks are rasterised in the
+   * framed image the user sees. Replaying the same transform over the coverage
+   * is what reconciles the two, and it is exact by construction rather than by
+   * a second implementation that has to be kept in step. Detecting a subject
+   * therefore survives a later crop or straighten without re-running.
+   */
+  private frameGeom: Record<string, number | number[]> | null = null
 
   private histTarget: Tex | null = null
 
@@ -704,31 +751,38 @@ export class Renderer {
 
       const turned = c.quarterTurns % 2 === 1
 
+      // Kept so AI coverage can be replayed through the identical mapping
+      // below. Chromatic aberration and lens vignetting are excluded when it
+      // is: both are optical corrections on colour, and coverage has none.
+      const uniforms: Record<string, number | number[]> = {
+        uInAspect: aspectVec(chain.width, chain.height),
+        uFrameAspect: aspectVec(
+          turned ? chain.height : chain.width,
+          turned ? chain.width : chain.height,
+        ),
+        uCrop: [c.left, c.top, c.right, c.bottom],
+        uAngle: ((c.angle + t.rotate) * Math.PI) / 180,
+        uQuarter: c.quarterTurns & 3,
+        uFlip: [c.flipH ? -1 : 1, c.flipV ? -1 : 1],
+        // Lightroom's ±100 keystone is roughly a half-frame shift at the edge.
+        uPerspective: [t.horizontal / 220, t.vertical / 220],
+        uAspectStretch: [
+          t.aspect > 0 ? 1 + t.aspect / 100 : 1,
+          t.aspect < 0 ? 1 - t.aspect / 100 : 1,
+        ],
+        uScale: Math.max(0.05, t.scale / 100),
+        uOffset: [t.offsetX / 100, -t.offsetY / 100],
+        uDistortion: [-lensG.distortion / 100, 0],
+        uEdgeFill: 0,
+      }
+      this.frameGeom = uniforms
+
       const prog = this.cache.get('geometry', GEOMETRY_FS)
       prog.use()
       prog.tex('uImage', input)
-      prog
-        .set('uInAspect', aspectVec(chain.width, chain.height))
-        .set('uFrameAspect', aspectVec(
-          turned ? chain.height : chain.width,
-          turned ? chain.width : chain.height,
-        ))
-        .set('uCrop', [c.left, c.top, c.right, c.bottom])
-        .set('uAngle', ((c.angle + t.rotate) * Math.PI) / 180)
-        .set('uQuarter', c.quarterTurns & 3)
-        .set('uFlip', [c.flipH ? -1 : 1, c.flipV ? -1 : 1])
-        // Lightroom's ±100 keystone is roughly a half-frame shift at the edge.
-        .set('uPerspective', [t.horizontal / 220, t.vertical / 220])
-        .set('uAspectStretch', [
-          t.aspect > 0 ? 1 + t.aspect / 100 : 1,
-          t.aspect < 0 ? 1 - t.aspect / 100 : 1,
-        ])
-        .set('uScale', Math.max(0.05, t.scale / 100))
-        .set('uOffset', [t.offsetX / 100, -t.offsetY / 100])
-        .set('uDistortion', [-lensG.distortion / 100, 0])
-        .set('uCa', [lensG.caRed / 2000, lensG.caBlue / 2000])
-        .set('uLensVignette', lensG.vignetting / 100)
-        .set('uEdgeFill', 0)
+      for (const [name, value] of Object.entries(uniforms)) prog.set(name, value)
+      prog.set('uCa', [lensG.caRed / 2000, lensG.caBlue / 2000])
+      prog.set('uLensVignette', lensG.vignetting / 100)
       drawPass(this.enc!, geom.write, prog)
 
       input = geom.write
@@ -737,6 +791,8 @@ export class Renderer {
       w = out.width
       h = out.height
       texel = [1 / w, 1 / h]
+    } else {
+      this.frameGeom = null
     }
 
     // --- Local adjustments ----------------------------------------------------
@@ -846,7 +902,13 @@ export class Renderer {
     width: number,
     height: number,
   ): Tex | null {
-    const parts = mask.components.filter((c) => c.geometry.kind in MASK_KIND)
+    // An AI component with no coverage yet is dropped rather than rasterised
+    // as empty. Detection is asynchronous, and a mask that briefly reads as
+    // "everything is selected" would flash the whole photo's adjustments on
+    // screen in the second before the network answers.
+    const parts = mask.components.filter(
+      (c) => c.geometry.kind in MASK_KIND && (!isAiGeometry(c.geometry) || this.aiCoverage(c.geometry.cacheKey)),
+    )
     if (!parts.length) return null
 
     if (!this.maskAcc || this.maskAcc.width !== width || this.maskAcc.height !== height) {
@@ -898,8 +960,19 @@ export class Renderer {
           scratch.swap()
         }
       } else {
+        // Coverage arrives on the sensor grid, so it is walked through the
+        // frame's own geometry before anything samples it. Resolved before the
+        // raster pass is configured because it draws a pass of its own.
+        const ai = isAiGeometry(g) ? g : null
+        const alpha = ai ? this.framedAlpha(ai.cacheKey, width, height) : null
+
         raster.use()
         raster.tex('uImage', image).tex('uPrev', scratch.read)
+        // Bound for every kind, not just the detected ones. The shader declares
+        // `uAlpha` unconditionally, and a declared texture that is never bound
+        // is an error rather than a placeholder — so a gradient drawn while an
+        // AI kind exists in the same build would take the whole mask down.
+        raster.tex('uAlpha', alpha)
         raster.set('uKind', kind).set('uAspect', aspect)
         if (g.kind === 'linear') {
           raster.set('uP0', [g.start.x, g.start.y]).set('uP1', [g.end.x, g.end.y])
@@ -921,6 +994,11 @@ export class Renderer {
           raster.set('uSampleCount', n).set('uRefine', g.refine)
         } else if (g.kind === 'luminanceRange') {
           raster.set('uRange', g.range).set('uSmoothness', g.smoothness)
+        } else if (ai && alpha) {
+          raster
+            .set('uRefine', ai.refine)
+            .set('uTexel', [1 / width, 1 / height])
+            .set('uAiInvert', ai.kind === 'aiBackground' ? 1 : 0)
         }
         drawPass(this.enc!, scratch.write, raster)
         scratch.swap()
@@ -952,6 +1030,65 @@ export class Renderer {
       acc.swap()
     }
     return cov
+  }
+
+  /**
+   * The GPU's copy of one detection result, uploaded on first use.
+   *
+   * Coverage is a square in normalised source coordinates — the network's input
+   * was stretched to that square, so the stretch cancels when it is sampled
+   * back over the frame and no aspect has to be recorded. `r16float` because
+   * one filterable channel is all a mask is, at half the bandwidth of the
+   * smallest colour format that would also do.
+   */
+  private aiCoverage(cacheKey: string | null): Tex | null {
+    if (!cacheKey) return null
+    const existing = this.aiTex.get(cacheKey)
+    if (existing) return existing
+
+    const alpha = getAlpha(cacheKey)
+    if (!alpha) return null
+
+    const tex = createTexture(this.ctx, alpha.size, alpha.size, {
+      format: 'r16float',
+      filter: 'linear',
+    })
+    const half = new Uint16Array(alpha.data.length)
+    for (let i = 0; i < alpha.data.length; i++) half[i] = floatToHalf(alpha.data[i])
+    writeTexture(this.ctx, tex, half)
+    this.aiTex.set(cacheKey, tex)
+    return tex
+  }
+
+  /**
+   * Coverage moved from the sensor grid onto the framed image.
+   *
+   * The geometry stage's own program is replayed rather than reimplemented, so
+   * a crop, a straighten, a keystone or a distortion correction carries the
+   * mask with it exactly. When the frame is untransformed there is nothing to
+   * replay and the uploaded square is already in the right coordinates.
+   */
+  private framedAlpha(cacheKey: string | null, width: number, height: number): Tex | null {
+    const source = this.aiCoverage(cacheKey)
+    if (!source || !this.frameGeom) return source
+
+    if (!this.aiFramed || this.aiFramed.width !== width || this.aiFramed.height !== height) {
+      this.aiFramed?.dispose()
+      this.aiFramed = new PingPong(this.ctx, width, height)
+    }
+    const target = this.aiFramed
+
+    const prog = this.cache.get('geometry', GEOMETRY_FS)
+    prog.use()
+    prog.tex('uImage', source)
+    for (const [name, value] of Object.entries(this.frameGeom)) prog.set(name, value)
+    // Coverage has no colour, so the two corrections that act on one are off.
+    prog.set('uCa', [0, 0]).set('uLensVignette', 0)
+    drawPass(this.enc!, target.write, prog)
+
+    const out = target.write
+    target.swap()
+    return out
   }
 
   /** Uploads a mask's point curve into its own LUT. */
@@ -1462,6 +1599,8 @@ export class Renderer {
       .set('uResolution', resolution)
       .set('uShowShadowClip', opts.showShadowClip ? 1 : 0)
       .set('uShowHighlightClip', opts.showHighlightClip ? 1 : 0)
+      .set('uClipHighlight', opts.clipHighlight ?? CLIP_HIGHLIGHT_DEFAULT)
+      .set('uClipShadow', opts.clipShadow ?? CLIP_SHADOW_DEFAULT)
       .set('uOutputGamutCompress', space === 'prophoto' ? 0 : 1)
       .set('uCanvasGamutCompress', proofToCanvas && space !== canvasSpace ? 1 : 0)
       .set('uHdrHeadroom', headroom)
@@ -1669,10 +1808,28 @@ export class Renderer {
     this.maskAcc = null
     this.maskScratch?.dispose()
     this.maskScratch = null
+    this.aiFramed?.dispose()
+    this.aiFramed = null
+    for (const tex of this.aiTex.values()) tex.destroy()
+    this.aiTex.clear()
     this.paneCache?.target.destroy()
     this.paneCache = null
     this.lastResult = null
     this.lastGraphKey = null
+  }
+
+  /**
+   * Drops a cached coverage texture so the next frame re-reads it.
+   *
+   * Detection can produce a second answer for a key it has already answered —
+   * the user re-runs it, or the proxy is replaced by a sharper decode — and
+   * without this the GPU would keep serving the first upload forever.
+   */
+  invalidateCoverage(cacheKey: string) {
+    const tex = this.aiTex.get(cacheKey)
+    if (!tex) return
+    tex.destroy()
+    this.aiTex.delete(cacheKey)
   }
 
   dispose() {

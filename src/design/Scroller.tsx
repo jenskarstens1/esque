@@ -18,6 +18,8 @@ const INSET = 2
 const MIN_THUMB = 24
 /** How long the thumb lingers after scrolling stops, macOS-style. */
 const FADE_DELAY = 900
+/** How deep the edge fade runs once fully open. */
+const EDGE_FADE = 22
 
 type ScrollerProps = Omit<ComponentPropsWithoutRef<'div'>, 'children' | 'className'> & {
   /**
@@ -30,6 +32,12 @@ type ScrollerProps = Omit<ComponentPropsWithoutRef<'div'>, 'children' | 'classNa
   axis?: 'y' | 'x'
   /** Set false to scroll without ever painting a thumb. */
   thumb?: boolean
+  /**
+   * Softens content into each edge it can still scroll toward, so a cut-off row
+   * reads as "there is more" instead of as a row someone sliced. Pass a number
+   * to set the depth. Costs a mask, so it is opt-in.
+   */
+  edgeFade?: boolean | number
   children?: ReactNode
 }
 
@@ -46,7 +54,7 @@ type ScrollerProps = Omit<ComponentPropsWithoutRef<'div'>, 'children' | 'classNa
  * and scroll listeners want.
  */
 export const Scroller = forwardRef<HTMLDivElement, ScrollerProps>(function Scroller(
-  { axis = 'y', thumb: showThumb = true, frameClassName, className, children, ...rest },
+  { axis = 'y', thumb: showThumb = true, edgeFade, frameClassName, className, children, ...rest },
   ref,
 ) {
   const viewport = useRef<HTMLDivElement>(null)
@@ -55,6 +63,7 @@ export const Scroller = forwardRef<HTMLDivElement, ScrollerProps>(function Scrol
   const frame = useRef(0)
   const dragging = useRef(false)
   const vertical = axis === 'y'
+  const fadeDepth = edgeFade ? (typeof edgeFade === 'number' ? edgeFade : EDGE_FADE) : 0
 
   /** Track geometry for the current viewport, or null when it doesn't overflow. */
   const geometry = useCallback(() => {
@@ -71,24 +80,36 @@ export const Scroller = forwardRef<HTMLDivElement, ScrollerProps>(function Scrol
 
   const measure = useCallback(() => {
     const el = viewport.current
-    const bar = thumb.current
-    if (!el || !bar) return
+    if (!el) return
     const geo = geometry()
-    if (!geo) {
-      bar.hidden = true
-      return
-    }
-    bar.hidden = false
+    const bar = thumb.current
     const pos = vertical ? el.scrollTop : el.scrollLeft
-    const offset = clamp(Math.round((geo.range * pos) / geo.overflow), 0, geo.range)
-    if (vertical) {
-      bar.style.height = `${geo.size}px`
-      bar.style.transform = `translateY(${offset}px)`
-    } else {
-      bar.style.width = `${geo.size}px`
-      bar.style.transform = `translateX(${offset}px)`
+
+    if (bar) {
+      if (!geo) {
+        bar.hidden = true
+      } else {
+        bar.hidden = false
+        const offset = clamp(Math.round((geo.range * pos) / geo.overflow), 0, geo.range)
+        if (vertical) {
+          bar.style.height = `${geo.size}px`
+          bar.style.transform = `translateY(${offset}px)`
+        } else {
+          bar.style.width = `${geo.size}px`
+          bar.style.transform = `translateX(${offset}px)`
+        }
+      }
     }
-  }, [geometry, vertical])
+
+    if (fadeDepth) {
+      // Each edge opens in proportion to how far it can still be scrolled, so
+      // the fade grows out of the first pixels of travel rather than snapping
+      // on — and closes flush when there is nothing left that way.
+      const overflow = geo?.overflow ?? 0
+      el.style.setProperty('--esq-fade-a', `${clamp(pos, 0, fadeDepth)}px`)
+      el.style.setProperty('--esq-fade-b', `${clamp(overflow - pos, 0, fadeDepth)}px`)
+    }
+  }, [geometry, vertical, fadeDepth])
 
   const schedule = useCallback(() => {
     if (frame.current) return
@@ -200,6 +221,7 @@ export const Scroller = forwardRef<HTMLDivElement, ScrollerProps>(function Scrol
         className={cn(
           'esq-scroll min-h-0 flex-auto',
           vertical ? 'overflow-x-hidden overflow-y-auto' : 'overflow-x-auto overflow-y-hidden',
+          fadeDepth && (vertical ? 'esq-scroll-fade' : 'esq-scroll-fade is-x'),
           className,
         )}
       >

@@ -55,7 +55,8 @@ const NO_PRESETS: Preset[] = []
  * are one row shape wearing four labels, so they share their geometry and
  * their resting/hover colours rather than each redeclaring them and drifting.
  */
-const ROW = 'rounded-[4px] px-1.5 py-[3px] text-left transition-colors duration-[--duration-fast]'
+const ROW =
+  'esq-tap rounded-[4px] px-1.5 py-[3px] coarse:py-2.5 text-left transition-colors duration-[--duration-fast]'
 const ROW_QUIET = 'text-label-secondary hover:bg-raised hover:text-label'
 
 /** Pixels of banked wheel delta that buy one rung of the zoom ladder. */
@@ -303,7 +304,7 @@ function ZoomMenu({ frame }: { frame: NavigatorFrame | null }) {
           openMenu(e.currentTarget)
         }}
         className={cn(
-          'flex items-center gap-0.5 rounded-xs py-0.5 pr-0.5 pl-1.5',
+          'esq-tap flex items-center gap-0.5 rounded-xs py-0.5 pr-0.5 pl-1.5',
           'text-micro font-medium tracking-[0.05em] uppercase',
           'text-icon-tertiary transition-colors duration-[--duration-fast]',
           'hover:bg-raised hover:text-icon',
@@ -322,7 +323,7 @@ function ZoomMenu({ frame }: { frame: NavigatorFrame | null }) {
       <span
         role="img"
         aria-label={`Zoom: ${zoom === null ? 'unknown' : `${formatPercent(zoom * 100)}%`}`}
-        title="Zoom — drag to scrub"
+        title="Zoom: drag to scrub"
         className={cn(
           'esq-num min-w-[2.625rem] select-none',
           !frame && 'pointer-events-none opacity-30',
@@ -643,7 +644,9 @@ function PresetGroup({
         className={cn(ROW, 'group/head flex w-full items-center gap-1.5 hover:bg-white/[0.028]')}
       >
         <Chevron open={open} />
-        <span className="min-w-0 flex-1 truncate text-micro tracking-[0.06em] text-label-quaternary uppercase transition-colors duration-[--duration-fast] group-hover/head:text-label-tertiary">
+        {/* The app's eyebrow, not a brighter one of its own: a group header that
+            matched its presets in colour made the tree read as one flat list. */}
+        <span className="esq-section-title min-w-0 flex-1 truncate transition-colors duration-[--duration-fast] group-hover/head:text-label-secondary">
           {group}
         </span>
       </button>
@@ -658,7 +661,7 @@ function PresetGroup({
             in the disabled colour on the way out. */}
         <div className="overflow-hidden" inert={!open}>
           {/* Indented to the group label's text, so the tree reads as a tree. */}
-          <div className="mb-1.5 pl-3.5">
+          <div className="mb-1.5 pl-4">
             {presets.map((preset) => (
               <button
                 key={preset.id}
@@ -718,7 +721,7 @@ function SavePresetDialog({ open, onClose }: { open: boolean; onClose: () => voi
     <Dialog
       open={open}
       title="Create Preset"
-      description="Only the settings you tick are stored, and only those are applied — so the preset layers over each photo's own white balance, crop and noise reduction."
+      description="Only the settings you tick are stored, and only those are applied, so the preset layers over each photo's own white balance, crop and noise reduction."
       onClose={onClose}
       width={420}
       footer={
@@ -844,7 +847,7 @@ function SnapshotsSection() {
                 type="button"
                 onClick={() => void remove(s.id)}
                 aria-label={`Delete ${s.name}`}
-                className="shrink-0 px-1 text-icon-quaternary opacity-0 transition-opacity duration-[--duration-fast] group-hover/snap:opacity-100 hover:text-icon"
+                className="esq-tap esq-reveal shrink-0 px-1 text-icon-quaternary opacity-0 transition-opacity duration-[--duration-fast] group-hover/snap:opacity-100 hover:text-icon"
               >
                 <CloseIcon size={9} />
               </button>

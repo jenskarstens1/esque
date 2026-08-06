@@ -5,7 +5,6 @@ import { SegmentedControl, Select } from '../../../design/Controls'
 import { CurveEditor, type CurveChannel } from '../CurveEditor'
 import { EditSlider } from '../EditSlider'
 import { isSectionModified } from '../../../develop/modified'
-import { Group } from './BasicPanel'
 import { useDevelop } from '../../../develop/session'
 import type { CurveMode, CurvePoint } from '../../../core/types'
 
@@ -108,7 +107,7 @@ export function ToneCurvePanel() {
       />
 
       {mode === 'parametric' && (
-        <Group className="mt-2">
+        <div className="mt-2">
           <EditSlider
             path="curve.parametric.highlights"
             label="Highlights"
@@ -118,7 +117,7 @@ export function ToneCurvePanel() {
           <EditSlider path="curve.parametric.lights" label="Lights" min={-100} max={100} />
           <EditSlider path="curve.parametric.darks" label="Darks" min={-100} max={100} />
           <EditSlider path="curve.parametric.shadows" label="Shadows" min={-100} max={100} />
-        </Group>
+        </div>
       )}
 
       {/* The composite curve's mode decides what the shape is applied to, and

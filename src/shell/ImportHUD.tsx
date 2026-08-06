@@ -32,6 +32,7 @@ export function ImportHUD() {
   if (!active || !progress) return null
 
   const scanning = progress.phase === 'scanning'
+  const developing = progress.phase === 'developing'
   const pct = progress.total ? Math.min(1, progress.done / progress.total) : 0
 
   return (
@@ -52,12 +53,19 @@ export function ImportHUD() {
           <Spinner size={16} className="shrink-0 text-accent" />
           <div className="min-w-0 flex-1">
             <div className="text-mini font-medium text-label">
-              {cancelling ? 'Stopping import…' : scanning ? 'Scanning folder…' : 'Importing photos'}
+              {cancelling
+                ? 'Stopping import…'
+                : scanning
+                  ? 'Scanning folder…'
+                  : developing
+                    ? 'Applying import settings'
+                    : 'Importing photos'}
             </div>
             <div className="truncate text-micro text-label-tertiary">
               {cancelling
                 ? 'Finishing files already in progress'
-                : progress.current || (scanning ? 'Looking for photos' : '')}
+                : progress.current ||
+                  (scanning ? 'Looking for photos' : developing ? 'Almost done' : '')}
             </div>
           </div>
           <span className="shrink-0 text-mini tnum text-label-secondary">

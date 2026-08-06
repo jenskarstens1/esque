@@ -14,6 +14,7 @@ import {
   formatShutter,
 } from '../../lib/math'
 import { CloseIcon, StarIcon } from '../../design/icons'
+import { LocationMap } from './LocationMap'
 import type { ColorLabel, Photo } from '../../core/types'
 
 const LABELS: { value: ColorLabel; color: string; name: string }[] = [
@@ -218,19 +219,35 @@ function Metadata({ photo, count }: { photo?: Photo; count: number }) {
     ['ISO', m.iso ? String(m.iso) : '—'],
     ['Artist', m.artist || '—'],
   ]
-  if (m.gps) rows.push(['GPS', `${m.gps.lat.toFixed(5)}, ${m.gps.lon.toFixed(5)}`])
 
   return (
-    <dl className="flex flex-col gap-1 px-3 pt-1 pb-3">
-      {rows.map(([k, v]) => (
-        <div key={k} className="flex items-baseline gap-2">
-          <dt className="w-[86px] shrink-0 text-mini text-label-tertiary">{k}</dt>
-          <dd className="min-w-0 flex-1 truncate text-mini tnum text-label-secondary" title={v}>
-            {v}
-          </dd>
-        </div>
-      ))}
-    </dl>
+    <div className="flex flex-col gap-2.5 px-3 pt-1 pb-3">
+      <dl className="flex flex-col gap-1">
+        {rows.map(([k, v]) => (
+          <div key={k} className="flex items-baseline gap-2">
+            <dt className="w-[86px] shrink-0 text-mini text-label-tertiary">{k}</dt>
+            <dd className="min-w-0 flex-1 truncate text-mini tnum text-label-secondary" title={v}>
+              {v}
+            </dd>
+          </div>
+        ))}
+      </dl>
+      <Location gps={m.gps} />
+    </div>
+  )
+}
+
+/** The GPS block. Absent coordinates get a line, not a hole in the panel. */
+function Location({ gps }: { gps: Photo['meta']['gps'] }) {
+  return (
+    <div className="flex flex-col gap-1.5">
+      <div className="text-mini text-label-tertiary">Location</div>
+      {gps ? (
+        <LocationMap gps={gps} />
+      ) : (
+        <span className="text-mini text-label-quaternary">No GPS data</span>
+      )}
+    </div>
   )
 }
 

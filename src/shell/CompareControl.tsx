@@ -85,7 +85,7 @@ export function CompareControl() {
         aria-label="Before / after actions"
         onClick={actions}
         className={cn(
-          'grid size-[22px] place-items-center rounded-[5px] text-icon-tertiary',
+          'esq-tap grid size-[22px] place-items-center rounded-[5px] text-icon-tertiary',
           'transition-[background-color,color] duration-[--duration-fast] ease-[--ease-out]',
           'hover:bg-raised hover:text-label',
         )}

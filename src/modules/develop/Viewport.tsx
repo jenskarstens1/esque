@@ -24,7 +24,9 @@ import { CompareDivider, CompareLabels } from './CompareOverlay'
 import { CropOverlay } from './CropOverlay'
 import { MaskOverlay } from './MaskOverlay'
 import { RetouchOverlay } from './RetouchOverlay'
+import { WbDropperOverlay } from './WbDropperOverlay'
 import { useMasking } from '../../develop/masking'
+import { useDetect } from '../../ai/detect'
 import { setActiveRenderer } from './activeRenderer'
 
 interface Props {
@@ -89,6 +91,9 @@ interface Scene {
   outputSpace: OutputSpace
   clipShadow: boolean
   clipHighlight: boolean
+  /** Where the overlays call a pixel lost, as display values. */
+  clipShadowAt: number
+  clipHighlightAt: number
   /** Extended-range viewing, as the linear multiple of display white it reaches. */
   hdrHeadroom: number
 }
@@ -197,6 +202,9 @@ export function Viewport({ photo }: Props) {
   const edits = useDevelop((s) => s.edits)
   const previewEdits = useDevelop((s) => s.previewEdits)
   const revision = useDevelop((s) => s.revision)
+  // Coverage lands outside the edit stack, so a finished detection has to
+  // announce itself separately or the mask stays empty until the next edit.
+  const detectRevision = useDetect((s) => s.revision)
   const beforeRevision = useDevelop((s) => s.beforeRevision)
   const beforeAfter = useUI((s) => s.beforeAfter)
   const compareSplit = useUI((s) => s.compareSplit)
@@ -204,6 +212,8 @@ export function Viewport({ photo }: Props) {
   const { menu, open } = useMenu()
   const clipShadow = useUI((s) => s.showClipping.shadows)
   const clipHighlight = useUI((s) => s.showClipping.highlights)
+  const clipShadowAt = useUI((s) => s.clipShadow);
+  const clipHighlightAt = useUI((s) => s.clipHighlight);
   const outputSpace = useUI((s) => s.softProof)
   const hdr = useUI((s) => s.hdr)
   const hdrHeadroom = useUI((s) => s.hdrHeadroom)
@@ -223,6 +233,10 @@ export function Viewport({ photo }: Props) {
   const cropping = developTool === 'crop'
   const masking = developTool === 'mask'
   const retouching = developTool === 'heal' || developTool === 'redeye'
+  // The dropper is not one of the develop tools: it measures rather than edits,
+  // and it disarms itself on the first click, so it has to be able to sit over
+  // whatever tool the user already had open.
+  const dropping = useUI((s) => s.wbPicking) && !!photo
   const maskOverlayMode = useMasking((s) => s.overlay)
   const selectedMaskId = useMasking((s) => s.selectedMaskId)
   // Only show the mask while the tool is open: a tint that stays on after you
@@ -497,6 +511,8 @@ export function Viewport({ photo }: Props) {
     outputSpace,
     clipShadow,
     clipHighlight,
+    clipShadowAt,
+    clipHighlightAt,
     hdrHeadroom: 1,
   })
   scene.current = {
@@ -509,6 +525,8 @@ export function Viewport({ photo }: Props) {
     outputSpace,
     clipShadow,
     clipHighlight,
+    clipShadowAt,
+    clipHighlightAt,
     hdrHeadroom: hdr ? headroomFromStops(hdrHeadroom) : 1,
   }
 
@@ -532,6 +550,8 @@ export function Viewport({ photo }: Props) {
       outputSpace: s.outputSpace,
       showShadowClip: s.clipShadow,
       showHighlightClip: s.clipHighlight,
+      clipShadow: s.clipShadowAt,
+      clipHighlight: s.clipHighlightAt,
       maskOverlay: j.overlay,
       hdrHeadroom: s.hdrHeadroom,
     }
@@ -634,6 +654,7 @@ export function Viewport({ photo }: Props) {
   useEffect(rebuild, [
     rebuild,
     revision,
+    detectRevision,
     edits,
     previewEdits,
     beforeAfter,
@@ -745,7 +766,7 @@ export function Viewport({ photo }: Props) {
       )}
 
       {error && (
-        <div className="absolute inset-0 grid place-items-center px-8 text-center text-ui text-label-tertiary">
+        <div className="pointer-events-none absolute inset-0 grid place-items-center px-8 text-center text-ui text-label-tertiary">
           {error}
         </div>
       )}
@@ -761,6 +782,7 @@ export function Viewport({ photo }: Props) {
           }
         />
       )}
+      {dropping && <WbDropperOverlay frame={photoBox} />}
       {cropping && <CropOverlay frame={photoBox} />}
       {masking && <MaskOverlay frame={photoBox} />}
       {retouching && <RetouchOverlay frame={photoBox} />}

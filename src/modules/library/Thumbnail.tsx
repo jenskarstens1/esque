@@ -87,7 +87,7 @@ export const Thumbnail = memo(function Thumbnail({
           'bg-gradient-to-t from-black/85 via-black/40 to-transparent',
           'transition-opacity duration-[--duration-fast] ease-[--ease-out]',
           dense ? 'gap-0 px-1 pb-1' : 'gap-px px-2 pb-1.5',
-          showExtras ? 'opacity-100' : 'opacity-0 group-hover/th:opacity-100',
+          showExtras ? 'opacity-100' : 'esq-reveal opacity-0 group-hover/th:opacity-100',
         )}
       >
         {caption && (
@@ -105,9 +105,9 @@ export const Thumbnail = memo(function Thumbnail({
               setFlag(photo.id, photo.flag === 'pick' ? 'unflagged' : 'pick')
             }}
             className={cn(
-              'shrink-0 transition-[opacity,color] duration-[--duration-fast]',
+              'esq-tap shrink-0 transition-[opacity,color] duration-[--duration-fast]',
               photo.flag === 'unflagged'
-                ? 'text-white/45 opacity-0 group-hover/th:opacity-100 hover:text-white'
+                ? 'esq-reveal text-white/45 opacity-0 group-hover/th:opacity-100 hover:text-white'
                 : 'text-white opacity-100',
             )}
           >
@@ -203,10 +203,10 @@ function Stars({ photoId, rating, size }: { photoId: string; rating: number; siz
             setRating(photoId, rating === n ? 0 : n)
           }}
           className={cn(
-            'transition-[opacity,color] duration-[--duration-fast]',
+            'esq-tap transition-[opacity,color] duration-[--duration-fast]',
             n <= rating
               ? 'text-white opacity-100'
-              : 'text-white/45 opacity-0 group-hover/th:opacity-100 hover:text-white',
+              : 'esq-reveal text-white/45 opacity-0 group-hover/th:opacity-100 hover:text-white',
           )}
         >
           <StarIcon size={size} filled={n <= rating} />

@@ -1,7 +1,7 @@
-import type { ReactNode } from 'react'
 import { PanelSection, MiniAction } from '../../../design/Panel'
 import { panelMenuItems } from '../../../shell/appMenus'
-import { Checkbox, SegmentedControl, Select } from '../../../design/Controls'
+import { Checkbox, IconButton, SegmentedControl, Select } from '../../../design/Controls'
+import { DropperIcon } from '../../../design/icons'
 import { EditSlider } from '../EditSlider'
 import { isSectionModified } from '../../../develop/modified'
 import { useDevelop } from '../../../develop/session'
@@ -9,7 +9,7 @@ import { autoDevelopCurrent } from '../../../develop/autoApply'
 import { CAMERA_PROFILES } from '../../../core/profiles'
 import { WB_PRESETS } from '../../../core/wb'
 import type { BasicEdits, Edits, Treatment, WhiteBalanceMode } from '../../../core/types'
-import { cn } from '../../../lib/cn'
+import { useUI } from '../../../state/ui'
 
 const WB_OPTIONS: Array<{ value: WhiteBalanceMode; label: string }> = [
   { value: 'asShot', label: 'As Shot' },
@@ -43,6 +43,8 @@ export function BasicPanel() {
   )
   const isRaw = useDevelop((s) => s.kind === 'raw')
   const wbMode = useDevelop((s) => s.edits.basic.wbMode)
+  const picking = useUI((s) => s.wbPicking)
+  const togglePicker = useUI((s) => s.toggleWbPicking)
   const update = useDevelop((s) => s.update)
   const reset = useDevelop((s) => s.resetSection)
   const original = useDevelop((s) => s.original)
@@ -116,6 +118,9 @@ export function BasicPanel() {
       modified={modified}
       actions={
         <>
+          <MiniAction title="Set tone from the photo" onClick={() => void runAutoTone()}>
+            Auto Tone
+          </MiniAction>
           <MiniAction
             title="Set white balance, tone and vibrance from the photo"
             onClick={() => void autoDevelopCurrent('all')}
@@ -156,6 +161,16 @@ export function BasicPanel() {
             onChange={(m) => void setMode(m)}
             className="min-w-0 flex-1"
           />
+          {/* Beside the dropdown rather than in the toolbar: the dropper is one
+              more way of answering the question the dropdown asks. */}
+          <IconButton
+            size="sm"
+            label="Pick a neutral colour in the photo"
+            active={picking}
+            onClick={togglePicker}
+          >
+            <DropperIcon size={13} />
+          </IconButton>
         </div>
         <EditSlider
           path="basic.temp"
@@ -180,70 +195,37 @@ export function BasicPanel() {
         />
       </div>
 
-      <Group
-        label="Tone"
-        action={<MiniAction onClick={() => void runAutoTone()}>Auto</MiniAction>}
-      >
-        <EditSlider
-          path="basic.exposure"
-          label="Exposure"
-          min={-5}
-          max={5}
-          step={0.01}
-          precision={2}
+      <EditSlider
+        path="basic.exposure"
+        label="Exposure"
+        min={-5}
+        max={5}
+        step={0.01}
+        precision={2}
+      />
+      <EditSlider path="basic.contrast" label="Contrast" min={-100} max={100} />
+      <EditSlider path="basic.highlights" label="Highlights" min={-100} max={100} />
+      <EditSlider path="basic.shadows" label="Shadows" min={-100} max={100} />
+      <EditSlider path="basic.whites" label="Whites" min={-100} max={100} />
+      <EditSlider path="basic.blacks" label="Blacks" min={-100} max={100} />
+
+      <EditSlider path="basic.texture" label="Texture" min={-100} max={100} />
+      <EditSlider path="basic.clarity" label="Clarity" min={-100} max={100} />
+      <EditSlider path="basic.dehaze" label="Dehaze" min={-100} max={100} />
+      <EditSlider path="basic.vibrance" label="Vibrance" min={-100} max={100} />
+      <EditSlider path="basic.saturation" label="Saturation" min={-100} max={100} />
+      <div className="mt-1.5 flex flex-col gap-1">
+        <Checkbox
+          checked={protectSkin}
+          onChange={(v) => setFlag('protectSkin', 'Protect Skin Tones', v)}
+          label={<span className="text-mini">Protect skin tones</span>}
         />
-        <EditSlider path="basic.contrast" label="Contrast" min={-100} max={100} />
-        <EditSlider path="basic.highlights" label="Highlights" min={-100} max={100} />
-        <EditSlider path="basic.shadows" label="Shadows" min={-100} max={100} />
-        <EditSlider path="basic.whites" label="Whites" min={-100} max={100} />
-        <EditSlider path="basic.blacks" label="Blacks" min={-100} max={100} />
-      </Group>
-
-      <Group label="Presence">
-        <EditSlider path="basic.texture" label="Texture" min={-100} max={100} />
-        <EditSlider path="basic.clarity" label="Clarity" min={-100} max={100} />
-        <EditSlider path="basic.dehaze" label="Dehaze" min={-100} max={100} />
-        <EditSlider path="basic.vibrance" label="Vibrance" min={-100} max={100} />
-        <EditSlider path="basic.saturation" label="Saturation" min={-100} max={100} />
-        <div className="mt-1.5 flex flex-col gap-1">
-          <Checkbox
-            checked={protectSkin}
-            onChange={(v) => setFlag('protectSkin', 'Protect Skin Tones', v)}
-            label={<span className="text-mini">Protect skin tones</span>}
-          />
-          <Checkbox
-            checked={avoidColorShift}
-            onChange={(v) => setFlag('avoidColorShift', 'Avoid Color Shift', v)}
-            label={<span className="text-mini">Avoid color shift</span>}
-          />
-        </div>
-      </Group>
+        <Checkbox
+          checked={avoidColorShift}
+          onChange={(v) => setFlag('avoidColorShift', 'Avoid Color Shift', v)}
+          label={<span className="text-mini">Avoid color shift</span>}
+        />
+      </div>
     </PanelSection>
-  )
-}
-
-export function Group({
-  label,
-  children,
-  className,
-  action,
-}: {
-  label?: string
-  children: ReactNode
-  className?: string
-  action?: ReactNode
-}) {
-  return (
-    <div className={cn('mt-2.5 first:mt-0', className)}>
-      {label && (
-        <div className="mb-0.5 flex h-[13px] items-center justify-between">
-          <span className="text-micro tracking-[0.06em] text-label-quaternary uppercase">
-            {label}
-          </span>
-          {action}
-        </div>
-      )}
-      {children}
-    </div>
   )
 }

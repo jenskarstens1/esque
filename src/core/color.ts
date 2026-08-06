@@ -401,6 +401,50 @@ export function whiteBalanceGain(
   return [gain[0] / norm, 1, gain[2] / norm]
 }
 
+/**
+ * The white point that would make the renderer apply a given red/blue gain.
+ *
+ * This is `whiteBalanceGain` run backwards, and it is what both Auto WB and the
+ * dropper need: each measures how far the image still is from neutral, which is
+ * a gain, and has to hand the UI a Kelvin and a tint.
+ *
+ * Kelvin and tint are a two-parameter fit to a three-channel gain, and the
+ * Robertson interpolation that maps between them is itself approximate — so the
+ * answer is checked against the gain the renderer will actually derive from it
+ * and corrected until the two agree. Without this an estimate can be
+ * arithmetically perfect and still leave a visible cast on screen.
+ */
+export function whitePointForGain(
+  asShot: WhitePoint,
+  gainR: number,
+  gainB: number,
+): WhitePoint | null {
+  const src = whitePointRgb(asShot.temp, asShot.tint)
+  let wantR = gainR
+  let wantB = gainB
+  let result: WhitePoint | null = null
+
+  for (let i = 0; i < 3; i++) {
+    const dst: [number, number, number] = [src[0] / wantR, src[1], src[2] / wantB]
+    const xyz = apply3(PROPHOTO_TO_XYZ_D50, dst)
+    const sum = xyz[0] + xyz[1] + xyz[2]
+    if (!(sum > 0)) return result
+    const fit = xyToTempTint(xyz[0] / sum, xyz[1] / sum)
+    result = {
+      temp: Math.round(clamp(fit.temp, TEMP_MIN, TEMP_MAX)),
+      tint: Math.round(clamp(fit.tint, TINT_MIN, TINT_MAX)),
+    }
+
+    const actual = whiteBalanceGain(asShot, result)
+    const errR = gainR / actual[0]
+    const errB = gainB / actual[2]
+    if (Math.abs(Math.log(errR)) < 2e-3 && Math.abs(Math.log(errB)) < 2e-3) break
+    wantR *= errR
+    wantB *= errB
+  }
+  return result
+}
+
 
 // ---------------------------------------------------------------------------
 // Camera calibration

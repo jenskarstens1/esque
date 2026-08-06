@@ -41,7 +41,35 @@ npm run dev
   mixing and grading, detail, effects, lens, transform and crop, plus masking
   and retouching. Edits are non-destructive data, with history and presets, and
   they round-trip through Lightroom's XMP `crs:` namespace.
+- **Detected masks.** Subject, background and people masks run a segmentation
+  network in the browser, on WebGPU where it is available. Nothing is uploaded:
+  the weights are fetched once, cached in OPFS, and everything after that works
+  offline. What a mask produces is a coverage map feeding the ordinary mask
+  stack, so it stays as editable as one you drew by hand.
 - **Export.** JPEG, PNG, WebP, TIFF and DNG, with ICC profiles and metadata.
+
+## Detected masks
+
+The first detection downloads an ONNX Runtime WebAssembly build (5.7 MB
+compressed) and the weights for the tier you picked. Both are cached — the
+runtime by the browser, the weights in OPFS — so it is a one-time cost, and the
+panel says what it will be before you commit to it. WebGPU is required; without
+it the detected mask kinds are disabled and say why.
+
+| Tier | Size | Licence | Notes |
+| --- | --- | --- | --- |
+| U²-Netp | 4.4 MB | Apache-2.0 | The default. 320px, well under a second on a GPU. |
+| U²-Net human | 168 MB | Apache-2.0 | Used for People masks. |
+| BiRefNet-lite | 109 MB | MIT | 1024px. Resolves hair and foliage; noticeably slower. |
+
+Weights are fetched from GitHub and Hugging Face on demand and are not part of
+the repository. To self-host them — for an air-gapped deployment, or to avoid
+depending on someone else's uptime — run [`tools/fetch-models.sh`](tools/fetch-models.sh),
+which downloads them into `public/models/`, where the app looks first.
+
+RMBG-1.4 is a conspicuous omission. It is the best quality per byte in this
+class, and its licence forbids commercial use, which is not a restriction esque
+can pass on to people who receive it under the AGPL.
 
 ## Repository layout
 
@@ -50,11 +78,12 @@ src/catalog   photo database, import, previews
 src/core      the edit model and colour maths
 src/raw       RAW decoding workers
 src/gpu       WebGPU renderer and WGSL shaders
+src/ai        segmentation models, inference worker, coverage cache
 src/develop   edit state, presets, XMP
 src/export    encoders and the export pipeline
 src/modules   the Library, Develop and Export UI
 checks/       in-browser test harnesses
-tools/        the LibRaw build script and headless drivers
+tools/        the LibRaw build script, model fetcher and headless drivers
 ```
 
 ## License
@@ -66,8 +95,9 @@ version's source has to be offered to its users.
 Third-party components keep their own terms: LibRaw
 ([`vendor/libraw-wasm`](vendor/libraw-wasm), built by
 [`tools/build-libraw.sh`](tools/build-libraw.sh)) is used under LGPL 2.1,
-Little CMS under MIT, and the bundled Inter and JetBrains Mono fonts under
-the SIL Open Font License 1.1.
+Little CMS under MIT, ONNX Runtime under MIT, the U-2-Net weights under
+Apache-2.0, the BiRefNet weights under MIT, and the bundled Inter and
+JetBrains Mono fonts under the SIL Open Font License 1.1.
 
 Lightroom is a trademark of Adobe. esque is an independent project, neither
 affiliated with nor endorsed by Adobe; the name appears here only to describe

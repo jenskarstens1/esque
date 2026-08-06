@@ -18,8 +18,16 @@ const QUALITY_CODE = {
   full: 2,
 } as const
 
-function keyFor(photo: Photo) {
-  return proxyKey(photo.masterId ?? photo.id, photo.modifiedAt, photo.fileSize)
+/**
+ * The cached proxy's key.
+ *
+ * The tier's long edge is part of it. Without it, dropping the Display pane's
+ * preview quality would go on being served the larger proxy already on disk —
+ * the setting would look broken until something evicted the entry — and raising
+ * it would silently overwrite the smaller one under the same name.
+ */
+function keyFor(photo: Photo, edge: number) {
+  return proxyKey(photo.masterId ?? photo.id, photo.modifiedAt, photo.fileSize, edge)
 }
 
 async function clearStaleKey(photo: Photo, expected: string) {
@@ -36,10 +44,11 @@ async function clearStaleKey(photo: Photo, expected: string) {
  */
 export async function readProxyCache(
   photo: Photo,
+  edge: number,
   signal?: AbortSignal,
 ): Promise<Proxy | null> {
   if (!photo.isRaw) return null
-  const key = keyFor(photo)
+  const key = keyFor(photo, edge)
   await clearStaleKey(photo, key)
   signal?.throwIfAborted()
 
@@ -113,9 +122,13 @@ export async function readProxyCache(
 }
 
 /** Persists only the bounded standard tier; native-detail proxies stay in RAM. */
-export async function writeProxyCache(photo: Photo, proxy: Proxy): Promise<void> {
+export async function writeProxyCache(
+  photo: Photo,
+  proxy: Proxy,
+  edge: number,
+): Promise<void> {
   if (!photo.isRaw || proxy.preview || proxy.quality === 'preview') return
-  const key = keyFor(photo)
+  const key = keyFor(photo, edge)
   const header = new ArrayBuffer(HEADER_BYTES)
   const view = new DataView(header)
   view.setUint32(0, MAGIC, true)

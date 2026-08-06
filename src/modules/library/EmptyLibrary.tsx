@@ -5,7 +5,6 @@ import { Button } from "../../design/Controls";
 import { useImporter } from "../../state/importer";
 import { filtersActive, useCatalog } from "../../state/catalog";
 import { useFolders } from "../../catalog/hooks";
-import { fsSupported } from "../../catalog/fs";
 
 export function EmptyLibrary() {
   const folders = useFolders();
@@ -62,7 +61,6 @@ function FirstRun() {
   const runFiles = useImporter((s) => s.runFiles);
   const active = useImporter((s) => s.active);
   const [over, setOver] = useState(false);
-  const supported = fsSupported();
 
   async function onDrop(e: React.DragEvent) {
     e.preventDefault();
@@ -120,22 +118,19 @@ function FirstRun() {
               {over ? "Drop to import" : "No photos yet"}
             </h1>
             <p className="text-ui text-balance text-label-secondary">
-              {supported
-                ? "Import a folder or a single file, or drop one anywhere here. Your files stay where they are."
-                : "Importing needs Chrome, Edge, or another Chromium browser."}
+              Import a folder or a single file, or drop one anywhere here. Your
+              files stay where they are.
             </p>
           </div>
 
-          {supported && (
-            <div className="mt-0.5 flex items-center gap-2">
-              <Button variant="primary" disabled={active} onClick={() => run()}>
-                {active ? "Importing…" : "Import folder…"}
-              </Button>
-              <Button disabled={active} onClick={() => runFiles()}>
-                Import file…
-              </Button>
-            </div>
-          )}
+          <div className="mt-0.5 flex items-center gap-2">
+            <Button variant="primary" disabled={active} onClick={() => run()}>
+              {active ? "Importing…" : "Import folder…"}
+            </Button>
+            <Button disabled={active} onClick={() => runFiles()}>
+              Import file…
+            </Button>
+          </div>
         </div>
       </Centered>
     </div>

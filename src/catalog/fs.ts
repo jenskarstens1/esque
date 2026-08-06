@@ -96,6 +96,22 @@ export interface ScannedFile {
   name: string
   size: number
   modifiedAt: number
+  /**
+   * Handle for the photo's XMP sidecar, when one sits beside it.
+   *
+   * Paired here rather than looked up later because the scan is already reading
+   * the directory listing: asking for `IMG_0001.xmp` per photo afterwards would
+   * be one more round trip each, almost all of them misses, on exactly the
+   * folders that are slowest to walk.
+   */
+  sidecar?: FileSystemFileHandle
+}
+
+/** The sidecar spellings in the wild: Adobe replaces the extension, others append. */
+const sidecarKeys = (name: string) => {
+  const dot = name.lastIndexOf('.')
+  const base = dot > 0 ? name.slice(0, dot) : name
+  return [`${base}.xmp`, `${name}.xmp`]
 }
 
 /** Depth-first scan for supported images, skipping hidden and sidecar dirs. */
@@ -112,7 +128,24 @@ export async function scanFolder(
 
   const visit = async (d: FileSystemDirectoryHandle, prefix: string) => {
     if (signal?.aborted) return
-    for await (const [name, handle] of d.entries()) {
+
+    // The listing is taken in one pass so photos and their sidecars can be
+    // paired, which means holding one directory's entries at a time — the same
+    // order of memory the recursion already costs.
+    const entries: [string, FileSystemHandle][] = []
+    for await (const entry of d.entries()) {
+      if (signal?.aborted) return
+      entries.push(entry)
+    }
+
+    const sidecars = new Map<string, FileSystemFileHandle>()
+    for (const [name, handle] of entries) {
+      if (handle.kind === 'file' && name.toLowerCase().endsWith('.xmp')) {
+        sidecars.set(name.toLowerCase(), handle as FileSystemFileHandle)
+      }
+    }
+
+    for (const [name, handle] of entries) {
       if (signal?.aborted) return
       if (name.startsWith('.')) continue
       const rel = prefix ? `${prefix}/${name}` : name
@@ -129,6 +162,9 @@ export async function scanFolder(
           name,
           size: file.size,
           modifiedAt: file.lastModified,
+          sidecar: sidecarKeys(name)
+            .map((k) => sidecars.get(k.toLowerCase()))
+            .find(Boolean),
         })
         if (out.length % 25 === 0) onProgress?.(out.length, rel)
       }

@@ -7,6 +7,7 @@
  * frames remain memory-only; persisting only the standard tier keeps reopening
  * an edited RAW instant without letting 40 MP buffers consume the whole origin.
  */
+import { useUI } from '../state/ui'
 
 let rootPromise: Promise<FileSystemDirectoryHandle> | null = null
 
@@ -113,15 +114,56 @@ export async function cacheStats(): Promise<CacheStats> {
   }
 }
 
-/** Evicts least-recently-modified entries until the cache fits `maxBytes`. */
-export async function cacheEvict(maxBytes: number): Promise<number> {
-  const entries: Array<{ key: string; size: number; mtime: number }> = []
-  await walk(await root(), '', entries)
-  let total = entries.reduce((n, e) => n + e.size, 0)
-  if (total <= maxBytes) return 0
+/**
+ * Entries the evictor must not touch.
+ *
+ * Everything else under the cache is derived: a thumbnail, a preview or a proxy
+ * can be thrown away because the original file can regenerate it. Model weights
+ * cannot. They are a download the user explicitly agreed to — up to a hundred
+ * megabytes of it — and reclaiming space by silently deleting one only means
+ * fetching it again the next time they reach for a subject mask.
+ */
+const PINNED = ['models/']
+
+const pinned = (key: string) => PINNED.some((p) => key.startsWith(p))
+
+/**
+ * Trims the cache, oldest first, to fit a byte budget and an age limit.
+ *
+ * Age is checked before size because they answer different questions. A budget
+ * asks "is there room"; an age limit asks "is this still worth keeping" — and a
+ * six-month-old proxy for a shoot that was delivered and archived is dead
+ * weight even on a machine with a terabyte spare. Purging by age first also
+ * means the size pass usually has nothing left to do, so the files that survive
+ * are the ones actually being worked on rather than whatever happened to be
+ * written most recently.
+ */
+export async function cacheEvict(maxBytes: number, maxAgeMs = 0): Promise<number> {
+  const all: Array<{ key: string; size: number; mtime: number }> = []
+  await walk(await root(), '', all)
+  // Pinned files still count against the budget — they are really on the disk —
+  // but they are never candidates, so the budget is met from the rest.
+  const entries = all.filter((e) => !pinned(e.key))
+  let total = all.reduce((n, e) => n + e.size, 0)
+  let freed = 0
+
+  if (maxAgeMs > 0) {
+    const cutoff = Date.now() - maxAgeMs
+    const stale = entries.filter((e) => e.mtime < cutoff)
+    for (const e of stale) {
+      await cacheDelete(e.key)
+      total -= e.size
+      freed += e.size
+    }
+    if (stale.length) {
+      const gone = new Set(stale.map((e) => e.key))
+      for (let i = entries.length - 1; i >= 0; i--) if (gone.has(entries[i].key)) entries.splice(i, 1)
+    }
+  }
+
+  if (total <= maxBytes) return freed
 
   entries.sort((a, b) => a.mtime - b.mtime)
-  let freed = 0
   for (const e of entries) {
     if (total <= maxBytes) break
     await cacheDelete(e.key)
@@ -140,11 +182,13 @@ export async function cacheClear() {
 
 export const thumbKey = (photoId: string) => `thumb/${photoId}.jpg`
 export const previewKey = (photoId: string) => `preview/v3/${photoId}.jpg`
+export const modelKey = (id: string) => `models/${id}.onnx`
 export const proxyKey = (
   sourceId: string,
   modifiedAt: number,
   fileSize: number,
-) => `proxy/v1/${sourceId}-${modifiedAt}-${fileSize}.rgba16f`
+  edge: number,
+) => `proxy/v2/${sourceId}-${modifiedAt}-${fileSize}-${edge}.rgba16f`
 
 /**
  * Trims the cache to a fraction of the origin's storage quota.
@@ -159,6 +203,24 @@ const CACHE_CEILING = 3 * 1024 * 1024 * 1024
 let lastEvict = 0
 let evicting = false
 
+/**
+ * The byte budget for the cache: whatever the user asked for, or the automatic
+ * figure when they haven't said.
+ *
+ * A chosen limit is still capped by the quota share, because a limit larger
+ * than the browser will actually grant isn't a limit, it's a promise the
+ * platform breaks — the eviction pass would never fire and writes would start
+ * failing instead.
+ */
+export async function cacheBudget(): Promise<number> {
+  const est = await navigator.storage.estimate()
+  const auto = Math.min(CACHE_CEILING, Math.floor((est.quota ?? 0) * QUOTA_SHARE))
+  const chosen = useUI.getState().cacheLimit
+  if (chosen <= 0) return auto
+  const ceiling = Math.floor((est.quota ?? 0) * 0.8)
+  return ceiling > 0 ? Math.min(chosen, ceiling) : chosen
+}
+
 export function scheduleEvict(force = false) {
   const now = Date.now()
   if (evicting || (!force && now - lastEvict < EVICT_INTERVAL)) return
@@ -167,9 +229,9 @@ export function scheduleEvict(force = false) {
 
   const run = async () => {
     try {
-      const est = await navigator.storage.estimate()
-      const budget = Math.min(CACHE_CEILING, Math.floor((est.quota ?? 0) * QUOTA_SHARE))
-      if (budget > 0) await cacheEvict(budget)
+      const budget = await cacheBudget()
+      const days = useUI.getState().cacheMaxAgeDays
+      if (budget > 0) await cacheEvict(budget, days > 0 ? days * 86_400_000 : 0)
     } catch {
       /* eviction is best-effort */
     } finally {

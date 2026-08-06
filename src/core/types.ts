@@ -365,6 +365,16 @@ export interface LuminanceRangeGeometry {
 export interface AiGeometry {
   /** OPFS key for the cached model output. */
   cacheKey: string | null
+  /**
+   * Which tier produced `cacheKey` — see `ai/models`.
+   *
+   * Kept alongside the key rather than parsed back out of it, because the two
+   * answer different questions: the key says where the coverage is, this says
+   * what the user asked for. Re-detecting after a crop, or on a photo whose
+   * cache was evicted, has to reach for the same model they chose the first
+   * time and not silently drop to the default.
+   */
+  model?: string
   /** For aiObjects: the user's box/brush hint. */
   hint?: { x: number; y: number; w: number; h: number }
   /** Guided-filter edge refinement radius. */
@@ -378,6 +388,21 @@ export type MaskGeometry =
   | ({ kind: 'colorRange' } & ColorRangeGeometry)
   | ({ kind: 'luminanceRange' } & LuminanceRangeGeometry)
   | ({ kind: 'aiSubject' | 'aiSky' | 'aiBackground' | 'aiPerson' | 'aiObjects' } & AiGeometry)
+
+/** The kinds whose coverage comes from a model rather than from a shape. */
+export const AI_MASK_KINDS = [
+  'aiSubject',
+  'aiSky',
+  'aiBackground',
+  'aiPerson',
+  'aiObjects',
+] as const
+
+export type AiMaskGeometry = Extract<MaskGeometry, { kind: (typeof AI_MASK_KINDS)[number] }>
+
+export function isAiGeometry(g: MaskGeometry): g is AiMaskGeometry {
+  return (AI_MASK_KINDS as readonly string[]).includes(g.kind)
+}
 
 export interface MaskComponent {
   id: string

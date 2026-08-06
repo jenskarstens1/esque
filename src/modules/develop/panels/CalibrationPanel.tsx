@@ -2,7 +2,6 @@ import { PanelSection, MiniAction } from '../../../design/Panel'
 import { panelMenuItems } from '../../../shell/appMenus'
 import { EditSlider } from '../EditSlider'
 import { isSectionModified } from '../../../develop/modified'
-import { Group } from './BasicPanel'
 import { useDevelop } from '../../../develop/session'
 
 const HUE_RAMP = (a: string, b: string) => `linear-gradient(90deg,${a},#b9b9bd,${b})`
@@ -19,48 +18,55 @@ export function CalibrationPanel() {
       modified={modified}
       actions={<MiniAction onClick={() => reset('calibration')}>Reset</MiniAction>}
     >
-      <Group label="Shadows">
-        <EditSlider
-          path="calibration.shadowTint"
-          label="Tint"
-          min={-100}
-          max={100}
-          gradient={HUE_RAMP('#3ad16b', '#e055c8')}
-        />
-      </Group>
+      <EditSlider
+        path="calibration.shadowTint"
+        label="Shadow Tint"
+        min={-100}
+        max={100}
+        gradient={HUE_RAMP('#3ad16b', '#e055c8')}
+      />
 
-      <Group label="Red Primary">
-        <EditSlider
-          path="calibration.redHue"
-          label="Hue"
-          min={-100}
-          max={100}
-          gradient={HUE_RAMP('#ff34d2', '#ffb02e')}
-        />
-        <EditSlider path="calibration.redSaturation" label="Saturation" min={-100} max={100} />
-      </Group>
+      <EditSlider
+        path="calibration.redHue"
+        label="Red Hue"
+        min={-100}
+        max={100}
+        gradient={HUE_RAMP('#ff34d2', '#ffb02e')}
+      />
+      <EditSlider
+        path="calibration.redSaturation"
+        label="Red Saturation"
+        min={-100}
+        max={100}
+      />
 
-      <Group label="Green Primary">
-        <EditSlider
-          path="calibration.greenHue"
-          label="Hue"
-          min={-100}
-          max={100}
-          gradient={HUE_RAMP('#ffe92e', '#2effe0')}
-        />
-        <EditSlider path="calibration.greenSaturation" label="Saturation" min={-100} max={100} />
-      </Group>
+      <EditSlider
+        path="calibration.greenHue"
+        label="Green Hue"
+        min={-100}
+        max={100}
+        gradient={HUE_RAMP('#ffe92e', '#2effe0')}
+      />
+      <EditSlider
+        path="calibration.greenSaturation"
+        label="Green Saturation"
+        min={-100}
+        max={100}
+      />
 
-      <Group label="Blue Primary">
-        <EditSlider
-          path="calibration.blueHue"
-          label="Hue"
-          min={-100}
-          max={100}
-          gradient={HUE_RAMP('#2effe0', '#6b3cff')}
-        />
-        <EditSlider path="calibration.blueSaturation" label="Saturation" min={-100} max={100} />
-      </Group>
+      <EditSlider
+        path="calibration.blueHue"
+        label="Blue Hue"
+        min={-100}
+        max={100}
+        gradient={HUE_RAMP('#2effe0', '#6b3cff')}
+      />
+      <EditSlider
+        path="calibration.blueSaturation"
+        label="Blue Saturation"
+        min={-100}
+        max={100}
+      />
     </PanelSection>
   )
 }

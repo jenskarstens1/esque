@@ -1,10 +1,15 @@
 import { PanelSection, MiniAction } from '../../../design/Panel'
 import { Button, Checkbox, Select } from '../../../design/Controls'
+import {
+  FlipHorizontalIcon,
+  FlipVerticalIcon,
+  RotateLeftIcon,
+  RotateRightIcon,
+} from '../../../design/icons'
 import { cropMenuItems, panelMenuItems } from '../../../shell/appMenus'
 import { useUI } from '../../../state/ui'
 import { EditSlider } from '../EditSlider'
 import { isSectionModified } from '../../../develop/modified'
-import { Group } from './BasicPanel'
 import { useDevelop } from '../../../develop/session'
 import { ASPECT_LABELS, fitCropToAspect, frameAspect } from '../../../gpu/geometry'
 import type { CropAspect } from '../../../core/types'
@@ -102,34 +107,50 @@ export function CropPanel() {
       <EditSlider path="crop.angle" label="Straighten" min={-45} max={45} step={0.1} />
 
       <div className="mt-2 grid grid-cols-4 gap-1">
-        <Button variant="secondary" onClick={() => turn(-1)} title="Rotate left 90°">
-          ⟲
+        <Button
+          variant="secondary"
+          onClick={() => turn(-1)}
+          title="Rotate left 90°"
+          aria-label="Rotate left 90°"
+          className="px-0"
+        >
+          <RotateLeftIcon size={14} />
         </Button>
-        <Button variant="secondary" onClick={() => turn(1)} title="Rotate right 90°">
-          ⟳
+        <Button
+          variant="secondary"
+          onClick={() => turn(1)}
+          title="Rotate right 90°"
+          aria-label="Rotate right 90°"
+          className="px-0"
+        >
+          <RotateRightIcon size={14} />
         </Button>
         <Button
           variant={crop.flipH ? 'primary' : 'secondary'}
           onClick={() => flip('flipH')}
           title="Flip horizontal"
+          aria-label="Flip horizontal"
+          aria-pressed={crop.flipH}
+          className="px-0"
         >
-          ⇄
+          <FlipHorizontalIcon size={14} />
         </Button>
         <Button
           variant={crop.flipV ? 'primary' : 'secondary'}
           onClick={() => flip('flipV')}
           title="Flip vertical"
+          aria-label="Flip vertical"
+          aria-pressed={crop.flipV}
+          className="px-0"
         >
-          ⇅
+          <FlipVerticalIcon size={14} />
         </Button>
       </div>
 
-      <Group label="Edges">
-        <EditSlider path="crop.left" label="Left" min={0} max={1} step={0.001} origin={0} />
-        <EditSlider path="crop.top" label="Top" min={0} max={1} step={0.001} origin={0} />
-        <EditSlider path="crop.right" label="Right" min={0} max={1} step={0.001} origin={1} />
-        <EditSlider path="crop.bottom" label="Bottom" min={0} max={1} step={0.001} origin={1} />
-      </Group>
+      <EditSlider path="crop.left" label="Crop Left" min={0} max={1} step={0.001} origin={0} />
+      <EditSlider path="crop.top" label="Crop Top" min={0} max={1} step={0.001} origin={0} />
+      <EditSlider path="crop.right" label="Crop Right" min={0} max={1} step={0.001} origin={1} />
+      <EditSlider path="crop.bottom" label="Crop Bottom" min={0} max={1} step={0.001} origin={1} />
     </PanelSection>
   )
 }

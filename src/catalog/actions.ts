@@ -1,25 +1,33 @@
 import { db } from './db'
 import { cacheDelete, previewKey, thumbKey } from './opfs'
+import { queueSidecarWrite } from './autoSidecar'
 import { nextId } from '../lib/math'
 import { cloneEdits, defaultEdits, editsKind } from '../core/defaults'
-import type { ColorLabel, Edits, PickFlag, Photo } from '../core/types'
+import type { Collection, ColorLabel, Edits, PickFlag, Photo, SmartRule } from '../core/types'
 
 const ids = (target: string | string[]) => (Array.isArray(target) ? target : [target])
 
 export async function setRating(target: string | string[], rating: number) {
   await db.photos.bulkUpdate(ids(target).map((key) => ({ key, changes: { rating } })))
+  queueSidecarWrite(target)
 }
 
 export async function setFlag(target: string | string[], flag: PickFlag) {
   await db.photos.bulkUpdate(ids(target).map((key) => ({ key, changes: { flag } })))
+  // The pick flag is esque's own; XMP has no field for it. Queued anyway
+  // because the sidecar is written whole, and the rating beside it may have
+  // changed in the same breath.
+  queueSidecarWrite(target)
 }
 
 export async function setLabel(target: string | string[], label: ColorLabel) {
   await db.photos.bulkUpdate(ids(target).map((key) => ({ key, changes: { label } })))
+  queueSidecarWrite(target)
 }
 
 export async function setPhotoFields(id: string, changes: Partial<Photo>) {
   await db.photos.update(id, changes)
+  queueSidecarWrite(id)
 }
 
 export async function addKeywords(target: string | string[], keywords: string[]) {
@@ -31,6 +39,7 @@ export async function addKeywords(target: string | string[], keywords: string[])
       changes: { keywords: [...new Set([...p.keywords, ...keywords])].sort() },
     })),
   )
+  queueSidecarWrite(list)
 }
 
 export async function removeKeyword(target: string | string[], keyword: string) {
@@ -38,10 +47,12 @@ export async function removeKeyword(target: string | string[], keyword: string) 
   await db.photos.bulkUpdate(
     photos.map((p) => ({ key: p.id, changes: { keywords: p.keywords.filter((k) => k !== keyword) } })),
   )
+  queueSidecarWrite(target)
 }
 
 export async function saveEdits(id: string, edits: Edits) {
   await db.photos.update(id, { edits })
+  queueSidecarWrite(id)
   // The cached preview no longer reflects the photo, so drop it and let the
   // render pipeline regenerate on next view.
   await cacheDelete(previewKey(id))
@@ -56,6 +67,7 @@ export async function resetEdits(target: string | string[]) {
   await Promise.all(ids(target).map((id) => cacheDelete(previewKey(id))))
   const { resetThumb } = await import('../develop/thumbs')
   await Promise.all(ids(target).map((id) => resetThumb(id)))
+  queueSidecarWrite(target)
 }
 
 /** Applies one photo's develop settings to others — Lightroom's Paste/Sync. */
@@ -94,6 +106,7 @@ export async function copyEditsTo(sourceId: string, targets: string[], sections?
   const { refreshThumb } = await import('../develop/thumbs')
   const updated = (await db.photos.bulkGet(rows.map((p) => p.id))).filter(Boolean) as Photo[]
   for (const p of updated) if (p.edits) refreshThumb(p.id, p.edits)
+  queueSidecarWrite(rows.map((p) => p.id))
 }
 
 export async function createVirtualCopy(sourceId: string): Promise<string | null> {
@@ -141,19 +154,29 @@ export async function removeFolder(folderId: string) {
 // Collections
 // ---------------------------------------------------------------------------
 
-export async function createCollection(name: string, photoIds: string[] = []) {
+export async function createCollection(
+  name: string,
+  photoIds: string[] = [],
+  smart?: { rules: SmartRule[]; match: 'all' | 'any' },
+) {
   const id = nextId()
   await db.collections.add({
     id,
     name,
-    smart: false,
-    rules: [],
-    match: 'all',
-    photoIds,
+    smart: !!smart,
+    rules: smart?.rules ?? [],
+    match: smart?.match ?? 'all',
+    // A smart collection computes its membership, so storing ids on one would
+    // leave a second, stale answer to the same question.
+    photoIds: smart ? [] : photoIds,
     createdAt: Date.now(),
     setId: null,
   })
   return id
+}
+
+export async function updateCollection(id: string, changes: Partial<Collection>) {
+  await db.collections.update(id, changes)
 }
 
 export async function addToCollection(collectionId: string, photoIds: string[]) {

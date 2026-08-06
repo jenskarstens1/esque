@@ -421,7 +421,7 @@ function ToneAxis({
           actually splits. */}
       <div
         ref={ref}
-        className="relative h-[11px] w-full rounded-[1.5px] shadow-[inset_0_0_0_0.5px_rgb(0_0_0/0.5)]"
+        className="relative h-[11px] coarse:h-6 w-full rounded-[1.5px] shadow-[inset_0_0_0_0.5px_rgb(0_0_0/0.5)]"
         style={{ background: 'linear-gradient(90deg,#0a0a0c,#a4a4a9)' }}
       >
         {draggable &&
@@ -432,7 +432,7 @@ function ToneAxis({
               onPointerDown={start(key)}
               aria-label={SPLIT_LABELS[key]}
               title={SPLIT_LABELS[key]}
-              className="group/split absolute inset-y-0 w-3 -translate-x-1/2 cursor-ew-resize"
+              className="group/split absolute inset-y-0 w-3 coarse:w-11 -translate-x-1/2 cursor-ew-resize"
               style={{ left: `${splits[key] * 100}%` }}
             >
               {/* A dark ring keeps the grip readable at both ends of the ramp. */}

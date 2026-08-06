@@ -2,7 +2,6 @@ import { PanelSection, MiniAction } from '../../../design/Panel'
 import { panelMenuItems } from '../../../shell/appMenus'
 import { EditSlider } from '../EditSlider'
 import { isSectionModified } from '../../../develop/modified'
-import { Group } from './BasicPanel'
 import { useDevelop } from '../../../develop/session'
 
 export function DetailPanel() {
@@ -30,101 +29,109 @@ export function DetailPanel() {
       modified={modified}
       actions={<MiniAction onClick={resetAll}>Reset</MiniAction>}
     >
-      <Group label="Sharpening">
-        <EditSlider path="detail.sharpenAmount" label="Amount" min={0} max={150} origin={0} />
-        <EditSlider
-          path="detail.sharpenRadius"
-          label="Radius"
-          min={0.5}
-          max={3}
-          step={0.1}
-          precision={1}
-          origin={1}
-        />
-        <EditSlider path="detail.sharpenDetail" label="Detail" min={0} max={100} origin={0} />
-        <EditSlider path="detail.sharpenMasking" label="Masking" min={0} max={100} origin={0} />
-      </Group>
+      <EditSlider path="detail.sharpenAmount" label="Sharpen Amount" min={0} max={150} origin={0} />
+      <EditSlider
+        path="detail.sharpenRadius"
+        label="Sharpen Radius"
+        min={0.5}
+        max={3}
+        step={0.1}
+        precision={1}
+        origin={1}
+      />
+      <EditSlider path="detail.sharpenDetail" label="Sharpen Detail" min={0} max={100} origin={0} />
+      <EditSlider
+        path="detail.sharpenMasking"
+        label="Sharpen Masking"
+        min={0}
+        max={100}
+        origin={0}
+      />
 
-      <Group label="Noise Reduction">
-        <EditSlider path="detail.luminanceNR" label="Luminance" min={0} max={100} origin={0} />
-        <EditSlider
-          path="detail.luminanceNRDetail"
-          label="Detail"
-          min={0}
-          max={100}
-          origin={0}
-          disabled={noLumNR}
-        />
-        <EditSlider
-          path="detail.luminanceNRContrast"
-          label="Contrast"
-          min={0}
-          max={100}
-          origin={0}
-          disabled={noLumNR}
-        />
-      </Group>
+      <EditSlider path="detail.luminanceNR" label="Luminance Noise" min={0} max={100} origin={0} />
+      <EditSlider
+        path="detail.luminanceNRDetail"
+        label="Luminance Detail"
+        min={0}
+        max={100}
+        origin={0}
+        disabled={noLumNR}
+      />
+      <EditSlider
+        path="detail.luminanceNRContrast"
+        label="Luminance Contrast"
+        min={0}
+        max={100}
+        origin={0}
+        disabled={noLumNR}
+      />
 
-      <Group label="Color Noise">
-        <EditSlider path="detail.colorNR" label="Color" min={0} max={100} origin={0} />
-        <EditSlider
-          path="detail.colorNRDetail"
-          label="Detail"
-          min={0}
-          max={100}
-          origin={0}
-          disabled={noColorNR}
-        />
-        <EditSlider
-          path="detail.colorNRSmoothness"
-          label="Smoothness"
-          min={0}
-          max={100}
-          origin={0}
-          disabled={noColorNR}
-        />
-      </Group>
+      <EditSlider path="detail.colorNR" label="Color Noise" min={0} max={100} origin={0} />
+      <EditSlider
+        path="detail.colorNRDetail"
+        label="Color Detail"
+        min={0}
+        max={100}
+        origin={0}
+        disabled={noColorNR}
+      />
+      <EditSlider
+        path="detail.colorNRSmoothness"
+        label="Color Smoothness"
+        min={0}
+        max={100}
+        origin={0}
+        disabled={noColorNR}
+      />
 
-      <Group label="Impulse Noise">
-        <EditSlider path="detail.impulseNR" label="Amount" min={0} max={100} origin={0} />
-      </Group>
+      <EditSlider path="detail.impulseNR" label="Impulse Noise" min={0} max={100} origin={0} />
 
-      <Group label="Defringe">
-        <EditSlider path="lens.defringePurpleAmount" label="Purple" min={0} max={20} origin={0} />
-        <EditSlider
-          path="lens.defringePurpleHueLo"
-          label="Hue Min"
-          min={0}
-          max={100}
-          origin={30}
-          disabled={noPurple}
-        />
-        <EditSlider
-          path="lens.defringePurpleHueHi"
-          label="Hue Max"
-          min={0}
-          max={100}
-          origin={70}
-          disabled={noPurple}
-        />
-        <EditSlider path="lens.defringeGreenAmount" label="Green" min={0} max={20} origin={0} />
-        <EditSlider
-          path="lens.defringeGreenHueLo"
-          label="Hue Min"
-          min={0}
-          max={100}
-          origin={40}
-          disabled={noGreen}
-        />
-        <EditSlider
-          path="lens.defringeGreenHueHi"
-          label="Hue Max"
-          min={0}
-          max={100}
-          origin={60}
-          disabled={noGreen}
-        />
-      </Group>
+      <EditSlider
+        path="lens.defringePurpleAmount"
+        label="Defringe Purple"
+        min={0}
+        max={20}
+        origin={0}
+      />
+      <EditSlider
+        path="lens.defringePurpleHueLo"
+        label="Purple Hue Min"
+        min={0}
+        max={100}
+        origin={30}
+        disabled={noPurple}
+      />
+      <EditSlider
+        path="lens.defringePurpleHueHi"
+        label="Purple Hue Max"
+        min={0}
+        max={100}
+        origin={70}
+        disabled={noPurple}
+      />
+      <EditSlider
+        path="lens.defringeGreenAmount"
+        label="Defringe Green"
+        min={0}
+        max={20}
+        origin={0}
+      />
+      <EditSlider
+        path="lens.defringeGreenHueLo"
+        label="Green Hue Min"
+        min={0}
+        max={100}
+        origin={40}
+        disabled={noGreen}
+      />
+      <EditSlider
+        path="lens.defringeGreenHueHi"
+        label="Green Hue Max"
+        min={0}
+        max={100}
+        origin={60}
+        disabled={noGreen}
+      />
     </PanelSection>
   )
 }

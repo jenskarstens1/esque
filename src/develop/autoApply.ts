@@ -10,7 +10,7 @@
  * what makes Auto usable on a whole selection in Library.
  */
 import { autoDevelop, autoTone, autoWhiteBalance, applyAuto } from './auto'
-import { dropProxy, loadProxy, peekProxy, PROXY_EDGE } from './proxy'
+import { dropProxy, loadProxy, peekProxy, proxyEdge } from './proxy'
 import { useDevelop } from './session'
 import { db } from '../catalog/db'
 import { saveEdits } from '../catalog/actions'
@@ -44,7 +44,7 @@ async function withProxy<T>(
   } finally {
     // A proxy decoded only to be measured is smaller than the editing one, so
     // leaving it in the cache would make the next Develop entry decode twice.
-    if (!cached && Math.max(proxy.width, proxy.height) < PROXY_EDGE) dropProxy(photoId)
+    if (!cached && Math.max(proxy.width, proxy.height) < proxyEdge()) dropProxy(photoId)
   }
 }
 
@@ -62,7 +62,7 @@ export async function autoDevelopCurrent(mode: Mode = 'all'): Promise<boolean> {
   const photoId = dev.photoId
   if (!photoId) return false
 
-  const done = await withProxy(photoId, PROXY_EDGE, (image) => {
+  const done = await withProxy(photoId, proxyEdge(), (image) => {
     const edits = useDevelop.getState().edits
     if (mode === 'wb') {
       const wb = autoWhiteBalance(image, edits)

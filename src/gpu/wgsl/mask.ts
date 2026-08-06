@@ -26,6 +26,9 @@ export const MASK_KIND = {
   brush: 2,
   colorRange: 3,
   luminanceRange: 4,
+  aiSubject: 5,
+  aiBackground: 5,
+  aiPerson: 5,
 } as const
 
 export const MASK_BLEND = { add: 0, subtract: 1, intersect: 2 } as const
@@ -60,12 +63,17 @@ struct U {
   // -- luminance range --------------------------------------------------------
   uRange: vec4f,
   uSmoothness: f32,
+  // -- AI ---------------------------------------------------------------------
+  uTexel: vec2f,
+  /** Background is the subject's coverage, flipped after refinement. */
+  uAiInvert: f32,
 }
 
 @group(0) @binding(0) var<uniform> u: U;
 @group(0) @binding(1) var sampLin: sampler;
 @group(0) @binding(3) var uImage: texture_2d<f32>;
 @group(0) @binding(4) var uPrev: texture_2d<f32>;
+@group(0) @binding(5) var uAlpha: texture_2d<f32>;
 
 /** Aspect-corrected position, so distances mean the same on both axes. */
 fn P(uv: vec2f) -> vec2f { return uv * u.uAspect; }
@@ -163,6 +171,67 @@ fn luminanceRangeMask(uv: vec2f) -> f32 {
   return mix(m, smoothstep(0.0, 1.0, m), s);
 }
 
+/**
+ * Coverage from a segmentation network, snapped back onto the photo's edges.
+ *
+ * The network ran at 320 or 1024 pixels square on a stretched copy of the
+ * frame, so what arrives here is the right *shape* at the wrong resolution:
+ * upscaled to a 40 MP crop it is a soft silhouette that misses the subject's
+ * outline by several pixels — visible immediately as a halo the moment the
+ * mask carries any exposure.
+ *
+ * Refine fixes that with a joint-bilateral filter, which is the cheap half of
+ * a guided filter and enough here. Coverage is re-averaged over a small
+ * neighbourhood, but each neighbour is weighted by how closely its *colour*
+ * matches the centre pixel — so the average is taken along the subject's edge
+ * and never across it. The mask stops being an approximate outline and starts
+ * following the same boundary the eye does, at whatever resolution the frame
+ * is being rendered at, without the network having to run at that resolution.
+ *
+ * Raising Refine tightens the colour tolerance and widens the search: a low
+ * setting smooths a noisy prediction, a high one cuts hard against contrast.
+ * The final remap pushes the midtones apart, because a guided edge should also
+ * be a decisive one — without it a refined mask still reads as a blurred
+ * silhouette however well it is aligned.
+ */
+fn aiMask(uv: vec2f) -> f32 {
+  let a0 = textureSampleLevel(uAlpha, sampLin, uv, 0.0).r;
+  let strength = clamp(u.uRefine * 0.01, 0.0, 1.0);
+
+  var m = clamp(a0, 0.0, 1.0);
+  if (strength > 0.01) {
+    let c0 = encode(max(textureSampleLevel(uImage, sampLin, uv, 0.0).rgb, vec3f(0.0)));
+    // Tolerance narrows as refine rises while the reach grows, so a hard refine
+    // pulls the edge further while accepting less along the way.
+    let sigma = mix(0.40, 0.05, strength);
+    let step = u.uTexel * mix(1.0, 3.0, strength);
+    let denom = 2.0 * sigma * sigma;
+
+    var wsum = 1.0;
+    var asum = m;
+    for (var y = -2; y <= 2; y = y + 1) {
+      for (var x = -2; x <= 2; x = x + 1) {
+        if (x == 0 && y == 0) { continue; }
+        let o = vec2f(f32(x), f32(y)) * step;
+        let p = uv + o;
+        let c = encode(max(textureSampleLevel(uImage, sampLin, p, 0.0).rgb, vec3f(0.0)));
+        let a = clamp(textureSampleLevel(uAlpha, sampLin, p, 0.0).r, 0.0, 1.0);
+        let dc = c - c0;
+        let w = exp(-dot(dc, dc) / denom);
+        wsum = wsum + w;
+        asum = asum + a * w;
+      }
+    }
+    m = asum / max(wsum, EPS);
+    m = clamp((m - 0.5) * (1.0 + strength * 0.9) + 0.5, 0.0, 1.0);
+  }
+
+  // Inverting here rather than through the component's own invert flag keeps
+  // Background a kind in its own right, so the user's invert stays theirs.
+  if (u.uAiInvert > 0.5) { m = 1.0 - m; }
+  return m;
+}
+
 @fragment
 fn fs(@location(0) uv: vec2f) -> @location(0) vec4f {
   var m: f32;
@@ -170,7 +239,8 @@ fn fs(@location(0) uv: vec2f) -> @location(0) vec4f {
   else if (u.uKind < 1.5) { m = radialMask(uv); }
   else if (u.uKind < 2.5) { m = brushMask(uv); }
   else if (u.uKind < 3.5) { m = colorRangeMask(uv); }
-  else                    { m = luminanceRangeMask(uv); }
+  else if (u.uKind < 4.5) { m = luminanceRangeMask(uv); }
+  else                    { m = aiMask(uv); }
   return vec4f(clamp(m, 0.0, 1.0), 0.0, 0.0, 1.0);
 }
 `

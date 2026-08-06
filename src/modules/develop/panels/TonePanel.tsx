@@ -3,7 +3,6 @@ import { panelMenuItems } from '../../../shell/appMenus'
 import { Select } from '../../../design/Controls'
 import { EditSlider } from '../EditSlider'
 import { isSectionModified } from '../../../develop/modified'
-import { Group } from './BasicPanel'
 import { useDevelop } from '../../../develop/session'
 import type { HighlightRecovery } from '../../../core/types'
 
@@ -46,9 +45,9 @@ export function TonePanel() {
       actions={<MiniAction onClick={() => reset('tone')}>Reset</MiniAction>}
     >
       {isRaw && (
-        <Group label="Highlight Reconstruction">
+        <>
           <div className="mb-1 flex items-center gap-2">
-            <span className="w-[44px] shrink-0 text-mini text-label-tertiary">Mode</span>
+            <span className="w-[44px] shrink-0 text-mini text-label-tertiary">Recovery</span>
             <Select
               value={recovery}
               options={RECOVERY_OPTIONS}
@@ -58,55 +57,55 @@ export function TonePanel() {
           </div>
           <EditSlider
             path="tone.recoveryThreshold"
-            label="Threshold"
+            label="Recovery Threshold"
             min={20}
             max={100}
             origin={100}
             disabled={recovery === 'off' || recovery === 'clip'}
           />
-        </Group>
+        </>
       )}
 
-      <Group label="Local Shadows / Highlights">
-        <EditSlider path="tone.shHighlights" label="Highlights" min={0} max={100} origin={0} />
-        <EditSlider path="tone.shShadows" label="Shadows" min={0} max={100} origin={0} />
-        <EditSlider
-          path="tone.shRadius"
-          label="Radius"
-          min={1}
-          max={100}
-          origin={40}
-          disabled={noSh}
-        />
-        <EditSlider
-          path="tone.shTonalWidth"
-          label="Tonal Width"
-          min={10}
-          max={100}
-          origin={70}
-          disabled={noSh}
-        />
-      </Group>
+      <EditSlider path="tone.shHighlights" label="Local Highlights" min={0} max={100} origin={0} />
+      <EditSlider path="tone.shShadows" label="Local Shadows" min={0} max={100} origin={0} />
+      <EditSlider
+        path="tone.shRadius"
+        label="Local Radius"
+        min={1}
+        max={100}
+        origin={40}
+        disabled={noSh}
+      />
+      <EditSlider
+        path="tone.shTonalWidth"
+        label="Local Tonal Width"
+        min={10}
+        max={100}
+        origin={70}
+        disabled={noSh}
+      />
 
-      <Group label="Dynamic Range Compression">
-        <EditSlider path="tone.drcAmount" label="Compression" min={0} max={100} origin={0} />
-        <EditSlider
-          path="tone.drcDetail"
-          label="Detail"
-          min={0}
-          max={100}
-          origin={50}
-          disabled={noDrc}
-        />
-      </Group>
+      <EditSlider path="tone.drcAmount" label="Range Compression" min={0} max={100} origin={0} />
+      <EditSlider
+        path="tone.drcDetail"
+        label="Compression Detail"
+        min={0}
+        max={100}
+        origin={50}
+        disabled={noDrc}
+      />
 
-      <Group label="Contrast by Detail Levels">
-        <EditSlider path="tone.detailFinest" label="Finest" min={-100} max={100} />
-        <EditSlider path="tone.detailFine" label="Fine" min={-100} max={100} />
-        <EditSlider path="tone.detailCoarse" label="Coarse" min={-100} max={100} />
-        <EditSlider path="tone.detailCoarsest" label="Coarsest" min={-100} max={100} />
-        <EditSlider path="tone.detailThreshold" label="Threshold" min={0} max={100} origin={20} />
-      </Group>
+      <EditSlider path="tone.detailFinest" label="Finest Detail" min={-100} max={100} />
+      <EditSlider path="tone.detailFine" label="Fine Detail" min={-100} max={100} />
+      <EditSlider path="tone.detailCoarse" label="Coarse Detail" min={-100} max={100} />
+      <EditSlider path="tone.detailCoarsest" label="Coarsest Detail" min={-100} max={100} />
+      <EditSlider
+        path="tone.detailThreshold"
+        label="Detail Threshold"
+        min={0}
+        max={100}
+        origin={20}
+      />
     </PanelSection>
   )
 }

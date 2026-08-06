@@ -344,7 +344,7 @@ export function MaskOverlay({ frame }: { frame: FrameBox }) {
               onClick={() => select(m.id, m.components[0]?.id ?? null)}
               className={`rounded-full px-2 py-0.5 text-mini shadow-hud transition-colors duration-[--duration-fast] ${
                 m.id === selectedMaskId
-                  ? 'bg-accent text-white'
+                  ? 'bg-accent text-(--accent-ink)'
                   : 'material text-label-secondary hover:text-label'
               }`}
             >

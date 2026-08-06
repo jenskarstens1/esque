@@ -3,7 +3,6 @@ import { Checkbox } from '../../../design/Controls'
 import { panelMenuItems } from '../../../shell/appMenus'
 import { EditSlider } from '../EditSlider'
 import { isSectionModified } from '../../../develop/modified'
-import { Group } from './BasicPanel'
 import { useDevelop } from '../../../develop/session'
 
 export function LensPanel() {
@@ -37,15 +36,10 @@ export function LensPanel() {
         />
       </div>
 
-      <Group label="Manual">
-        <EditSlider path="lens.distortion" label="Distortion" min={-100} max={100} />
-        <EditSlider path="lens.vignetting" label="Vignetting" min={-100} max={100} />
-      </Group>
-
-      <Group label="Chromatic Aberration">
-        <EditSlider path="lens.caRed" label="Red / Cyan" min={-100} max={100} />
-        <EditSlider path="lens.caBlue" label="Blue / Yellow" min={-100} max={100} />
-      </Group>
+      <EditSlider path="lens.distortion" label="Distortion" min={-100} max={100} />
+      <EditSlider path="lens.vignetting" label="Vignetting" min={-100} max={100} />
+      <EditSlider path="lens.caRed" label="Red / Cyan Fringe" min={-100} max={100} />
+      <EditSlider path="lens.caBlue" label="Blue / Yellow Fringe" min={-100} max={100} />
     </PanelSection>
   )
 }

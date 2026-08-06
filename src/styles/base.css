@@ -13,12 +13,25 @@
   html {
     color-scheme: dark;
     -webkit-text-size-adjust: 100%;
+    /*
+     * Mobile WebKit and Chrome paint a grey wash over anything tapped. On a dark
+     * pro UI it reads as a rendering fault, and every control here already has
+     * its own press state.
+     */
+    -webkit-tap-highlight-color: transparent;
   }
 
   html,
   body,
   #root {
     height: 100%;
+    /*
+     * Mobile browsers grow and shrink the viewport as the URL bar collapses.
+     * `100%` resolves against the *largest* viewport, so the last strip of the
+     * app sits permanently under the bar; `100dvh` tracks the visible one. Kept
+     * after the `100%` so anything without dvh support still gets a height.
+     */
+    height: 100dvh;
     margin: 0;
     overflow: hidden;
     overscroll-behavior: none;
@@ -67,6 +80,32 @@
     border: 0;
     padding: 0;
     cursor: default; /* macOS apps use the arrow cursor on buttons, not a pointer */
+  }
+
+  /*
+   * Kills the 300ms wait mobile browsers hold every tap for while they watch for
+   * a double-tap-to-zoom. `width=device-width` already disables that gesture, but
+   * the delay only goes away when the element opts out of it.
+   */
+  button,
+  a,
+  [role='button'],
+  label,
+  summary {
+    touch-action: manipulation;
+  }
+
+  /*
+   * Fields under 16px make iOS Safari zoom the page on focus, and it never zooms
+   * back out. The UI scale is 12px, so the size is restored for pointers that
+   * can't trigger it.
+   */
+  @media (pointer: coarse) {
+    input:not([type='checkbox']):not([type='radio']),
+    textarea,
+    select {
+      font-size: 16px;
+    }
   }
 
   input,

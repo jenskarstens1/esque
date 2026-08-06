@@ -459,9 +459,9 @@ function ClipChip({
       onClick={onClick}
       aria-pressed={active}
       aria-label={`${shadows ? 'Shadow' : 'Highlight'} clipping`}
-      title={`${shadows ? 'Shadow' : 'Highlight'} clipping — ${formatPct(amount)} of pixels (J)`}
+      title={`${shadows ? 'Shadow' : 'Highlight'} clipping: ${formatPct(amount)} of pixels (J)`}
       className={cn(
-        'relative grid size-4 shrink-0 place-items-center rounded-xs',
+        'esq-tap relative grid size-4 shrink-0 place-items-center rounded-xs',
         // A transparent pseudo-element widens the target without fattening the ink.
         "after:absolute after:-inset-1 after:content-['']",
         'transition-[background-color] duration-[--duration-fast] ease-[--ease-out]',

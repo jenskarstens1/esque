@@ -5,15 +5,13 @@ import { PanelSection, MiniAction } from '../../../design/Panel'
 import { Button, Select } from '../../../design/Controls'
 import { SliderRow } from '../../../design/Slider'
 import { useMenu } from '../../../design/useMenu'
-import { panelMenuItems, sliderMenuItems } from '../../../shell/appMenus'
+import { panelMenuItems, sliderMenuItems, maskKindItems } from '../../../shell/appMenus'
 import { promptText } from '../../../design/prompt'
-import { Group } from './BasicPanel'
 import { useDevelop } from '../../../develop/session'
 import { useMasking } from '../../../develop/masking'
 import { useUI } from '../../../state/ui'
 import {
   BLEND_LABELS,
-  MASK_KINDS,
   MASK_KIND_LABELS,
   duplicateMask,
   isEmptyMask,
@@ -22,6 +20,9 @@ import {
   newMask,
 } from '../../../develop/masks'
 import { defaultMaskAdjustments } from '../../../core/defaults'
+import { useAiSupport } from '../../../ai/useAiSupport'
+import { MaskDetection } from './MaskDetection'
+import { isAiGeometry } from '../../../core/types'
 import type { MaskAdjustments, MaskBlend, MaskGeometry } from '../../../core/types'
 
 /** Fields the slider list drives, with their range and label. */
@@ -30,31 +31,28 @@ const ADJUSTMENTS: Array<{
   label: string
   min: number
   max: number
-  group: string
   precision?: number
 }> = [
-  { key: 'exposure', label: 'Exposure', min: -4, max: 4, group: 'Light', precision: 2 },
-  { key: 'contrast', label: 'Contrast', min: -100, max: 100, group: 'Light' },
-  { key: 'highlights', label: 'Highlights', min: -100, max: 100, group: 'Light' },
-  { key: 'shadows', label: 'Shadows', min: -100, max: 100, group: 'Light' },
-  { key: 'whites', label: 'Whites', min: -100, max: 100, group: 'Light' },
-  { key: 'blacks', label: 'Blacks', min: -100, max: 100, group: 'Light' },
-  { key: 'temp', label: 'Temp', min: -100, max: 100, group: 'Colour' },
-  { key: 'tint', label: 'Tint', min: -100, max: 100, group: 'Colour' },
-  { key: 'saturation', label: 'Saturation', min: -100, max: 100, group: 'Colour' },
-  { key: 'hue', label: 'Hue', min: 0, max: 360, group: 'Colour' },
-  { key: 'hueStrength', label: 'Hue Strength', min: 0, max: 100, group: 'Colour' },
-  { key: 'colorize', label: 'Colorize', min: 0, max: 100, group: 'Colour' },
-  { key: 'texture', label: 'Texture', min: -100, max: 100, group: 'Detail' },
-  { key: 'clarity', label: 'Clarity', min: -100, max: 100, group: 'Detail' },
-  { key: 'dehaze', label: 'Dehaze', min: -100, max: 100, group: 'Detail' },
-  { key: 'sharpness', label: 'Sharpness', min: -100, max: 100, group: 'Detail' },
-  { key: 'noise', label: 'Noise', min: 0, max: 100, group: 'Detail' },
-  { key: 'moire', label: 'Moiré', min: 0, max: 100, group: 'Detail' },
-  { key: 'defringe', label: 'Defringe', min: 0, max: 100, group: 'Detail' },
+  { key: 'exposure', label: 'Exposure', min: -4, max: 4, precision: 2 },
+  { key: 'contrast', label: 'Contrast', min: -100, max: 100 },
+  { key: 'highlights', label: 'Highlights', min: -100, max: 100 },
+  { key: 'shadows', label: 'Shadows', min: -100, max: 100 },
+  { key: 'whites', label: 'Whites', min: -100, max: 100 },
+  { key: 'blacks', label: 'Blacks', min: -100, max: 100 },
+  { key: 'temp', label: 'Temp', min: -100, max: 100 },
+  { key: 'tint', label: 'Tint', min: -100, max: 100 },
+  { key: 'saturation', label: 'Saturation', min: -100, max: 100 },
+  { key: 'hue', label: 'Hue', min: 0, max: 360 },
+  { key: 'hueStrength', label: 'Hue Strength', min: 0, max: 100 },
+  { key: 'colorize', label: 'Colorize', min: 0, max: 100 },
+  { key: 'texture', label: 'Texture', min: -100, max: 100 },
+  { key: 'clarity', label: 'Clarity', min: -100, max: 100 },
+  { key: 'dehaze', label: 'Dehaze', min: -100, max: 100 },
+  { key: 'sharpness', label: 'Sharpness', min: -100, max: 100 },
+  { key: 'noise', label: 'Noise', min: 0, max: 100 },
+  { key: 'moire', label: 'Moiré', min: 0, max: 100 },
+  { key: 'defringe', label: 'Defringe', min: 0, max: 100 },
 ]
-
-const GROUPS = ['Light', 'Colour', 'Detail']
 
 export function MasksPanel() {
   const masks = useDevelop((s) => s.edits.masks)
@@ -66,6 +64,7 @@ export function MasksPanel() {
   const setOverlay = useMasking((s) => s.setOverlay)
   const setTool = useUI((s) => s.openDevelopTool)
   const { menu, open } = useMenu()
+  const support = useAiSupport()
 
   const selected = masks.find((m) => m.id === selectedId) ?? null
 
@@ -111,8 +110,7 @@ export function MasksPanel() {
     [update],
   )
 
-  const addMenu = () =>
-    MASK_KINDS.map((k) => ({ label: MASK_KIND_LABELS[k], onSelect: () => addMask(k) }))
+  const addMenu = () => maskKindItems(support, addMask)
 
   return (
     <PanelSection
@@ -231,40 +229,45 @@ export function MasksPanel() {
             />
           </div>
 
-          <Group label="Components">
+          <div className="mt-2.5">
             <div className="flex flex-col gap-1">
               {selected.components.map((c, i) => (
-                <div key={c.id} className="flex items-center gap-1.5">
-                  <span className="w-[70px] shrink-0 truncate text-mini text-label-secondary">
-                    {MASK_KIND_LABELS[c.geometry.kind]}
-                  </span>
-                  <Select
-                    value={c.blend}
-                    disabled={i === 0}
-                    onChange={(v) =>
-                      mutateMask(selected.id, 'masks.blend', 'Mask Blend', (mm) => {
-                        const comp = mm.components.find((x) => x.id === c.id)
-                        if (comp) comp.blend = v as MaskBlend
-                      })
-                    }
-                    options={(Object.keys(BLEND_LABELS) as MaskBlend[]).map((b) => ({
-                      value: b,
-                      label: BLEND_LABELS[b],
-                    }))}
-                  />
-                  <button
-                    type="button"
-                    aria-label="Remove component"
-                    disabled={selected.components.length === 1}
-                    onClick={() =>
-                      mutateMask(selected.id, 'masks.component', 'Remove Component', (mm) => {
-                        mm.components = mm.components.filter((x) => x.id !== c.id)
-                      })
-                    }
-                    className="shrink-0 px-1 text-icon-tertiary transition-colors duration-[--duration-fast] hover:text-icon disabled:opacity-30"
-                  >
-                    <CloseIcon size={9} />
-                  </button>
+                <div key={c.id} className="flex flex-col">
+                  <div className="flex items-center gap-1.5">
+                    <span className="w-[70px] shrink-0 truncate text-mini text-label-secondary">
+                      {MASK_KIND_LABELS[c.geometry.kind]}
+                    </span>
+                    <Select
+                      value={c.blend}
+                      disabled={i === 0}
+                      onChange={(v) =>
+                        mutateMask(selected.id, 'masks.blend', 'Mask Blend', (mm) => {
+                          const comp = mm.components.find((x) => x.id === c.id)
+                          if (comp) comp.blend = v as MaskBlend
+                        })
+                      }
+                      options={(Object.keys(BLEND_LABELS) as MaskBlend[]).map((b) => ({
+                        value: b,
+                        label: BLEND_LABELS[b],
+                      }))}
+                    />
+                    <button
+                      type="button"
+                      aria-label="Remove component"
+                      disabled={selected.components.length === 1}
+                      onClick={() =>
+                        mutateMask(selected.id, 'masks.component', 'Remove Component', (mm) => {
+                          mm.components = mm.components.filter((x) => x.id !== c.id)
+                        })
+                      }
+                      className="shrink-0 px-1 text-icon-tertiary transition-colors duration-[--duration-fast] hover:text-icon disabled:opacity-30"
+                    >
+                      <CloseIcon size={9} />
+                    </button>
+                  </div>
+                  {isAiGeometry(c.geometry) && (
+                    <MaskDetection mask={selected} component={c} geometry={c.geometry} />
+                  )}
                 </div>
               ))}
             </div>
@@ -275,10 +278,7 @@ export function MasksPanel() {
                 onClick={(e) =>
                   open(
                     e,
-                    MASK_KINDS.map((k) => ({
-                      label: MASK_KIND_LABELS[k],
-                      onSelect: () => addComponentTo(k, 'add'),
-                    })),
+                    maskKindItems(support, (k) => addComponentTo(k, 'add')),
                   )
                 }
               >
@@ -290,17 +290,14 @@ export function MasksPanel() {
                 onClick={(e) =>
                   open(
                     e,
-                    MASK_KINDS.map((k) => ({
-                      label: MASK_KIND_LABELS[k],
-                      onSelect: () => addComponentTo(k, 'subtract'),
-                    })),
+                    maskKindItems(support, (k) => addComponentTo(k, 'subtract')),
                   )
                 }
               >
                 Subtract
               </Button>
             </div>
-          </Group>
+          </div>
 
           <SliderRow
             label="Opacity"
@@ -318,48 +315,44 @@ export function MasksPanel() {
             }
           />
 
-          {GROUPS.map((g) => (
-            <Group key={g} label={g}>
-              {ADJUSTMENTS.filter((a) => a.group === g).map((a) => {
-                const value = selected.adjustments[a.key]
-                const reset = defaultMaskAdjustments()[a.key]
-                return (
-                  <SliderRow
-                    key={a.key}
-                    label={a.label}
-                    min={a.min}
-                    max={a.max}
-                    precision={a.precision}
-                    step={a.precision ? 0.01 : 1}
-                    defaultValue={reset}
-                    origin={reset}
-                    value={value}
-                    modified={value !== reset}
-                    menuItems={() =>
-                      sliderMenuItems({
-                        label: a.label,
-                        value,
-                        defaultValue: reset,
-                        onReset: () =>
-                          mutateMask(selected.id, `masks.adj.${a.key}`, a.label, (mm) => {
-                            mm.adjustments[a.key] = reset
-                          }),
-                        onSet: (v: number) =>
-                          mutateMask(selected.id, `masks.adj.${a.key}`, a.label, (mm) => {
-                            mm.adjustments[a.key] = v
-                          }),
-                      })
-                    }
-                    onChange={(v) =>
+          {ADJUSTMENTS.map((a) => {
+            const value = selected.adjustments[a.key]
+            const reset = defaultMaskAdjustments()[a.key]
+            return (
+              <SliderRow
+                key={a.key}
+                label={a.label}
+                min={a.min}
+                max={a.max}
+                precision={a.precision}
+                step={a.precision ? 0.01 : 1}
+                defaultValue={reset}
+                origin={reset}
+                value={value}
+                modified={value !== reset}
+                menuItems={() =>
+                  sliderMenuItems({
+                    label: a.label,
+                    value,
+                    defaultValue: reset,
+                    onReset: () =>
+                      mutateMask(selected.id, `masks.adj.${a.key}`, a.label, (mm) => {
+                        mm.adjustments[a.key] = reset
+                      }),
+                    onSet: (v: number) =>
                       mutateMask(selected.id, `masks.adj.${a.key}`, a.label, (mm) => {
                         mm.adjustments[a.key] = v
-                      }, true)
-                    }
-                  />
-                )
-              })}
-            </Group>
-          ))}
+                      }),
+                  })
+                }
+                onChange={(v) =>
+                  mutateMask(selected.id, `masks.adj.${a.key}`, a.label, (mm) => {
+                    mm.adjustments[a.key] = v
+                  }, true)
+                }
+              />
+            )
+          })}
         </>
       )}
     </PanelSection>

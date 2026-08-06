@@ -40,7 +40,7 @@ export function Field({
         {children}
       </div>
       {hint && (
-        <p className="col-start-2 mt-1 max-w-(--field-measure) text-mini leading-[1.45] text-balance text-label-secondary">
+        <p className="col-start-2 mt-1 max-w-(--field-measure) text-mini leading-[1.45] text-balance text-label-tertiary">
           {hint}
         </p>
       )}
@@ -50,11 +50,17 @@ export function Field({
 
 export function FieldGroup({
   title,
+  label,
   aside,
   children,
   className,
 }: {
   title?: string
+  /**
+   * Names the group for assistive tech where the rows read plainly enough that
+   * a visible eyebrow would only be repeating them.
+   */
+  label?: string
   /**
    * A control that governs the whole group rather than one row — a watermark's
    * on/off, say. It lands on the trailing edge of the control measure, which
@@ -68,12 +74,23 @@ export function FieldGroup({
   return (
     // Adjacent groups divide themselves, so the first and last never draw a
     // hairline against the dialog's own header and footer rules.
-    <section className={cn('pt-5 pb-4 first:pt-1 [&+&]:hairline-t', className)}>
+    <section
+      aria-label={label ?? title}
+      className={cn('pt-5 pb-4 first:pt-1 [&+&]:hairline-t', className)}
+    >
       {/* The eyebrow belongs to the rows under it, not to the group it was just
-          divided from, so it carries more air above than below. */}
-      {title && (
-        <div className="mb-2.5 grid grid-cols-[116px_1fr] items-center gap-x-3">
-          <h3 className="esq-section-title">{title}</h3>
+          divided from, so it carries more air above than below. An untitled
+          group still opens this row when it has an aside to hang. */}
+      {(title || aside) && (
+        <div
+          className={cn(
+            'grid grid-cols-[minmax(116px,auto)_1fr] items-center gap-x-3',
+            title ? 'mb-2.5' : 'mb-1.5',
+          )}
+        >
+          {/* The column is a floor, not a ceiling: pinned at 116px, a two-word
+              eyebrow like "Output sharpening" broke over two lines. */}
+          {title && <h3 className="esq-section-title whitespace-nowrap">{title}</h3>}
           {aside && (
             <div className="col-start-2 flex max-w-(--field-measure) justify-end">{aside}</div>
           )}

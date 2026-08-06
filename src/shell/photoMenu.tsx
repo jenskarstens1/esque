@@ -4,6 +4,7 @@ import {
   CopyIcon,
   ExportIcon,
   FlagIcon,
+  InfoIcon,
   LoupeIcon,
   RejectIcon,
   ResetIcon,
@@ -27,6 +28,7 @@ import {
   unstackPhotos,
 } from '../catalog/actions'
 import { db } from '../catalog/db'
+import { readSidecars, writeSidecars } from '../catalog/sidecar'
 import { cloneEdits, defaultEdits, editsKind } from '../core/defaults'
 import { useCatalog } from '../state/catalog'
 import { useUI } from '../state/ui'
@@ -52,6 +54,44 @@ const swatch = (label: ColorLabel) =>
       aria-hidden
     />
   )
+
+/**
+ * Writes each photo's settings and metadata to its `.xmp`.
+ *
+ * Reported in full rather than optimistically: a folder opened read-only, or
+ * one whose permission has lapsed since it was imported, fails silently at the
+ * file system and the photographer would otherwise believe the work was saved.
+ */
+async function saveMetadata(ids: string[]) {
+  const photos = (await db.photos.bulkGet(ids)).filter((p): p is Photo => !!p)
+  const { written, failed } = await writeSidecars(photos)
+  if (written && !failed) {
+    toast.show(written === 1 ? 'Metadata saved' : `Metadata saved for ${written} photos`)
+  } else if (written) {
+    toast.error(`Saved ${written} of ${written + failed}`, 'The rest could not be written to disk.')
+  } else {
+    toast.error(
+      'Nothing could be saved',
+      'Sidecars are written next to the original, which needs a folder esque still has permission to write to.',
+    )
+  }
+}
+
+/** Replaces settings and metadata from each photo's `.xmp`. */
+async function loadMetadata(ids: string[]) {
+  const photos = (await db.photos.bulkGet(ids)).filter((p): p is Photo => !!p)
+  const { read, missing, failed } = await readSidecars(photos)
+  if (read) {
+    const detail = missing || failed ? `${missing + failed} had nothing to read.` : undefined
+    toast.show(read === 1 ? 'Metadata read' : `Metadata read for ${read} photos`, { detail })
+  } else if (failed) {
+    toast.error('Metadata could not be read', 'The sidecars are there but could not be opened.')
+  } else {
+    toast.show('No sidecars found', {
+      detail: 'esque looks for a matching .xmp next to the original.',
+    })
+  }
+}
 
 /**
  * The photo context menu, shared by the grid, the filmstrip, the loupe and the
@@ -233,6 +273,23 @@ export function photoMenuItems(photo: Photo, options: PhotoMenuOptions = {}): Me
       onSelect: () => {
         if (!ui.rightPanelOpen) ui.toggleRightPanel()
       },
+    },
+    {
+      label: 'Metadata',
+      icon: <InfoIcon size={12} />,
+      submenu: [
+        {
+          label: `Save Metadata to File${suffix}`,
+          onSelect: () => void saveMetadata(targets),
+        },
+        {
+          // Destructive in the way that matters — it replaces edits the
+          // photographer may have made here — so it says so rather than
+          // reading like a refresh.
+          label: `Read Metadata from File${suffix}`,
+          onSelect: () => void loadMetadata(targets),
+        },
+      ],
     },
     { kind: 'separator' },
     {

@@ -31,3 +31,7 @@ node_modules
 
 # Large binary RAW test fixtures (~100MB); fetched/kept locally, not committed.
 public/raw-fixtures
+
+# Segmentation weights for the AI masks (~300MB). Fetched by
+# tools/fetch-models.sh for self-hosting, or on demand by the browser.
+public/models

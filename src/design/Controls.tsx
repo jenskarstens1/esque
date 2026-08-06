@@ -17,17 +17,22 @@ export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 
 const variants: Record<Variant, string> = {
   primary:
-    'bg-accent text-white hover:bg-accent-hover active:bg-accent-press shadow-[0_1px_2px_rgb(0_0_0/0.3)]',
+    'bg-accent text-(--accent-ink) hover:bg-accent-hover active:bg-accent-press shadow-[0_1px_2px_rgb(0_0_0/0.3)]',
   secondary:
     'bg-control text-label hover:bg-hover active:bg-active shadow-[0_1px_2px_rgb(0_0_0/0.25),inset_0_0.5px_0_rgb(255_255_255/0.07)]',
   ghost: 'text-icon-secondary hover:bg-raised hover:text-icon active:bg-control',
   destructive: 'bg-red text-white hover:brightness-110 active:brightness-95',
 }
 
+/*
+ * The coarse sizes target the 44px minimum touch target. Where shrinking the
+ * ink matters more than the box (`sm`, inside dense panel rows), `esq-tap`
+ * extends the hit area with a pseudo-element instead of inflating the layout.
+ */
 const sizes: Record<Size, string> = {
-  sm: 'h-6 px-2 text-mini rounded-sm gap-1',
-  md: 'h-7 px-3 text-ui rounded-md gap-1.5',
-  lg: 'h-9 px-4 text-ui-lg rounded-lg gap-2',
+  sm: 'h-6 coarse:h-8 esq-tap px-2 coarse:px-3 text-mini rounded-sm gap-1',
+  md: 'h-7 coarse:h-11 px-3 coarse:px-4 text-ui rounded-md gap-1.5',
+  lg: 'h-9 coarse:h-11 px-4 coarse:px-5 text-ui-lg rounded-lg gap-2',
 }
 
 export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button(
@@ -73,6 +78,13 @@ const iconChrome = (size: 'sm' | 'md', active?: boolean) =>
     'transition-[background-color,color,scale] duration-[--duration-fast] ease-[--ease-out]',
     'active:scale-90',
     size === 'sm' ? 'size-6' : 'size-7',
+    /*
+     * 24 and 28px are right for a dense pro sidebar and far under the 44pt a
+     * fingertip needs. `esq-tap` grows the *hit box* to 44px on coarse pointers
+     * with a transparent pseudo-element, so the drawing stays exactly where the
+     * layout put it and a mouse keeps the tight geometry.
+     */
+    'esq-tap',
     active ? 'bg-accent-soft text-accent' : 'text-icon-secondary hover:bg-raised hover:text-icon',
   )
 
@@ -156,7 +168,7 @@ export function SegmentedControl<T extends string>({
       role="tablist"
       className={cn(
         'relative inline-flex shrink-0 items-center rounded-md bg-raised p-0.5',
-        'shadow-[inset_0_0.5px_1px_rgb(0_0_0/0.3)]',
+        'shadow-[inset_0_0.5px_1.5px_rgb(0_0_0/0.28)]',
         full && 'w-full',
         className,
       )}
@@ -173,11 +185,23 @@ export function SegmentedControl<T extends string>({
             onClick={() => onChange(opt.value)}
             className={cn(
               'relative flex flex-1 items-center justify-center whitespace-nowrap rounded-[5px] font-medium',
-              'transition-[color,background-color] duration-[--duration-fast] ease-[--ease-out]',
-              size === 'sm' ? 'h-[19px] px-2 text-micro' : 'h-6 px-2.5 text-mini',
+              'transition-[color,background-color,box-shadow] duration-[--duration-fast] ease-[--ease-out]',
+              size === 'sm'
+                ? 'h-[19px] coarse:h-8 esq-tap px-2 text-micro'
+                : 'h-6 coarse:h-11 px-2.5 text-mini',
               selected
-                ? 'bg-control text-icon shadow-[0_1px_2px_rgb(0_0_0/0.35),inset_0_0.5px_0_rgb(255_255_255/0.08)]'
-                : 'text-icon-secondary hover:text-icon',
+                ? // The fill alone is nine levels of grey off the track it sits
+                  // in — enough to read as a tint, not as an edge. The hairline
+                  // is what draws the chip's own outline, and it flips with the
+                  // appearance so the same rule works on a light track.
+                  cn(
+                    'bg-control text-icon',
+                    'shadow-[0_0_0_0.5px_var(--color-hairline-strong),0_1px_2.5px_rgb(0_0_0/0.32),inset_0_0.5px_0_rgb(255_255_255/0.1)]',
+                  )
+                : // Unselected segments had no hit state at all beyond the label
+                  // changing colour, so the target you were aiming at was
+                  // invisible until you landed on it.
+                  'text-icon-secondary hover:bg-hover/45 hover:text-icon',
             )}
           >
             {opt.label}
@@ -222,7 +246,7 @@ export function Switch({
       disabled={disabled}
       onClick={() => onChange(!checked)}
       className={cn(
-        'relative h-[15px] w-[26px] shrink-0 rounded-full transition-colors duration-[--duration-base] ease-[--ease-out]',
+        'esq-tap relative h-[15px] w-[26px] shrink-0 rounded-full transition-colors duration-[--duration-base] ease-[--ease-out]',
         'disabled:pointer-events-none disabled:opacity-35',
         checked ? 'bg-accent' : 'bg-control shadow-[inset_0_0.5px_1px_rgb(0_0_0/0.3)]',
         !showLabel && className,
@@ -314,7 +338,7 @@ export function Checkbox({
   return (
     <label
       className={cn(
-        'inline-flex items-center gap-2 text-ui text-label-secondary',
+        'inline-flex items-center gap-2 text-ui text-label-secondary coarse:min-h-9',
         disabled ? 'pointer-events-none opacity-35' : 'hover:text-label',
       )}
     >
@@ -324,7 +348,7 @@ export function Checkbox({
         aria-checked={indeterminate ? 'mixed' : checked}
         onClick={() => onChange(!checked)}
         className={cn(
-          'flex size-[14px] shrink-0 items-center justify-center rounded-xs',
+          'esq-tap flex size-[14px] shrink-0 items-center justify-center rounded-xs',
           'transition-[background-color,box-shadow] duration-[--duration-fast] ease-[--ease-out]',
           checked || indeterminate
             ? 'bg-accent shadow-none'
@@ -332,9 +356,9 @@ export function Checkbox({
         )}
       >
         {indeterminate ? (
-          <span className="h-[1.5px] w-2 rounded-full bg-white" />
+          <span className="h-[1.5px] w-2 rounded-full bg-(--accent-ink)" />
         ) : checked ? (
-          <svg viewBox="0 0 12 12" className="size-3 text-white" aria-hidden>
+          <svg viewBox="0 0 12 12" className="size-3 text-(--accent-ink)" aria-hidden>
             <path
               d="M2.5 6.2 L4.8 8.5 L9.5 3.6"
               fill="none"
@@ -381,7 +405,7 @@ export function Select<T extends string>({
           'shadow-[0_1px_2px_rgb(0_0_0/0.25),inset_0_0.5px_0_rgb(255_255_255/0.07)]',
           'transition-colors duration-[--duration-fast] hover:bg-hover',
           'disabled:pointer-events-none disabled:opacity-35',
-          size === 'sm' ? 'h-6 text-mini' : 'h-7 text-ui',
+          size === 'sm' ? 'h-6 coarse:h-9 esq-tap text-mini' : 'h-7 coarse:h-11 text-ui',
         )}
       >
         {options.map((o, i) =>

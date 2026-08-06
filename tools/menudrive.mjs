@@ -15,6 +15,14 @@ const CANDIDATES = [
   '/Applications/Brave Browser.app/Contents/MacOS/Brave Browser',
 ]
 const executablePath = process.env.ESQUE_BROWSER ?? CANDIDATES.find((p) => existsSync(p))
+
+/**
+ * Where the dev server is. Vite moves to the next free port when 5173 is taken,
+ * and a drive that keeps asking for 5173 regardless will run its whole suite
+ * against whatever else is sitting there — passing or failing for reasons that
+ * have nothing to do with esque.
+ */
+const ORIGIN = (process.env.ESQUE_ORIGIN ?? 'http://localhost:5173').replace(/\/$/, '')
 const browser = await puppeteer.launch({ executablePath, headless: true, args: ['--no-sandbox'] })
 const page = await browser.newPage()
 await page.setViewport({ width: 1600, height: 1000 })
@@ -22,7 +30,7 @@ const errors = []
 page.on('pageerror', (e) => errors.push('pageerror: ' + e.message))
 page.on('console', (m) => { if (m.type() === 'error') errors.push('console: ' + m.text()) })
 
-await page.goto('http://localhost:5173/', { waitUntil: 'networkidle2' })
+await page.goto(`${ORIGIN}/`, { waitUntil: 'networkidle2' })
 await new Promise((r) => setTimeout(r, 1200))
 
 // Seed a folder, a collection and a photo straight into Dexie.

@@ -11,6 +11,7 @@ export function Dialog({
   open,
   onClose,
   title,
+  titleIcon,
   description,
   children,
   footer,
@@ -24,6 +25,12 @@ export function Dialog({
   open: boolean
   onClose: () => void
   title: string
+  /**
+   * A mark set against the title. Decorative by contract — the title stays the
+   * accessible name — so it is for the dialogs that are about the app itself
+   * rather than a way to give every panel an icon.
+   */
+  titleIcon?: ReactNode
   description?: string
   children?: ReactNode
   footer?: ReactNode
@@ -85,7 +92,7 @@ export function Dialog({
   if (!open) return null
 
   return createPortal(
-    <div className="fixed inset-0 z-[1100] flex items-center justify-center p-8">
+    <div className="fixed inset-0 z-[1100] flex items-center justify-center p-4 md:p-8">
       <div
         className="absolute inset-0 bg-scrim backdrop-blur-[2px] animate-[fadeIn_var(--duration-base)_var(--ease-out)]"
         onClick={dismissable ? onClose : undefined}
@@ -94,7 +101,9 @@ export function Dialog({
         role="dialog"
         aria-modal="true"
         aria-label={title}
-        style={{ width, height }}
+        // `width` caps rather than fixes the size, so a 460px dialog still fits
+        // a 390px phone instead of running off both edges.
+        style={{ width: '100%', maxWidth: width, height }}
         className={cn(
           'material-thick relative max-h-full overflow-hidden rounded-xl shadow-lg',
           'flex flex-col animate-[dialogIn_var(--duration-base)_var(--ease-out)]',
@@ -103,7 +112,10 @@ export function Dialog({
         <header
           className={cn('shrink-0 px-5 pt-5 pb-3', (dividers ?? (scroll.top || !scrollable)) && 'hairline-b')}
         >
-          <h2 className="text-title text-label">{title}</h2>
+          <div className="flex items-center gap-[3px]">
+            {titleIcon}
+            <h2 className="text-title text-label">{title}</h2>
+          </div>
           {description && (
             <p className="mt-1 text-ui leading-relaxed text-label-secondary">{description}</p>
           )}
