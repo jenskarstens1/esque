@@ -66,6 +66,7 @@ import { BUILTIN_PRESETS } from "../develop/presets";
 import type { PreviewQuality, ImportDevelop } from "../state/ui";
 import type { Preset } from "../core/types";
 import type { OutputSpace } from "../gpu/colorspace";
+import { CatalogBackup } from "./CatalogBackup";
 
 /**
  * Settings is a *panel*, not a list.
@@ -120,11 +121,13 @@ export function SettingsDialog({
 }) {
   // Held above `open` on purpose: the dialog reopens on the pane you left it on.
   const [pane, setPane] = useState<PaneId>("display");
+  const [backupBusy, setBackupBusy] = useState(false);
 
   return (
     <Dialog
       open={open}
-      onClose={onClose}
+      onClose={() => { if (!backupBusy) onClose(); }}
+      dismissable={!backupBusy}
       title="Settings"
       width={520}
       height={430}
@@ -135,12 +138,12 @@ export function SettingsDialog({
       // down the right of every pane that the keyboard list could not use.
       bodyClassName="flex-col items-stretch [--field-measure:352px]"
       footer={
-        <Button variant="primary" onClick={onClose}>
+        <Button variant="primary" disabled={backupBusy} onClick={onClose}>
           Done
         </Button>
       }
     >
-      <Rail pane={pane} onSelect={setPane} />
+      <Rail pane={pane} onSelect={setPane} disabled={backupBusy} />
       {/* Panes mount only while shown, so each one's setup — the cache reading
           the disk, say — happens exactly when it is asked for. */}
       <Scroller
@@ -154,7 +157,7 @@ export function SettingsDialog({
       >
         {pane === "display" && <DisplayPane />}
         {pane === "interface" && <InterfacePane />}
-        {pane === "files" && <FilesPane />}
+        {pane === "files" && <FilesPane onBackupBusyChange={setBackupBusy} />}
         {pane === "keyboard" && <KeyboardPane />}
         {pane === "cache" && <CachePane />}
         {pane === "about" && <AboutPane />}
@@ -175,15 +178,18 @@ export function SettingsDialog({
 function Rail({
   pane,
   onSelect,
+  disabled,
 }: {
   pane: PaneId;
   onSelect: (id: PaneId) => void;
+  disabled: boolean;
 }) {
   const tabs = useRef<Array<HTMLButtonElement | null>>([]);
 
   // Roving focus: the rail is one tab stop and the arrows walk it, so a
   // keyboard user isn't made to step through five buttons to reach the fields.
   const onKeyDown = (e: React.KeyboardEvent) => {
+    if (disabled) return;
     const step = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0;
     const index = PANES.findIndex((p) => p.id === pane);
     let next = -1;
@@ -205,7 +211,7 @@ function Rail({
       // No rule under the rail: with the header and footer undivided, a hairline
       // inset from the dialog's edges dangles short of both. The selected chip
       // and the gap carry the separation instead.
-      className="flex shrink-0 items-center gap-px px-3 pt-1 pb-2"
+      className="flex min-w-0 shrink-0 items-center gap-px overflow-x-auto px-3 pt-1 pb-2"
     >
       {PANES.map(({ id, label, icon: Icon }, i) => {
         const active = id === pane;
@@ -217,6 +223,7 @@ function Rail({
             }}
             type="button"
             role="tab"
+            disabled={disabled}
             id={`settings-tab-${id}`}
             aria-selected={active}
             aria-controls={`settings-pane-${id}`}
@@ -515,7 +522,7 @@ const IMPORT_DEVELOP: Array<{ value: ImportDevelop; label: string }> = [
   { value: "preset", label: "A preset…" },
 ];
 
-function FilesPane() {
+function FilesPane({ onBackupBusyChange }: { onBackupBusyChange: (busy: boolean) => void }) {
   const importSidecars = useUI((s) => s.importSidecars);
   const setImportSidecars = useUI((s) => s.setImportSidecars);
   const autoWriteSidecars = useUI((s) => s.autoWriteSidecars);
@@ -638,6 +645,7 @@ function FilesPane() {
           label="Remember the last export folder"
         />
       </Field>
+      <CatalogBackup onBusyChange={onBackupBusyChange} />
     </>
   );
 }

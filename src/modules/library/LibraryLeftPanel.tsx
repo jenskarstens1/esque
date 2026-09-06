@@ -14,6 +14,7 @@ import {
   SyncIcon,
 } from '../../design/icons'
 import { useMenu } from '../../design/useMenu'
+import { MENU_ICON } from '../../design/Menu'
 import { sourceMenuItems } from '../../shell/appMenus'
 import { editSmartCollection } from '../../state/smartEditor'
 import { useCatalog, type Source } from '../../state/catalog'
@@ -34,6 +35,17 @@ export function LibraryLeftPanel() {
   const run = useImporter((s) => s.run)
   const runFiles = useImporter((s) => s.runFiles)
   const total = useLiveQuery(() => db.photos.count(), []) ?? 0
+  const folderKey = JSON.stringify(folders.map((folder) => folder.id))
+  // Restoring photos can change membership without changing folder metadata.
+  const folderCounts = useLiveQuery(
+    () => db.transaction('r', db.photos, async () => {
+      const counts = await Promise.all(
+        folders.map((folder) => db.photos.where('folderId').equals(folder.id).count()),
+      )
+      return new Map(folders.map((folder, index): [string, number] => [folder.id, counts[index]]))
+    }),
+    [folderKey],
+  )
   const { menu, open } = useMenu()
 
   const isActive = (s: Source) =>
@@ -112,6 +124,7 @@ export function LibraryLeftPanel() {
             <FolderRow
               key={f.id}
               folder={f}
+              count={folderCounts?.get(f.id)}
               active={isActive({ kind: 'folder', id: f.id })}
               onClick={() => setSource({ kind: 'folder', id: f.id })}
               onContextMenu={(e) => open(e, sourceMenuItems({ kind: 'folder', folder: f }))}
@@ -135,7 +148,7 @@ export function LibraryLeftPanel() {
                 [
                   {
                     label: 'New Collection',
-                    icon: <CollectionIcon size={12} />,
+                    icon: <CollectionIcon size={MENU_ICON} />,
                     onSelect: async () => {
                       const id = await createCollection('Untitled Collection')
                       setSource({ kind: 'collection', id })
@@ -143,7 +156,7 @@ export function LibraryLeftPanel() {
                   },
                   {
                     label: 'New Smart Collection…',
-                    icon: <SmartCollectionIcon size={12} />,
+                    icon: <SmartCollectionIcon size={MENU_ICON} />,
                     onSelect: () => editSmartCollection(),
                   },
                 ],
@@ -189,11 +202,13 @@ export function LibraryLeftPanel() {
 
 function FolderRow({
   folder,
+  count,
   active,
   onClick,
   onContextMenu,
 }: {
   folder: CatalogFolder
+  count?: number
   active: boolean
   onClick: () => void
   onContextMenu?: (e: React.MouseEvent) => void
@@ -222,7 +237,7 @@ function FolderRow({
   return (
     <Row
       label={folder.name}
-      count={folder.photoCount}
+      count={count}
       active={active}
       onClick={onClick}
       onContextMenu={onContextMenu}

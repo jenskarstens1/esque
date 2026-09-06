@@ -93,6 +93,14 @@ export const BRADFORD_D65_TO_D50: Mat3 = invert3(BRADFORD_D50_TO_D65)
 export const XYZ_D50_TO_PROPHOTO = invert3(PROPHOTO_TO_XYZ_D50)
 
 /**
+ * Linear sRGB -> XYZ under the D50 profile connection space.
+ *
+ * The D50 form is the one ICC speaks, so it is what an embedded profile's
+ * colorants have to be compared against.
+ */
+export const SRGB_TO_XYZ_D50 = mul3(BRADFORD_D65_TO_D50, SRGB_TO_XYZ_D65)
+
+/**
  * Linear sRGB (D65) -> linear ProPhoto (D50).
  *
  * Browser-decoded JPEG/PNG pixels are sRGB. Merely undoing their transfer curve

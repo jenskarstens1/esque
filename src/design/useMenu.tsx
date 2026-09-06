@@ -1,17 +1,22 @@
-import { useState } from 'react'
+import { useCallback, useRef, useState } from 'react'
 import { Menu, type MenuItem } from './Menu'
 
 /** Hook that wires a right-click (or button) to a context menu. */
 export function useMenu() {
+  const serial = useRef(0)
   const [state, setState] = useState<{
+    id: number
     x: number
     y: number
     items: MenuItem[]
     above?: boolean
     fromRight?: boolean
+    returnFocus: HTMLElement | null
   } | null>(null)
+  const close = useCallback(() => setState(null), [])
+  const focused = () => (document.activeElement instanceof HTMLElement ? document.activeElement : null)
   return {
-    menu: state && <Menu {...state} onClose={() => setState(null)} />,
+    menu: state && <Menu key={state.id} {...state} onClose={close} />,
     /*
      * Menus nest — a thumbnail sits inside the grid, a slider inside a panel —
      * and the innermost one is always the one meant. Stopping the event keeps
@@ -21,6 +26,7 @@ export function useMenu() {
       e: {
         clientX: number
         clientY: number
+        currentTarget?: EventTarget | null
         preventDefault(): void
         stopPropagation(): void
       },
@@ -28,7 +34,15 @@ export function useMenu() {
     ) => {
       e.preventDefault()
       e.stopPropagation()
-      setState({ x: e.clientX, y: e.clientY, items })
+      const target = e.currentTarget instanceof HTMLElement ? e.currentTarget : null
+      const rect = !e.clientX && !e.clientY ? target?.getBoundingClientRect() : null
+      setState({
+        id: ++serial.current,
+        x: rect?.left ?? e.clientX,
+        y: rect?.bottom ?? e.clientY,
+        items,
+        returnFocus: target && target.tabIndex >= 0 ? target : focused(),
+      })
     },
     /**
      * For menus hung off a button rather than a click. `above` / `fromRight`
@@ -40,7 +54,7 @@ export function useMenu() {
       y: number,
       items: MenuItem[],
       placement?: { above?: boolean; fromRight?: boolean },
-    ) => setState({ x, y, items, ...placement }),
-    close: () => setState(null),
+    ) => setState({ id: ++serial.current, x, y, items, ...placement, returnFocus: focused() }),
+    close,
   }
 }

@@ -86,7 +86,13 @@ export function MobileBar() {
             label="Masks"
             icon={<MaskIcon size={19} />}
             active={developTool === 'mask'}
-            onClick={() => setDevelopTool('mask')}
+            onClick={() => {
+              if (developTool === 'mask' && !rightOpen) {
+                useUI.getState().setOverlayPanel('right')
+              } else {
+                setDevelopTool('mask')
+              }
+            }}
           />
           <Tab
             label="Edit"

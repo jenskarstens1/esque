@@ -76,9 +76,8 @@ async function probe(name, findPoint, arg) {
     const m = menus[0]
     return {
       count: menus.length,
-      rows: m ? m.querySelectorAll('[role="menuitem"]').length : 0,
-      header: m?.querySelector('.esq-section-title')?.textContent?.trim() ?? null,
-      first: m ? [...m.querySelectorAll('[role="menuitem"]')].slice(0, 3).map((b) => b.textContent.trim()) : [],
+      rows: m ? m.querySelectorAll('[role^="menuitem"]').length : 0,
+      first: m ? [...m.querySelectorAll('[role^="menuitem"]')].slice(0, 3).map((b) => b.textContent.trim()) : [],
     }
   })
   // A submenu counts as a second [role=menu], and one often opens because the

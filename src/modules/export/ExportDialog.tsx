@@ -4,6 +4,7 @@ import { Button, Checkbox, IconButton, Select, Switch, TextField } from '../../d
 import { Field, FieldGroup } from '../../design/Field'
 import { Slider } from '../../design/Slider'
 import { Spinner } from '../../design/Spinner'
+import { toast } from '../../design/toast'
 import { Scroller } from '../../design/Scroller'
 import {
   CheckIcon,
@@ -19,6 +20,8 @@ import { cn } from '../../lib/cn'
 import { formatBytes } from '../../lib/math'
 import { allPresets, useExport } from '../../state/exportStore'
 import { db } from '../../catalog/db'
+import { fsSupported } from '../../catalog/fs'
+import type { DownloadFile } from '../../export/download'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { detectFormats } from '../../export/formats'
 import {
@@ -288,13 +291,24 @@ export function ExportDialog() {
   const destination = useExport((s) => s.destination)
   const destinationName = useExport((s) => s.destinationName)
   const setDestination = useExport((s) => s.setDestination)
+  const delivery = useExport((s) => s.delivery)
+  const setDelivery = useExport((s) => s.setDelivery)
+  const readyDownload = useExport((s) => s.readyDownload)
+  const pendingDownloads = useExport((s) => s.pendingDownloads)
+  const downloadStarted = useExport((s) => s.downloadStarted)
+  const download = useExport((s) => s.download)
+  const prepareDownloads = useExport((s) => s.prepareDownloads)
+  const clearJobs = useExport((s) => s.clearJobs)
   const start = useExport((s) => s.start)
+  const retryFailed = useExport((s) => s.retryFailed)
+  const editSettings = useExport((s) => s.editSettings)
   const cancel = useExport((s) => s.cancel)
   const running = useExport((s) => s.running)
   const progress = useExport((s) => s.progress)
   const stage = useExport((s) => s.stage)
   const jobs = useExport((s) => s.jobs)
-  const clearJobs = useExport((s) => s.clearJobs)
+  const editing = useExport((s) => s.editing)
+  const batchError = useExport((s) => s.batchError)
 
   const [formats, setFormats] = useState<Set<string> | null>(null)
 
@@ -337,19 +351,24 @@ export function ExportDialog() {
   const isDng = settings.format === 'dng'
   const rendered = !NEGATIVE_FORMATS.has(settings.format)
   const done = jobs.filter((j) => j.state === 'done').length
+  const prepared = jobs.filter((j) => j.state === 'prepared').length
+  const hasDownload = pendingDownloads.length > 0
   const failures = jobs.filter((j) => j.state === 'failed')
-  const finished = !running && jobs.length > 0
+  const retryCount = jobs.filter((j) => j.state === 'failed' || j.state === 'cancelled').length ||
+    (batchError && !jobs.length ? photoIds.length : 0)
+  const finished = !running && !editing && (jobs.length > 0 || !!batchError)
 
   const chooseFolder = async () => {
     try {
       const dir = await window.showDirectoryPicker({ mode: 'readwrite', id: 'esque-export' })
       setDestination(dir)
-    } catch {
-      /* the user dismissed the picker */
+    } catch (err) {
+      if (err instanceof Error && err.name === 'AbortError') return
+      toast.error('Could not choose a destination', err instanceof Error ? err.message : String(err))
     }
   }
 
-  const busy = running || jobs.length > 0
+  const busy = running || finished
 
   return (
     <Dialog
@@ -366,7 +385,7 @@ export function ExportDialog() {
       dividers={false}
       bodyClassName="items-stretch max-lg:flex-col [--field-measure:360px]"
       footer={
-        <div className="flex w-full items-center gap-3">
+        <div className="flex w-full flex-wrap items-center justify-end gap-3">
           {running ? (
             <>
               <Spinner size={13} />
@@ -376,15 +395,30 @@ export function ExportDialog() {
               <span className="font-mono text-mini text-label-secondary tabular-nums">
                 {Math.round(progress * 100)}%
               </span>
-              <Button onClick={cancel}>Cancel</Button>
+              <Button onClick={cancel} disabled={stage === 'Cancelling…'}>
+                {stage === 'Cancelling…' ? 'Cancelling…' : 'Cancel'}
+              </Button>
             </>
           ) : finished ? (
             <>
               <span className="min-w-0 flex-1" />
-              <Button onClick={clearJobs}>Back</Button>
-              <Button variant="primary" onClick={closeDialog}>
-                Done
+              <Button onClick={editSettings}>Change settings</Button>
+              <Button variant={retryCount || hasDownload ? 'secondary' : 'primary'} onClick={closeDialog}>
+                {hasDownload ? 'Close' : 'Done'}
               </Button>
+              {retryCount > 0 && (
+                <Button variant={hasDownload ? 'secondary' : 'primary'} onClick={() => void retryFailed()}>
+                  Retry {retryCount === 1 ? 'photo' : `${retryCount} photos`}
+                </Button>
+              )}
+              {hasDownload && (
+                <Button
+                  variant="primary"
+                  onClick={readyDownload ? download : () => void prepareDownloads()}
+                >
+                  {readyDownload ? downloadStarted ? 'Download again' : 'Download' : 'Prepare download'}
+                </Button>
+              )}
             </>
           ) : (
             <>
@@ -404,10 +438,12 @@ export function ExportDialog() {
               <Button onClick={closeDialog}>Cancel</Button>
               <Button
                 variant="primary"
-                disabled={!destination || !selected.length}
-                onClick={() => void start()}
+                disabled={(delivery === 'folder' && !destination) || (!selected.length && !retryCount)}
+                onClick={() => void (retryCount ? retryFailed() : start())}
               >
-                Export {selected.length > 1 ? `${selected.length} photos` : 'photo'}
+                {retryCount
+                  ? `Retry ${retryCount === 1 ? 'photo' : `${retryCount} photos`}`
+                  : `Export ${selected.length > 1 ? `${selected.length} photos` : 'photo'}`}
               </Button>
             </>
           )}
@@ -415,49 +451,91 @@ export function ExportDialog() {
       }
     >
       {busy ? (
-        <JobList jobs={jobs} progress={progress} done={done} failures={failures.length} />
+        <JobList
+          jobs={jobs}
+          progress={progress}
+          done={done}
+          prepared={prepared}
+          readyDownload={readyDownload}
+          downloadStarted={downloadStarted}
+          failures={failures.length}
+          error={batchError}
+        />
       ) : (
         <>
           <PresetRail />
           <Scroller edgeFade frameClassName="min-h-0 flex-1" className="px-5 pt-1 pb-4">
+            {retryCount > 0 && (
+              <div className="flex items-center gap-3 pt-3 pb-1">
+                <p className="flex-1 text-mini text-label-secondary">
+                  Only {retryCount === 1 ? 'the unfinished photo will' : `${retryCount} unfinished photos will`} retry.
+                  {' '}Completed photos are kept.
+                </p>
+                <Button onClick={clearJobs}>Start over</Button>
+              </div>
+            )}
             <FieldGroup label="Destination">
-              <Field label="Folder">
-                <button
-                  type="button"
-                  onClick={() => void chooseFolder()}
-                  className="esq-field flex min-w-0 flex-1 items-center gap-2 text-left"
-                >
-                  {destination ? (
-                    <FolderIcon className="size-3.5 shrink-0 text-icon-tertiary" />
-                  ) : (
-                    <FolderPlusIcon className="size-3.5 shrink-0 text-icon-tertiary" />
-                  )}
-                  <span className={cn('truncate', !destination && 'text-label-tertiary')}>
-                    {destinationName || 'Choose a folder…'}
-                  </span>
-                </button>
+              <Field label="Save to">
+                {fsSupported() ? (
+                  <Select
+                    value={delivery}
+                    onChange={setDelivery}
+                    options={[
+                      { value: 'folder', label: 'Folder' },
+                      { value: 'download', label: 'Browser download' },
+                    ]}
+                    className="flex-1"
+                  />
+                ) : (
+                  <span className="text-ui text-label">Browser download</span>
+                )}
               </Field>
-              <Field label="Subfolder">
-                <TextField
-                  value={settings.subfolder}
-                  onChange={(subfolder) => update({ subfolder })}
-                  placeholder="None"
-                  aria-label="Subfolder"
-                  className="flex-1"
-                />
-              </Field>
-              <Field label="Existing files">
-                <Select
-                  value={settings.overwrite}
-                  onChange={(overwrite) => update({ overwrite })}
-                  options={[
-                    { value: 'rename', label: 'Add a suffix' },
-                    { value: 'skip', label: 'Skip' },
-                    { value: 'overwrite', label: 'Overwrite' },
-                  ]}
-                  className="flex-1"
-                />
-              </Field>
+              {delivery === 'download' ? (
+                <p className="pb-1 text-mini text-label-secondary">
+                  Prepare your photos, then choose Download. Multiple files and XMP sidecars
+                  are bundled in one ZIP (under 4 GB). Your browser chooses where to save it.
+                </p>
+              ) : (
+                <>
+                  <Field label="Folder">
+                    <button
+                      type="button"
+                      onClick={() => void chooseFolder()}
+                      className="esq-field flex min-w-0 flex-1 items-center gap-2 text-left"
+                    >
+                      {destination ? (
+                        <FolderIcon className="size-3.5 shrink-0 text-icon-tertiary" />
+                      ) : (
+                        <FolderPlusIcon className="size-3.5 shrink-0 text-icon-tertiary" />
+                      )}
+                      <span className={cn('truncate', !destination && 'text-label-tertiary')}>
+                        {destinationName || 'Choose a folder…'}
+                      </span>
+                    </button>
+                  </Field>
+                  <Field label="Subfolder">
+                    <TextField
+                      value={settings.subfolder}
+                      onChange={(subfolder) => update({ subfolder })}
+                      placeholder="None"
+                      aria-label="Subfolder"
+                      className="flex-1"
+                    />
+                  </Field>
+                  <Field label="Existing files">
+                    <Select
+                      value={settings.overwrite}
+                      onChange={(overwrite) => update({ overwrite })}
+                      options={[
+                        { value: 'rename', label: 'Add a suffix' },
+                        { value: 'skip', label: 'Skip' },
+                        { value: 'overwrite', label: 'Overwrite' },
+                      ]}
+                      className="flex-1"
+                    />
+                  </Field>
+                </>
+              )}
             </FieldGroup>
 
             <FieldGroup label="File naming">
@@ -947,15 +1025,44 @@ function JobList({
   jobs,
   progress,
   done,
+  prepared,
+  readyDownload,
+  downloadStarted,
   failures,
+  error,
 }: {
   jobs: ReturnType<typeof useExport.getState>['jobs']
   progress: number
   done: number
+  prepared: number
+  readyDownload: DownloadFile | null
+  downloadStarted: boolean
   failures: number
+  error: string | null
 }) {
   return (
     <div className="flex min-w-0 flex-1 flex-col px-5 pt-4 pb-2">
+      {error && (
+        <div className="mb-4 shrink-0" role="alert">
+          <p className="text-ui text-red [overflow-wrap:anywhere]">{error}</p>
+          <p className="mt-1 text-mini text-label-secondary">
+            Your selection and settings are kept. Resolve the error, then retry.
+            {' '}Use Change settings to choose another destination.
+          </p>
+        </div>
+      )}
+      {readyDownload && (
+        <div className="mb-4 shrink-0" role="status">
+          <p className="text-ui text-label">
+            {downloadStarted
+              ? 'Download started. Check your browser downloads.'
+              : 'Your files are ready. Choose Download to save them.'}
+          </p>
+          <p className="mt-1 truncate text-mini text-label-secondary" title={readyDownload.name}>
+            {readyDownload.name} · {formatBytes(readyDownload.blob.size)}
+          </p>
+        </div>
+      )}
       <div className="mb-2.5 h-1 shrink-0 overflow-hidden rounded-full bg-control">
         <div
           className="h-full rounded-full bg-accent transition-[width] duration-[--duration-fast] ease-[--ease-out]"
@@ -963,7 +1070,9 @@ function JobList({
         />
       </div>
       <p className="mb-2.5 shrink-0 text-mini text-label-secondary tabular-nums">
-        {done} of {jobs.length} written
+        {prepared
+          ? `${prepared} of ${jobs.length} prepared${done ? ` · ${done} written` : ''}`
+          : jobs.length ? `${done} of ${jobs.length} written` : 'No photos prepared'}
         {failures > 0 && <span className="text-red"> · {failures} failed</span>}
       </p>
       <Scroller frameClassName="min-h-0 flex-1">
@@ -975,15 +1084,15 @@ function JobList({
               title={
                 job.error ??
                 (job.overLimit
-                  ? `Could not reach ${job.overLimit.requestedKb} kB; written at quality ${job.overLimit.quality}`
+                  ? `Could not reach ${job.overLimit.requestedKb} kB; encoded at quality ${job.overLimit.quality}`
                   : undefined)
               }
             >
               <span className="grid size-3.5 shrink-0 place-items-center">
-                {job.state === 'done' && !job.overLimit && (
+                {(job.state === 'done' || job.state === 'prepared') && !job.overLimit && !job.error && (
                   <CheckIcon className="size-3.5 text-green" />
                 )}
-                {job.state === 'done' && job.overLimit && (
+                {(job.state === 'done' || job.state === 'prepared') && (job.overLimit || job.error) && (
                   <WarningIcon className="size-3.5 text-orange" />
                 )}
                 {job.state === 'failed' && <WarningIcon className="size-3.5 text-red" />}
@@ -1010,8 +1119,8 @@ function JobList({
                * that withheld it. The reason takes the trailing cell; the
                * tooltip stays for anything too long to sit in it.
                */}
-              {job.state === 'failed' ? (
-                <span className="max-w-[45%] shrink-0 truncate text-mini text-red">
+              {job.state === 'failed' || job.error ? (
+                <span className={cn('max-w-[45%] shrink-0 truncate text-mini', job.state === 'failed' ? 'text-red' : 'text-orange')}>
                   {job.error ?? 'Failed'}
                 </span>
               ) : job.state === 'skipped' || job.state === 'cancelled' ? (

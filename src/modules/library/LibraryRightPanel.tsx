@@ -4,7 +4,7 @@ import { PanelSection } from '../../design/Panel'
 import { Scroller } from '../../design/Scroller'
 import { Histogram } from './Histogram'
 import { useCatalog } from '../../state/catalog'
-import { usePhoto, usePreviewUrl, useSelectedPhotos, useThumbUrl } from '../../catalog/hooks'
+import { usePhoto, usePhotoSelection, usePreviewUrl, useThumbUrl } from '../../catalog/hooks'
 import { addKeywords, removeKeyword, setLabel, setRating } from '../../catalog/actions'
 import {
   formatAperture,
@@ -28,28 +28,28 @@ const LABELS: { value: ColorLabel; color: string; name: string }[] = [
 export function LibraryRightPanel() {
   const primaryId = useCatalog((s) => s.primaryId)
   const photo = usePhoto(primaryId)
-  const selected = useSelectedPhotos()
+  const selection = usePhotoSelection()
   const preview = usePreviewUrl(photo)
   const thumb = useThumbUrl(photo)
 
   return (
-    <Scroller frameClassName="h-full" className="flex flex-col pb-6">
+    <Scroller data-panel="library-right" frameClassName="h-full" className="flex flex-col pb-6">
       <Histogram url={preview ?? thumb} hasPhoto={!!photo} />
       <CaptureLine photo={photo} />
 
       <PanelSection title="Quick Actions" defaultOpen>
         <div className="flex flex-col gap-2 px-3 pt-1 pb-3">
-          <RatingRow photo={photo} targets={selected.map((p) => p.id)} />
-          <LabelRow photo={photo} targets={selected.map((p) => p.id)} />
+          <RatingRow rating={selection.values.rating} targets={selection.ids} disabled={!selection.ready} />
+          <LabelRow current={selection.values.label} targets={selection.ids} disabled={!selection.ready} />
         </div>
       </PanelSection>
 
       <PanelSection title="Keywording" defaultOpen={false}>
-        <Keywording photos={selected.length ? selected : photo ? [photo] : []} />
+        <Keywording photos={selection.photos} />
       </PanelSection>
 
       <PanelSection title="Metadata" defaultOpen>
-        <Metadata photo={photo} count={selected.length} />
+        <Metadata photo={photo} count={selection.ids.length} />
       </PanelSection>
     </Scroller>
   )
@@ -75,44 +75,72 @@ function CaptureLine({ photo }: { photo?: Photo }) {
   )
 }
 
-function RatingRow({ photo, targets }: { photo?: Photo; targets: string[] }) {
-  const rating = photo?.rating ?? 0
-  const ids = targets.length ? targets : photo ? [photo.id] : []
+function RatingRow({
+  rating,
+  targets,
+  disabled,
+}: {
+  rating: number | null
+  targets: string[]
+  disabled: boolean
+}) {
   return (
     <Field label="Rating">
-      <div className="flex items-center gap-1">
+      <div
+        role="group"
+        aria-label={rating === null ? 'Rating: mixed values' : 'Rating'}
+        className="flex items-center gap-1"
+      >
         {[1, 2, 3, 4, 5].map((n) => (
           <button
             key={n}
             type="button"
-            disabled={!ids.length}
-            onClick={() => setRating(ids, rating === n ? 0 : n)}
+            title={`${n} star${n === 1 ? '' : 's'}`}
+            aria-label={`${n} star${n === 1 ? '' : 's'}`}
+            aria-pressed={rating === n}
+            disabled={disabled}
+            onClick={() => setRating(targets, rating === n ? 0 : n)}
             className={cn(
               'transition-colors duration-[--duration-fast] disabled:opacity-30',
-              n <= rating ? 'text-icon' : 'text-icon-quaternary hover:text-icon-tertiary',
+              rating !== null && n <= rating ? 'text-icon' : 'text-icon-quaternary hover:text-icon-tertiary',
             )}
           >
-            <StarIcon size={12} filled={n <= rating} />
+            <StarIcon size={12} filled={rating !== null && n <= rating} />
           </button>
         ))}
+        {rating === null && (
+          <span aria-hidden className="ml-1 text-micro text-label-secondary">Mixed</span>
+        )}
       </div>
     </Field>
   )
 }
 
-function LabelRow({ photo, targets }: { photo?: Photo; targets: string[] }) {
-  const current = photo?.label ?? 'none'
-  const ids = targets.length ? targets : photo ? [photo.id] : []
+function LabelRow({
+  current,
+  targets,
+  disabled,
+}: {
+  current: ColorLabel | null
+  targets: string[]
+  disabled: boolean
+}) {
   return (
     <Field label="Label">
-      <div className="flex items-center gap-1.5">
+      <div
+        role="group"
+        aria-label={current === null ? 'Color label: mixed values' : 'Color label'}
+        className="flex items-center gap-1.5"
+      >
         {LABELS.map((l) => (
           <button
             key={l.value}
             type="button"
             title={l.name}
-            disabled={!ids.length}
-            onClick={() => setLabel(ids, current === l.value ? 'none' : l.value)}
+            aria-label={l.name}
+            aria-pressed={current === l.value}
+            disabled={disabled}
+            onClick={() => setLabel(targets, current === l.value ? 'none' : l.value)}
             style={{ background: l.color }}
             className={cn(
               'size-3 rounded-[3px] transition-[transform,box-shadow] duration-[--duration-fast] ease-[--ease-out]',
@@ -123,6 +151,9 @@ function LabelRow({ photo, targets }: { photo?: Photo; targets: string[] }) {
             )}
           />
         ))}
+        {current === null && (
+          <span aria-hidden className="text-micro text-label-secondary">Mixed</span>
+        )}
       </div>
     </Field>
   )

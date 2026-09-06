@@ -4,6 +4,7 @@ import { db } from './db'
 import { cacheRead, previewKey, thumbKey } from './opfs'
 import { ensurePreview, ensureThumb } from './previews'
 import { applyFilters, sortPhotos, useCatalog } from '../state/catalog'
+import { selectionValues } from './selectionValues'
 import type { Photo } from '../core/types'
 
 /** Photo count in the whole catalog, for chrome that hides itself when empty. */
@@ -23,7 +24,7 @@ const NO_PHOTOS: Photo[] = []
  * anyone reading `?? []`. `usePhotos` has to tell them apart, because acting on
  * the first as though it were the second throws away the selection.
  */
-function useSourceQuery(): Photo[] | undefined {
+export function useSourceQuery(): Photo[] | undefined {
   const source = useCatalog((s) => s.source)
 
   return useLiveQuery(async () => {
@@ -111,6 +112,28 @@ export function useSelectedPhotos(): Photo[] {
   )
 }
 
+export function usePhotoSelection() {
+  const selected = useCatalog((s) => s.selected)
+  const primaryId = useCatalog((s) => s.primaryId)
+  const ids = useMemo(
+    () => selected.length ? selected : primaryId ? [primaryId] : [],
+    [selected, primaryId],
+  )
+  const key = JSON.stringify(ids)
+  const result = useLiveQuery(async () => {
+    const rows = await db.photos.bulkGet(ids)
+    return { key, photos: rows.filter((photo): photo is Photo => photo !== undefined) }
+  }, [key])
+  // A selection can change before its query resolves. Never use the old
+  // selection's common value to decide whether a click should clear the new one.
+  const ready = result !== undefined && result.key === key && result.photos.length === ids.length
+  const photos = ready && result ? result.photos : NO_PHOTOS
+  return useMemo(
+    () => ({ ids, photos, values: selectionValues(photos), ready: ready && ids.length > 0 }),
+    [ids, photos, ready],
+  )
+}
+
 export function useFolders() {
   return useLiveQuery(() => db.folders.orderBy('name').toArray(), []) ?? []
 }
@@ -136,6 +159,16 @@ function rememberUrl(key: string, url: string) {
       urlCache.delete(oldest)
     }
   }
+}
+
+/** Releases a memoised URL, for when the asset behind its key is retired. */
+export function forgetCachedUrl(key: string) {
+  const url = urlCache.get(key)
+  if (!url) return
+  urlCache.delete(key)
+  // The <img> pointing at it is about to be handed a new src; revoking under
+  // it would blank the frame in between.
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 
 /**
@@ -217,7 +250,10 @@ export function useThumbUrl(photo: Photo | undefined): string | null {
 export function usePreviewUrl(photo: Photo | undefined): string | null {
   const id = photo?.id ?? null
   const ensure = useMemo(() => (id ? () => ensurePreview(id) : undefined), [id])
-  return useCachedUrl(id ? previewKey(id) : null, ensure)
+  // Keyed by revision so a saved edit retires the memoised URL along with the
+  // file. Without it the Library keeps handing back the preview of a look the
+  // photographer has already moved away from.
+  return useCachedUrl(id ? previewKey(id, photo?.previewRev ?? 0) : null, ensure)
 }
 
 // ---------------------------------------------------------------------------

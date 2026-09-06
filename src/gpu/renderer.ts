@@ -207,8 +207,27 @@ export class Renderer {
    * Created with mips so a zoomed-out presentation can minify without aliasing.
    */
   private chain: PingPong | null = null
-  /** Scratch blur chains, one per downscale factor. */
-  private aux = new Map<number, PingPong>()
+  /**
+   * Scratch blur chains, keyed by downscale factor *and* size.
+   *
+   * The graph blurs at chain size before geometry and at cropped size after
+   * it, so one frame can ask the same factor for two different shapes. Keying
+   * on the factor alone made the second request destroy a texture the first
+   * request's pass had already been encoded to read.
+   */
+  private aux = new Map<string, { chain: PingPong; frame: number }>()
+  /**
+   * Chains replaced inside the frame currently being encoded.
+   *
+   * A resize is not a safe moment to free the old textures: a compare pass
+   * records the "before" pane, resizes for the differently cropped "after"
+   * pane, and submits both together. Freeing at the resize would destroy
+   * textures the first pane's commands still read. Held until the next frame
+   * begins, by which point the submission that could reference them is done.
+   */
+  private retired: PingPong[] = []
+  /** Counts encoded frames, so a chain can be retired once nothing wants it. */
+  private frameSeq = 0
   /** Where the graph continues once geometry has changed the image's size. */
   private geom: PingPong | null = null
   /** Full-resolution accumulator for a tiled export; see beginComposite. */
@@ -217,12 +236,21 @@ export class Renderer {
   private ownsSource = true
   /** True while the loaded image has already been through the colour graph. */
   private graded = false
-  private lut: Tex | null = null
+  /**
+   * Curve LUTs held for the frame being encoded.
+   *
+   * A queue write lands ahead of the commands the encoder is still collecting,
+   * so uploading every curve into one texture makes the last upload the one
+   * every draw in the frame reads. Any frame carrying more than one curve —
+   * several masks, or a before/after pair — therefore takes a texture per
+   * curve, and the pool is rewound when the next frame opens.
+   */
+  private lutPool: Tex[] = []
+  private lutCursor = 0
   private lutData = new Float32Array(LUT_SIZE * 4)
   /** Mask coverage buffers, sized to the framed image. */
   private maskAcc: PingPong | null = null
   private maskScratch: PingPong | null = null
-  private maskLut: Tex | null = null
   private maskLutData = new Float32Array(LUT_SIZE * 4)
   /**
    * Segmentation coverage, uploaded once per cache key.
@@ -250,6 +278,8 @@ export class Renderer {
 
   /** Result of the last edit graph, before the output transform. */
   private lastResult: Tex | null = null
+  /** The same, but before any mask overlay was tinted over it. */
+  private lastClean: Tex | null = null
   /** Its size, which a crop makes different from the source's. */
   private lastSize = { width: 0, height: 0 }
 
@@ -363,6 +393,7 @@ export class Renderer {
     // Mips allocated so a minified viewport can present without aliasing.
     this.chain = new PingPong(this.ctx, image.width, image.height, { mips: true })
     this.lastResult = null
+    this.lastClean = null
     this.frame = {
       resolution: [image.width, image.height],
       offset: [0, 0],
@@ -618,7 +649,7 @@ export class Renderer {
       !isIdentityPoints(tc.red) || !isIdentityPoints(tc.green) || !isIdentityPoints(tc.blue)
 
     if (hasRgb || hasChannels) {
-      this.uploadLut(tc)
+      const lut = this.uploadLut(tc)
       const CURVE_MODE: Record<string, number> = {
         standard: 0,
         weighted: 1,
@@ -628,7 +659,7 @@ export class Renderer {
         perceptual: 5,
       }
       pass(this.cache.get('curve', CURVE_FS), (p) => {
-        p.tex('uLut', this.lut)
+        p.tex('uLut', lut)
           .set('uHasRgb', hasRgb ? 1 : 0)
           .set('uHasChannels', hasChannels ? 1 : 0)
           .set('uMode', CURVE_MODE[tc.rgbMode] ?? 0)
@@ -810,13 +841,13 @@ export class Renderer {
         const fine = this.blurAt(input, w, h, 1.6, 2)
         const coarse = this.blurAt(input, w, h, 3.0, 8)
         const hasCurve = a.curve.length > 0 && !isIdentityPoints(a.curve)
-        if (hasCurve) this.uploadMaskLut(a.curve)
+        const maskLut = hasCurve ? this.uploadMaskLut(a.curve) : null
 
         pass(apply, (p) => {
           p.tex('uMask', cov)
             .tex('uFine', fine)
             .tex('uCoarse', coarse)
-            .tex('uLut', hasCurve ? this.maskLut : null)
+            .tex('uLut', maskLut)
             .set('uHasCurve', hasCurve ? 1 : 0)
             .set('uLutSize', LUT_SIZE)
             .set('uOpacity', mask.opacity)
@@ -865,6 +896,13 @@ export class Renderer {
 
     // --- Mask overlay ---------------------------------------------------------
     // Last of all, so what you see tinted is the finished picture.
+    //
+    // Kept separately because the colour-range picker must sample the picture,
+    // not the tint drawn over it: re-picking a covered pixel would otherwise
+    // store the overlay's colour and throw the selection away. The chain has
+    // ping-ponged past this texture, so it stays intact until the next frame
+    // writes it — exactly as long as `lastResult` does.
+    this.lastClean = input
     if (overlay) {
       const mask = edits.masks.find((m) => m.id === overlay.maskId)
       const cov = mask ? this.buildMask(mask, input, w, h) : null
@@ -912,8 +950,8 @@ export class Renderer {
     if (!parts.length) return null
 
     if (!this.maskAcc || this.maskAcc.width !== width || this.maskAcc.height !== height) {
-      this.maskAcc?.dispose()
-      this.maskScratch?.dispose()
+      this.retire(this.maskAcc)
+      this.retire(this.maskScratch)
       this.maskAcc = new PingPong(this.ctx, width, height)
       this.maskScratch = new PingPong(this.ctx, width, height)
     }
@@ -949,6 +987,10 @@ export class Renderer {
           })
           raster.use()
           raster.tex('uImage', image).tex('uPrev', scratch.read)
+          // Bound for the same reason the other kinds bind it below: `uAlpha`
+          // is declared unconditionally, and a declared texture that is never
+          // bound is an error rather than an empty read.
+          raster.tex('uAlpha', null)
           raster.setVectors('uDabs', buf, 4)
           raster
             .set('uKind', kind)
@@ -1073,7 +1115,7 @@ export class Renderer {
     if (!source || !this.frameGeom) return source
 
     if (!this.aiFramed || this.aiFramed.width !== width || this.aiFramed.height !== height) {
-      this.aiFramed?.dispose()
+      this.retire(this.aiFramed)
       this.aiFramed = new PingPong(this.ctx, width, height)
     }
     const target = this.aiFramed
@@ -1091,8 +1133,8 @@ export class Renderer {
     return out
   }
 
-  /** Uploads a mask's point curve into its own LUT. */
-  private uploadMaskLut(points: CurvePoint[]) {
+  /** Uploads a mask's point curve into a LUT of its own. */
+  private uploadMaskLut(points: CurvePoint[]): Tex {
     const c = splineLut(points)
     for (let i = 0; i < LUT_SIZE; i++) {
       this.maskLutData[i * 4] = c[i]
@@ -1100,23 +1142,71 @@ export class Renderer {
       this.maskLutData[i * 4 + 2] = c[i]
       this.maskLutData[i * 4 + 3] = c[i]
     }
-    if (!this.maskLut) {
+    const tex = this.nextLut()
+    const half = new Uint16Array(this.maskLutData.length)
+    for (let i = 0; i < this.maskLutData.length; i++) half[i] = floatToHalf(this.maskLutData[i])
+    writeTexture(this.ctx, tex, half)
+    return tex
+  }
+
+  /** Hands out the next unused LUT texture of the frame, growing the pool. */
+  private nextLut(): Tex {
+    let tex = this.lutPool[this.lutCursor]
+    if (!tex) {
       // RGBA16F keeps linear filtering core-supported; 11-bit mantissa is well
       // below the 1/255 steps the LUT ultimately feeds.
-      this.maskLut = createTexture(this.ctx, LUT_SIZE, 1, {
+      tex = createTexture(this.ctx, LUT_SIZE, 1, {
         format: 'rgba16float',
         filter: 'linear',
       })
+      this.lutPool[this.lutCursor] = tex
     }
-    const half = new Uint16Array(this.maskLutData.length)
-    for (let i = 0; i < this.maskLutData.length; i++) half[i] = floatToHalf(this.maskLutData[i])
-    writeTexture(this.ctx, this.maskLut, half)
+    this.lutCursor++
+    return tex
+  }
+
+  /**
+   * Opens the encoder for a frame and rewinds the per-frame scratch.
+   *
+   * Both the LUT pool and the blur chains are reused across frames but must
+   * stay stable *within* one, so the rewind belongs here rather than at any of
+   * the several places a frame can be started from.
+   */
+  private beginFrame(): Frame {
+    this.frameSeq++
+    this.lutCursor = 0
+    // A crop drag asks for a new shape every frame, so chains no draw has
+    // wanted for a couple of frames are returned. Retiring them here — before
+    // anything is encoded — keeps a destroy from ever landing inside a frame.
+    for (const [key, entry] of this.aux) {
+      if (this.frameSeq - entry.frame > 2) {
+        entry.chain.dispose()
+        this.aux.delete(key)
+      }
+    }
+    // Chains replaced *during* the previous frame. Compare renders two panes
+    // of different shapes into one submission, so the second pane's resize
+    // would otherwise free textures the first pane's recorded draws still read.
+    for (const chain of this.retired) chain.dispose()
+    this.retired.length = 0
+    return new Frame(this.ctx)
+  }
+
+  /**
+   * Hands a chain back once the frame that may have read it has been submitted.
+   *
+   * Destroying a texture a recorded-but-unsubmitted command references is a
+   * validation error, and the resize that replaces a chain can happen anywhere
+   * inside a frame — including between the two halves of a compare.
+   */
+  private retire(chain: PingPong | null | undefined) {
+    if (chain) this.retired.push(chain)
   }
 
   /** The post-geometry chain, resized when the crop changes shape. */
   private geometryChain(width: number, height: number): PingPong {
     if (!this.geom || this.geom.width !== width || this.geom.height !== height) {
-      this.geom?.dispose()
+      this.retire(this.geom)
       // Mips allocated so a minified viewport can present the cropped result without aliasing.
       this.geom = new PingPong(this.ctx, width, height, { mips: true })
     }
@@ -1150,12 +1240,16 @@ export class Renderer {
     const w = Math.max(1, Math.floor(srcW / downscale))
     const h = Math.max(1, Math.floor(srcH / downscale))
 
-    let aux = this.aux.get(downscale)
-    if (!aux || aux.width !== w || aux.height !== h) {
-      aux?.dispose()
-      aux = new PingPong(this.ctx, w, h)
-      this.aux.set(downscale, aux)
+    // Keyed on the shape as well as the factor: a texture the frame has
+    // already encoded a read of must survive until that frame is submitted.
+    const key = `${downscale}:${w}x${h}`
+    let entry = this.aux.get(key)
+    if (!entry) {
+      entry = { chain: new PingPong(this.ctx, w, h), frame: this.frameSeq }
+      this.aux.set(key, entry)
     }
+    entry.frame = this.frameSeq
+    const aux = entry.chain
 
     // Downsample into the scratch chain first.
     const copy = this.cache.get('copy', COPY_FS)
@@ -1183,7 +1277,7 @@ export class Renderer {
     return cur
   }
 
-  private uploadLut(tc: Edits['curve']) {
+  private uploadLut(tc: Edits['curve']): Tex {
     const composite = composeLut(parametricLut(tc.parametric), splineLut(tc.rgb))
     const r = splineLut(tc.red)
     const g = splineLut(tc.green)
@@ -1196,19 +1290,13 @@ export class Renderer {
       this.lutData[i * 4 + 3] = composite[i]
     }
 
-    if (!this.lut) {
-      // RGBA16F keeps linear filtering core-supported; 11-bit mantissa is well
-      // below the 1/255 steps the LUT ultimately feeds.
-      this.lut = createTexture(this.ctx, LUT_SIZE, 1, {
-        format: 'rgba16float',
-        filter: 'linear',
-      })
-    }
+    const tex = this.nextLut()
     // `writeTexture` copies raw bytes verbatim, so float32 data has to be
     // down-converted to the half-float the texture format expects.
     const half = new Uint16Array(this.lutData.length)
     for (let i = 0; i < this.lutData.length; i++) half[i] = floatToHalf(this.lutData[i])
-    writeTexture(this.ctx, this.lut, half)
+    writeTexture(this.ctx, tex, half)
+    return tex
   }
 
   // -------------------------------------------------------------------------
@@ -1224,7 +1312,7 @@ export class Renderer {
    */
   renderOffscreen(edits: Edits) {
     if (!this.source || !this.sourceInfo) return
-    this.enc = new Frame(this.ctx)
+    this.enc = this.beginFrame()
     try {
       this.runGraph(edits, false)
       this.enc.submit()
@@ -1256,7 +1344,7 @@ export class Renderer {
       this.composite = createTarget(this.ctx, width, height)
     }
     // A clear is a load-op on a render pass, not a standalone call.
-    this.enc = new Frame(this.ctx)
+    this.enc = this.beginFrame()
     const rp = this.enc.encoder.beginRenderPass({
       colorAttachments: [{
         view: this.composite.attach,
@@ -1286,7 +1374,7 @@ export class Renderer {
     const acc = this.composite
     if (!acc || !this.sourceInfo) return
 
-    this.enc = new Frame(this.ctx)
+    this.enc = this.beginFrame()
     try {
       const result = this.runGraph(edits, false)
       const sh = this.lastSize.height || this.sourceInfo.height
@@ -1332,7 +1420,7 @@ export class Renderer {
       offset: [0, 0],
       scale: [1, 1],
     }
-    this.enc = new Frame(this.ctx)
+    this.enc = this.beginFrame()
     try {
       this.runGraph(edits, false)
       this.enc.submit()
@@ -1356,7 +1444,7 @@ export class Renderer {
     const ch = this.canvas.height
     const rect = opts.rect ?? { x: 0, y: 0, width: cw, height: ch }
 
-    this.enc = new Frame(this.ctx)
+    this.enc = this.beginFrame()
     try {
       const graph = this.graphFor(edits, opts)
       // Acquire once per frame; calling getCurrentTexture multiple times within
@@ -1386,7 +1474,7 @@ export class Renderer {
     if (!this.source || !this.sourceInfo || !panes.length) return false
     this.ensureConfigured()
 
-    this.enc = new Frame(this.ctx)
+    this.enc = this.beginFrame()
     try {
       // Acquire once for the whole frame; all panes share the same surface texture.
       const view = this.ctx.surface.getCurrentTexture().createView()
@@ -1627,7 +1715,7 @@ export class Renderer {
       this.histTarget = createTarget(this.ctx, w, h, { format: 'rgba8unorm', filter: 'linear' })
     }
 
-    this.enc = new Frame(this.ctx)
+    this.enc = this.beginFrame()
     try {
       this.setFiltering(this.lastResult, true)
       const p = this.outputPass(this.lastResult, { outputSpace }, [w, h], 0, undefined, true, 'rgba8unorm')
@@ -1646,6 +1734,11 @@ export class Renderer {
     const l = new Uint32Array(256)
     let clipShadow = 0
     let clipHighlight = 0
+    // The same code-value thresholds the viewport overlay paints with. Two sets
+    // of numbers for one idea is how the readout ends up counting a different
+    // set of pixels than the overlay highlights on the very same frame.
+    const hi = CLIP_HIGHLIGHT_DEFAULT * 255
+    const lo = CLIP_SHADOW_DEFAULT * 255
 
     for (let i = 0; i < px.length; i += 4) {
       const R = px[i]
@@ -1655,8 +1748,8 @@ export class Renderer {
       g[G]++
       b[B]++
       l[(R * 77 + G * 151 + B * 28) >> 8]++
-      if (R <= 1 && G <= 1 && B <= 1) clipShadow++
-      if (R >= 254 || G >= 254 || B >= 254) clipHighlight++
+      if (R <= lo && G <= lo && B <= lo) clipShadow++
+      if (R >= hi || G >= hi || B >= hi) clipHighlight++
     }
 
     let max = 0
@@ -1688,20 +1781,28 @@ export class Renderer {
     return new ImageData(res.data as Uint8ClampedArray<ArrayBuffer>, res.width, res.height)
   }
 
+  /**
+   * @param clean Reads the picture without any mask overlay tinted over it.
+   *   The colour-range picker needs this: sampling the presented graph would
+   *   feed the overlay's own colour back into the mask that drew it.
+   */
   async readPixels(
     outputSpace: OutputSpace,
     depth: 8 | 16,
     crop?: { x: number; y: number; width: number; height: number } | null,
+    clean = false,
   ): Promise<{ width: number; height: number; data: Uint8ClampedArray | Uint16Array } | null> {
-    return this.readback(outputSpace, depth, crop ?? null)
+    return this.readback(outputSpace, depth, crop ?? null, clean)
   }
 
   private async readback(
     outputSpace: OutputSpace,
     depth: 8 | 16,
     crop: { x: number; y: number; width: number; height: number } | null,
+    clean = false,
   ) {
-    if (!this.lastResult || !this.sourceInfo) return null
+    const result = clean ? (this.lastClean ?? this.lastResult) : this.lastResult
+    if (!result || !this.sourceInfo) return null
     // A crop makes the graph's output smaller than the source; the readback is
     // of what was rendered, not of what was loaded.
     const { width, height } = this.lastSize.width ? this.lastSize : this.sourceInfo
@@ -1715,10 +1816,10 @@ export class Renderer {
     const format: GPUTextureFormat = deep ? 'rgba16float' : 'rgba8unorm'
     const target = createTarget(this.ctx, width, height, { format, filter: 'nearest' })
 
-    this.enc = new Frame(this.ctx)
+    this.enc = this.beginFrame()
     try {
       // 16-bit output has no visible banding, so it skips the dither entirely.
-      const p = this.outputPass(this.lastResult, { outputSpace }, [width, height], deep ? 0 : 1 / 255, undefined, false, format)
+      const p = this.outputPass(result, { outputSpace }, [width, height], deep ? 0 : 1 / 255, undefined, false, format)
       drawPass(this.enc, target, p)
       this.enc.submit()
     } finally {
@@ -1800,8 +1901,11 @@ export class Renderer {
     this.source = null
     this.chain?.dispose()
     this.chain = null
-    for (const aux of this.aux.values()) aux.dispose()
+    for (const entry of this.aux.values()) entry.chain.dispose()
     this.aux.clear()
+    // Teardown happens between frames, so anything held for the encoder can go.
+    for (const chain of this.retired) chain.dispose()
+    this.retired.length = 0
     this.geom?.dispose()
     this.geom = null
     this.maskAcc?.dispose()
@@ -1815,6 +1919,7 @@ export class Renderer {
     this.paneCache?.target.destroy()
     this.paneCache = null
     this.lastResult = null
+    this.lastClean = null
     this.lastGraphKey = null
   }
 
@@ -1836,10 +1941,9 @@ export class Renderer {
     this.disposeSource()
     this.composite?.destroy()
     this.composite = null
-    this.maskLut?.destroy()
-    this.maskLut = null
-    this.lut?.destroy()
-    this.lut = null
+    for (const tex of this.lutPool) tex.destroy()
+    this.lutPool = []
+    this.lutCursor = 0
     this.histTarget?.destroy()
     this.histTarget = null
     this.cache.dispose()

@@ -117,7 +117,7 @@ async function openPhotoMenu() {
   await page.mouse.click(pt.x, pt.y, { button: 'right' })
   await new Promise((r) => setTimeout(r, 350))
   return page.evaluate(() =>
-    [...document.querySelectorAll('[role="menu"] [role="menuitem"]')].map((b) =>
+    [...document.querySelectorAll('[role="menu"] [role^="menuitem"]')].map((b) =>
       b.textContent.trim(),
     ),
   )
@@ -126,7 +126,7 @@ async function openPhotoMenu() {
 /** Centre of the first visible menu row whose label starts with `text`. */
 const rowPoint = (text) =>
   page.evaluate((t) => {
-    const row = [...document.querySelectorAll('[role="menu"] [role="menuitem"]')].find(
+    const row = [...document.querySelectorAll('[role="menu"] [role^="menuitem"]')].find(
       (b) => b.textContent.trim().startsWith(t) && b.getBoundingClientRect().width > 0,
     )
     if (!row) return null
@@ -155,7 +155,7 @@ async function pickMetadata(text) {
   const target = await rowPoint(text)
   if (!target) {
     const seen = await page.evaluate(() =>
-      [...document.querySelectorAll('[role="menu"] [role="menuitem"]')].map((b) => b.textContent.trim()),
+      [...document.querySelectorAll('[role="menu"] [role^="menuitem"]')].map((b) => b.textContent.trim()),
     )
     return { opened: true, picked: false, seen }
   }

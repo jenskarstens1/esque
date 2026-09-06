@@ -11,7 +11,7 @@ import { useZoomPan, type ViewState } from '../../lib/useZoomPan'
 import { useDevicePixelRatio } from '../../lib/useDevicePixelRatio'
 import { usePreviewUrl, useThumbUrl } from '../../catalog/hooks'
 import type { OutputSpace } from '../../gpu/colorspace'
-import type { Edits, Photo } from '../../core/types'
+import { isAiGeometry, type Edits, type Photo } from '../../core/types'
 import { ResolvingImage, RESOLVE_MS } from '../../design/ResolvingImage'
 import { StatusPill } from '../../design/StatusPill'
 import { setHistogram } from '../../develop/histogramStore'
@@ -26,7 +26,9 @@ import { MaskOverlay } from './MaskOverlay'
 import { RetouchOverlay } from './RetouchOverlay'
 import { WbDropperOverlay } from './WbDropperOverlay'
 import { useMasking } from '../../develop/masking'
-import { useDetect } from '../../ai/detect'
+import { restoreCoverage, useDetect } from '../../ai/detect'
+import { getAlpha } from '../../ai/alpha'
+import { toast } from '../../design/toast'
 import { setActiveRenderer } from './activeRenderer'
 
 interface Props {
@@ -201,6 +203,7 @@ export function Viewport({ photo }: Props) {
 
   const edits = useDevelop((s) => s.edits)
   const previewEdits = useDevelop((s) => s.previewEdits)
+  const beforeMasks = useDevelop((s) => s.before.masks)
   const revision = useDevelop((s) => s.revision)
   // Coverage lands outside the edit stack, so a finished detection has to
   // announce itself separately or the mask stays empty until the next edit.
@@ -217,6 +220,42 @@ export function Viewport({ photo }: Props) {
   const outputSpace = useUI((s) => s.softProof)
   const hdr = useUI((s) => s.hdr)
   const hdrHeadroom = useUI((s) => s.hdrHeadroom)
+
+  const coverageKeys = useMemo(() => [...new Set([
+    ...edits.masks,
+    ...(previewEdits?.masks ?? []),
+    ...(beforeAfter === 'off' ? [] : beforeMasks),
+  ].flatMap((mask) => mask.components.flatMap(({ geometry }) =>
+    isAiGeometry(geometry) && geometry.cacheKey ? [geometry.cacheKey] : [],
+  )))].sort(), [edits.masks, previewEdits?.masks, beforeMasks, beforeAfter])
+  const coverageRef = useRef(coverageKeys)
+  if (
+    coverageKeys.length !== coverageRef.current.length ||
+    coverageKeys.some((key, index) => key !== coverageRef.current[index])
+  ) coverageRef.current = coverageKeys
+  const storedCoverage = coverageRef.current
+  const warnedCoverage = useRef<string | null>(null)
+
+  useEffect(() => {
+    const keys = storedCoverage.filter((key) => !getAlpha(key))
+    if (!keys.length) return
+    let live = true
+    void Promise.all(keys.map(restoreCoverage)).then((available) => {
+      if (!live) return
+      for (const key of keys) rendererRef.current?.invalidateCoverage(key)
+      useDetect.setState((s) => ({ revision: s.revision + 1 }))
+      const missing = keys.filter((_, index) => !available[index])
+      const warning = JSON.stringify([photoId, missing])
+      if (missing.length && warnedCoverage.current !== warning) {
+        warnedCoverage.current = warning
+        toast.error(
+          'Detected masks need attention',
+          'Open Masking and run detection again. Your saved mask adjustments are unchanged.',
+        )
+      }
+    })
+    return () => { live = false }
+  }, [storedCoverage, photoId])
 
   // The zoom model always works in *full-resolution* image pixels, so "100%"
   // means one real photo pixel per device pixel no matter which proxy is
@@ -630,7 +669,7 @@ export function Viewport({ photo }: Props) {
             : uncrop(s.before, cropping),
       // The proxy is part of the identity: a sharper decode has to re-run the
       // before graph even though the settings never moved.
-      beforeKey: `${s.photoId}:${s.beforeRevision}:${uploadedFor.current}:${cropping}:${retouching}`,
+      beforeKey: `${s.photoId}:${s.beforeRevision}:${uploadedFor.current}:${cropping}:${retouching}:${useDetect.getState().revision}`,
       overlay: overlayRef.current,
     }
     requestPaint()
@@ -724,7 +763,6 @@ export function Viewport({ photo }: Props) {
           retargetSelection(photo.id)
           items.push(
             { kind: 'separator' },
-            { kind: 'header', label: photo.filename },
             ...photoMenuItems(photo, { collections, compact: true }),
           )
         }

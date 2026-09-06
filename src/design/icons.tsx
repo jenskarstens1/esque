@@ -22,11 +22,17 @@ import {
   ChevronLeft,
   ChevronRight,
   ChevronUp,
+  ChevronsDownUp,
+  ChevronsUpDown,
+  ClipboardPaste,
+  Contrast,
   Copy,
+  CopyPlus,
   Crop,
   Database,
   Download,
   Ellipsis,
+  Eraser,
   Eye,
   EyeOff,
   FlipHorizontal,
@@ -34,15 +40,18 @@ import {
   Flag,
   FlagOff,
   Folder,
+  FolderInput,
   FolderPlus,
   Columns2,
   Funnel,
+  FunnelX,
   Grid2x2,
   Grid3x3,
   LayoutDashboard,
   LayoutPanelLeft,
   History,
   Image,
+  ImageMinus,
   ImagePlus,
   ImageUp,
   Images,
@@ -50,27 +59,38 @@ import {
   Keyboard,
   Layers,
   Link2,
+  List,
   Lock,
   MapPin,
   Minus,
   Monitor,
+  PanelRight,
   PanelsTopLeft,
+  Palette,
   Pencil,
   Pipette,
   Plus,
+  Proportions,
+  Redo2,
   RefreshCw,
   RotateCcw,
   RotateCw,
+  Rows3,
+  Save,
   ScanEye,
   Search,
   Settings,
   SlidersHorizontal,
   Sparkles,
+  SquareDashed,
+  SquareDashedMousePointer,
   SquareSplitHorizontal,
   Star,
+  Sun,
   Tag,
   Trash2,
   TriangleAlert,
+  Undo2,
   WandSparkles,
   X,
   ZoomIn,
@@ -177,11 +197,17 @@ export const SortDescIcon = wrap(ArrowDownWideNarrow)
 
 export const BeforeAfterIcon = wrap(SquareSplitHorizontal)
 export const CropIcon = wrap(Crop)
+/** Crop aspect ratio — the submenu of frame proportions. */
+export const AspectIcon = wrap(Proportions)
 export const DropperIcon = wrap(Pipette)
 export const FlipHorizontalIcon = wrap(FlipHorizontal)
 export const FlipVerticalIcon = wrap(FlipVertical)
 export const HealIcon = wrap(Bandage)
 export const HistogramIcon = wrap(ChartNoAxesColumn)
+/** Exposure, in the sense the histogram means it — how much light landed. */
+export const ExposureIcon = wrap(Sun)
+/** Black and white endpoints, and mask inversion: both are "flip the extremes". */
+export const ContrastIcon = wrap(Contrast)
 export const MaskIcon = wrap(Blend)
 export const RedEyeIcon = wrap(ScanEye)
 export const RotateLeftIcon = wrap(RotateCcw)
@@ -195,11 +221,15 @@ export const CollectionIcon = wrap(Images)
 export const SmartCollectionIcon = wrap(Sparkles)
 /** The Library's filter row. */
 export const FilterIcon = wrap(Funnel)
+/** Drop every active filter and show the whole source again. */
+export const ClearFilterIcon = wrap(FunnelX)
 export const CompareIcon = wrap(Columns2)
 export const ExportIcon = wrap(ImageUp)
 export const FolderIcon = wrap(Folder)
 export const FolderPlusIcon = wrap(FolderPlus)
 export const FilePlusIcon = wrap(ImagePlus)
+/** Taking photos back out of a collection — the mirror of `FilePlusIcon`. */
+export const FileMinusIcon = wrap(ImageMinus)
 export const GridIcon = wrap(Grid2x2)
 /** Grid layout: uniform tiles, photos cropped to fill them. */
 export const TileFillIcon = wrap(Grid3x3)
@@ -207,6 +237,8 @@ export const TileFillIcon = wrap(Grid3x3)
 export const WaterfallIcon = wrap(LayoutPanelLeft)
 export const ImportIcon = wrap(Download)
 export const KeywordIcon = wrap(Tag)
+/** The colour label swatch set — the five marks a photo can wear. */
+export const ColorLabelIcon = wrap(Palette)
 export const LoupeIcon = wrap(Image)
 /** Where the shot was taken — the GPS block in Metadata. */
 export const LocationIcon = wrap(MapPin)
@@ -214,6 +246,8 @@ export const PresetIcon = wrap(WandSparkles)
 export const RejectIcon = wrap(FlagOff)
 export const StackIcon = wrap(Layers)
 export const SurveyIcon = wrap(LayoutDashboard)
+/** A second interpretation of one negative, sharing the original file. */
+export const VirtualCopyIcon = wrap(CopyPlus)
 
 /** Pick flag. `filled` marks the photo as picked rather than merely hovered. */
 const FlagBase = wrap(Flag)
@@ -231,22 +265,39 @@ export const StarIcon = ({ filled, ...p }: P & { filled?: boolean }) => (
 
 export const CheckIcon = wrap(Check)
 export const CloseIcon = wrap(X)
+export const CollapseAllIcon = wrap(ChevronsDownUp)
 export const CopyIcon = wrap(Copy)
 export const DownloadIcon = wrap(Download)
+/** Wiping a container's contents without removing the container. */
+export const EmptyIcon = wrap(Eraser)
+export const ExpandAllIcon = wrap(ChevronsUpDown)
 export const HistoryIcon = wrap(History)
 export const InfoIcon = wrap(Info)
 export const LinkIcon = wrap(Link2)
+export const ListIcon = wrap(List)
 export const LockIcon = wrap(Lock)
 export const MinusIcon = wrap(Minus)
 export const MoreHorizontalIcon = wrap(Ellipsis)
+/** Filing something under a different heading. */
+export const MoveIcon = wrap(FolderInput)
+export const PasteIcon = wrap(ClipboardPaste)
 export const PencilIcon = wrap(Pencil)
 export const PlusIcon = wrap(Plus)
+export const RedoIcon = wrap(Redo2)
 export const ResetIcon = wrap(RotateCcw)
+export const SaveIcon = wrap(Save)
 export const SearchIcon = wrap(Search)
+export const SelectAllIcon = wrap(SquareDashedMousePointer)
+export const SelectNoneIcon = wrap(SquareDashed)
 export const SettingsIcon = wrap(Settings)
+/** The right-hand inspector — where a photo's metadata is read. */
+export const SidePanelIcon = wrap(PanelRight)
 export const SlidersIcon = wrap(SlidersHorizontal)
+/** Solo mode: one panel open at a time, the rest folded away. */
+export const SoloIcon = wrap(Rows3)
 export const SyncIcon = wrap(RefreshCw)
 export const TrashIcon = wrap(Trash2)
+export const UndoIcon = wrap(Undo2)
 export const WarningIcon = wrap(TriangleAlert)
 
 // — Settings panes —

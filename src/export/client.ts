@@ -4,8 +4,8 @@
  * One worker serves both exports and grid thumbnails. Keeping a single instance
  * means one GPU device rather than two, and it naturally serialises the two
  * workloads — which is what we want, since both want the GPU and a lot of
- * memory. Comlink calls queue in order, so an export in flight simply delays a
- * thumbnail refresh instead of fighting it for VRAM.
+ * memory. The worker queues render calls, so an export in flight simply delays
+ * a thumbnail refresh instead of fighting it for VRAM.
  */
 import * as Comlink from 'comlink'
 import type { ExportWorkerApi } from './exportWorker'

@@ -305,7 +305,7 @@ export async function importFolder(
 
   // Reuse the folder record if this directory was imported before.
   const existingFolders = await db.folders.toArray();
-  let folder = existingFolders.find((f) => !f.loose && f.name === handle.name);
+  let folder: CatalogFolder | undefined;
   for (const f of existingFolders) {
     if (!f.handle) continue;
     if (await f.handle.isSameEntry?.(handle)) {

@@ -151,6 +151,24 @@ export function CropOverlay({ frame }: { frame: FrameBox }) {
           if (d.handle.includes('w')) left = right - wantW
           else right = left + wantW
         }
+        // The edge the drag is not moving. Everything below grows or shrinks
+        // around it, so it stays where the user put it.
+        const anchorX = d.handle.includes('w') ? right : left
+        const anchorY = d.handle.includes('n') ? bottom : top
+
+        // Sliding back only works while the rect still fits inside the frame.
+        // Once the drag has grown it past an edge the shape has to shrink
+        // around the anchor instead, because clamping the edges independently
+        // — which is what the final write does — silently abandons the ratio
+        // the lock exists to hold.
+        const fit = Math.min(1, 1 / (right - left), 1 / (bottom - top))
+        if (fit < 1) {
+          left = anchorX + (left - anchorX) * fit
+          right = anchorX + (right - anchorX) * fit
+          top = anchorY + (top - anchorY) * fit
+          bottom = anchorY + (bottom - anchorY) * fit
+        }
+
         // A ratio drag can push past an edge; slide it back rather than
         // silently changing the shape the user asked for.
         if (left < 0) {

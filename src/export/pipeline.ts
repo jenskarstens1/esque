@@ -30,6 +30,7 @@ import { encodeJpeg } from './jpeg'
 import { encodePng16 } from './png'
 import { encodeToLimit } from './limit'
 import { targetSize } from './naming'
+import { floatToHalf, halfToFloat } from '../core/half'
 import { THUMB_EDGE, type ExportSettings } from './types'
 import type { Edits, Photo } from '../core/types'
 import type { WhitePoint } from '../core/color'
@@ -89,6 +90,14 @@ export interface ExportPixelResult {
 
 export interface ThumbPixelInput extends SourceImage {
   edits: Edits
+  /**
+   * Long edge to render at. Defaults to a grid thumbnail; the Library's
+   * preview and 1:1 tiers pass their own, since they render the same graph at
+   * the size the viewer is about to show.
+   */
+  edge?: number
+  /** JPEG quality. A larger render is worth more bits than a thumbnail. */
+  quality?: number
 }
 
 /**
@@ -376,7 +385,10 @@ export async function renderThumb(input: ThumbPixelInput): Promise<Blob | null> 
       0,
       0,
     )
-    return await canvas.convertToBlob({ type: 'image/jpeg', quality: THUMB_QUALITY })
+    return await canvas.convertToBlob({
+      type: 'image/jpeg',
+      quality: input.quality ?? THUMB_QUALITY,
+    })
   } catch (err) {
     // A lost context poisons the cached renderer, so drop it and let the next
     // thumbnail build a fresh one rather than failing forever.
@@ -387,17 +399,18 @@ export async function renderThumb(input: ThumbPixelInput): Promise<Blob | null> 
 }
 
 /**
- * Box-filter down to thumbnail size *before* rendering.
+ * Box-filter down to the target size *before* rendering.
  *
  * Rendering at proxy size and then shrinking would be ~25x the shader work for
  * an identical result at 512px, and vignette/grain are framed to the render
  * size so they'd come out at the wrong scale anyway.
  */
 function downscale(src: ThumbPixelInput): ThumbPixelInput {
+  const edge = src.edge ?? THUMB_EDGE
   const long = Math.max(src.width, src.height)
-  if (long <= THUMB_EDGE) return src
+  if (long <= edge) return src
 
-  const scale = THUMB_EDGE / long
+  const scale = edge / long
   const w = Math.max(1, Math.round(src.width * scale))
   const h = Math.max(1, Math.round(src.height * scale))
   const out = new Uint16Array(w * h * 4)
@@ -417,16 +430,16 @@ function downscale(src: ThumbPixelInput): ThumbPixelInput {
       for (let yy = y0; yy < y1; yy++) {
         let i = (yy * src.width + x0) * 4
         for (let xx = x0; xx < x1; xx++, i += 4) {
-          r += half(src.data[i])
-          g += half(src.data[i + 1])
-          b += half(src.data[i + 2])
+          r += halfToFloat(src.data[i])
+          g += halfToFloat(src.data[i + 1])
+          b += halfToFloat(src.data[i + 2])
           n++
         }
       }
       const o = (y * w + x) * 4
-      out[o] = toHalf(r / n)
-      out[o + 1] = toHalf(g / n)
-      out[o + 2] = toHalf(b / n)
+      out[o] = floatToHalf(r / n)
+      out[o + 1] = floatToHalf(g / n)
+      out[o + 2] = floatToHalf(b / n)
       out[o + 3] = 0x3c00 // 1.0
     }
   }
@@ -434,37 +447,3 @@ function downscale(src: ThumbPixelInput): ThumbPixelInput {
   return { ...src, width: w, height: h, data: out }
 }
 
-// Half-float conversion. Averaging has to happen in float, and the source and
-// destination are both RGBA16F bit patterns.
-
-const f32 = new Float32Array(1)
-const u32 = new Uint32Array(f32.buffer)
-
-function half(bits: number): number {
-  const sign = (bits & 0x8000) >> 15
-  const exp = (bits & 0x7c00) >> 10
-  const frac = bits & 0x03ff
-  let value: number
-  if (exp === 0) value = frac * 2 ** -24
-  else if (exp === 0x1f) value = frac ? NaN : Infinity
-  else value = (1024 + frac) * 2 ** (exp - 25)
-  return sign ? -value : value
-}
-
-function toHalf(value: number): number {
-  f32[0] = value
-  const bits = u32[0]
-  const sign = (bits >>> 16) & 0x8000
-  let exp = (bits >>> 23) & 0xff
-  let frac = bits & 0x7fffff
-
-  if (exp === 0xff) return sign | 0x7c00 | (frac ? 0x200 : 0)
-  exp = exp - 127 + 15
-  if (exp >= 0x1f) return sign | 0x7c00
-  if (exp <= 0) {
-    if (exp < -10) return sign
-    frac = (frac | 0x800000) >> (1 - exp)
-    return sign | ((frac + 0x1000) >> 13)
-  }
-  return sign | (exp << 10) | ((frac + 0x1000) >> 13)
-}

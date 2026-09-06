@@ -1,5 +1,6 @@
 import { defaultEdits, getPath, leafPaths, sectionOfPath, setPath } from '../core/defaults'
 import type { FileKind } from '../core/defaults'
+import { EDITS_VERSION } from '../core/types'
 import type { CurvePoint, EditSection, Edits, Preset } from '../core/types'
 
 /**
@@ -103,7 +104,9 @@ function make(
     throw new Error(`Preset "${id}" writes undeclared sections: ${stray.join(', ')}`)
   }
 
-  const patch: Partial<Edits> = {}
+  // Stamped for the same reason a user preset is: an unversioned patch reads
+  // as the oldest one and would be migrated when it should not be.
+  const patch: Partial<Edits> = { version: EDITS_VERSION }
   for (const path of paths) {
     const section = sectionOfPath(path)
     if (patch[section] === undefined) {

@@ -216,6 +216,26 @@
   -webkit-backdrop-filter: blur(40px) saturate(180%);
 }
 
+/*
+ * Modal surfaces: opaque, and deliberately not a material.
+ *
+ * Vibrancy is right for chrome that floats over the photograph and is meant to
+ * feel attached to it — a toolbar, a tooltip, a menu. It is wrong for a surface
+ * someone has to read and make a decision on. A translucent dialog takes its
+ * tone from whatever frame happens to be behind it, so the same settings panel
+ * is a different colour over a snow scene than over a night one, text contrast
+ * moves with the picture, and a busy image shows through as texture under the
+ * labels. A dialog is also the one surface the eye is asked to treat as being
+ * in front of everything else, which reads better from a flat, definite tone
+ * than from a sample of the thing it is covering.
+ *
+ * The scrim behind it stays translucent: that layer's whole job is to show
+ * that the photograph is still there and merely out of reach.
+ */
+@utility material-solid {
+  background-color: var(--color-panel);
+}
+
 /* Numeric readouts must not jitter while a slider is being scrubbed. */
 @utility tnum {
   font-variant-numeric: tabular-nums;

@@ -4,6 +4,7 @@ import { Logo, ExportIcon, GitHubIcon, InfoIcon, MoreHorizontalIcon, SettingsIco
 import { useUI, type Module } from '../state/ui'
 import { useIsCompact, useIsPhone } from '../lib/useViewport'
 import { useMenu } from '../design/useMenu'
+import { MENU_ICON } from '../design/Menu'
 import { cn } from '../lib/cn'
 import { REPO_URL } from './changelog'
 import { openWhatsNew } from './whatsNew'
@@ -78,17 +79,23 @@ export function TitleBar({
                   r.right,
                   r.bottom + 4,
                   [
-                    { label: 'Export…', icon: <ExportIcon size={12} />, onSelect: onExport },
-                    { label: 'Settings…', icon: <SettingsIcon size={12} />, onSelect: onSettings },
+                    { label: 'Export…', icon: <ExportIcon size={MENU_ICON} />, onSelect: onExport },
+                    {
+                      label: 'Settings…',
+                      icon: <SettingsIcon size={MENU_ICON} />,
+                      onSelect: onSettings,
+                    },
                     { kind: 'separator' },
                     {
                       label: "What's new…",
-                      icon: <InfoIcon size={12} />,
+                      icon: <InfoIcon size={MENU_ICON} />,
                       onSelect: openWhatsNew,
                     },
                     {
                       label: 'Source on GitHub',
-                      icon: <GitHubIcon size={12} />,
+                      // A pixel under its neighbours: a solid silhouette puts
+                      // more ink on the same box than a 1.75px outline does.
+                      icon: <GitHubIcon size={MENU_ICON - 1} />,
                       onSelect: () => window.open(REPO_URL, '_blank', 'noreferrer'),
                     },
                   ],

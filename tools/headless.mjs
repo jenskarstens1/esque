@@ -23,7 +23,9 @@ if (!executablePath) {
 
 const path = process.argv[2] ?? '/'
 const timeout = Number(process.argv[3] ?? 180_000)
-const url = path.startsWith('http') ? path : `http://localhost:5173${path}`
+const origin = process.env.ESQUE_ORIGIN ?? 'http://localhost:5173'
+const url = new URL(path, origin).href
+const screenshot = process.env.ESQUE_SCREENSHOT ?? '/tmp/esque-headless.png'
 
 const browser = await puppeteer.launch({
   executablePath,
@@ -38,28 +40,32 @@ const browser = await puppeteer.launch({
   ],
 })
 
-const page = await browser.newPage()
-await page.setViewport({ width: 1600, height: 1000, deviceScaleFactor: 1 })
-
-page.on('console', (m) => console.log(`[${m.type()}] ${m.text()}`))
-page.on('pageerror', (e) => console.log(`[pageerror] ${e.message}`))
-page.on('requestfailed', (r) => console.log(`[reqfail] ${r.url()} ${r.failure()?.errorText}`))
-
-console.log(`→ ${url}`)
-await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60_000 })
-
+let passed = false
 try {
+  const page = await browser.newPage()
+  await page.setViewport({ width: 1600, height: 1000, deviceScaleFactor: 1 })
+  const errors = []
+  page.on('console', (m) => console.log(`[${m.type()}] ${m.text()}`))
+  page.on('pageerror', (error) => {
+    errors.push(error.message)
+    console.log(`[pageerror] ${error.message}`)
+  })
+  page.on('requestfailed', (r) => console.log(`[reqfail] ${r.url()} ${r.failure()?.errorText}`))
+
+  console.log(`→ ${url}`)
+  await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60_000 })
   await page.waitForFunction('window.__done === true', { timeout, polling: 500 })
-} catch {
-  console.log('!! timed out waiting for window.__done')
+  const result = await page.evaluate(() => window.__result ?? null)
+  console.log('\n=== RESULT ===')
+  console.log(JSON.stringify(result, null, 2))
+  passed = !!result && !result.error && result.pass !== false && result.ok !== false &&
+    (!Array.isArray(result.failures) || result.failures.length === 0) && errors.length === 0
+  await page.screenshot({ path: screenshot, fullPage: false })
+  console.log(`\nscreenshot → ${screenshot}`)
+} catch (error) {
+  passed = false
+  console.error(error)
+} finally {
+  await browser.close()
 }
-
-const result = await page.evaluate(() => window.__result ?? null)
-console.log('\n=== RESULT ===')
-console.log(JSON.stringify(result, null, 2))
-
-await page.screenshot({ path: '/tmp/esque-headless.png', fullPage: false })
-console.log('\nscreenshot → /tmp/esque-headless.png')
-
-await browser.close()
-process.exit(result && !result.error ? 0 : 1)
+process.exit(passed ? 0 : 1)

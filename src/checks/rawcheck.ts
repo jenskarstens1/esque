@@ -364,7 +364,6 @@ async function run() {
   ok((meta?.camMul?.length ?? 0) >= 3, 'camera white balance is missing')
   ok((meta?.camXyz?.length ?? 0) >= 3, 'camera colour matrix is missing')
   ok(image.whiteLevel > 1.05, `RAW ceiling ${image.whiteLevel} did not preserve WB headroom`)
-  ok(stats.max > 1, `decoded maximum ${stats.max} discarded RAW headroom`)
   ok(stats.max <= image.whiteLevel * 1.002,
     `decoded maximum ${stats.max} exceeds ceiling ${image.whiteLevel}`)
   ok(stats.invalid === 0, `${stats.invalid} invalid linear samples`)
@@ -391,6 +390,49 @@ async function run() {
         'Camera JPEG',
       )
     : null
+
+  /**
+   * The RAW defaults rendered at whatever exposure puts them at the camera
+   * JPEG's brightness.
+   *
+   * Acutance is gradient magnitude, so it scales with the signal it is measured
+   * on: identical sharpening on a picture half as bright reports half the
+   * figure. LibRaw runs with `noAutoBright`, deliberately leaving exposure to
+   * the user, while the camera JPEG has the camera's own auto-brightening baked
+   * in — so on a dark frame the two are not comparable as they stand, and
+   * comparing them regardless measures the exposure gap rather than the
+   * sharpener.
+   *
+   * That distinction used to be invisible. While the decode was still on
+   * dcraw's 0.45/4.5 curve the renderer's own transfer encoded it a second
+   * time, lifting the default rendering by about a stop and letting a raw
+   * acutance comparison pass for the wrong reason. Removing the double encode
+   * is what exposed it.
+   */
+  async function brightnessMatched(target: number) {
+    let lo = 0
+    let hi = 4
+    let best: Awaited<ReturnType<typeof renderedStats>> | null = null
+    let bestExposure = 0
+    // Rendered brightness is monotonic in exposure, so bisection converges.
+    for (let i = 0; i < 6; i++) {
+      const mid = (lo + hi) / 2
+      const trial = defaultEdits('raw', image.asShot, meta?.iso)
+      trial.basic.exposure = mid
+      const stats = await renderedStats(image, trial, `RAW defaults +${mid.toFixed(2)}EV`)
+      if (best === null || Math.abs(stats.p90 - target) < Math.abs(best.p90 - target)) {
+        best = stats
+        bestExposure = mid
+      }
+      if (stats.p90 < target) lo = mid
+      else hi = mid
+    }
+    return { stats: best!, exposure: bestExposure }
+  }
+  const matchedAppearance = cameraJpegAppearance
+    ? await brightnessMatched(cameraJpegAppearance.p90)
+    : null
+
   // Each renderedStats call creates its own Renderer, so these are independent
   // and can resolve in parallel without sharing any GPU state.
   const qualityVariants = params.has('variants')
@@ -422,6 +464,22 @@ async function run() {
   edits.detail.colorNR = 0
   const renderedBeforeAuto = await renderedStats(image, edits, 'As shot')
   if (fixture === DEFAULT_FIXTURE) {
+    /*
+     * Whether any pixel actually lands above the white-balance headroom point
+     * is a property of the scene, not of the decoder, so it is asserted here
+     * against the one frame known to contain such highlights rather than
+     * against every fixture. The X-T5 frame is an ISO 125 exposure whose
+     * brightest pixel sits at about a third of saturation in linear light and
+     * clips nothing at all — it has no headroom to preserve.
+     *
+     * It used to hold everywhere for the wrong reason: on dcraw's 0.45/4.5
+     * curve every value was inflated between 1.8x and 4.5x, which pushed even
+     * an unclipped frame past 1.0. The two assertions above are the
+     * content-independent half of this guard and still catch a decode that
+     * throws the headroom away.
+     */
+    ok(stats.max > 1, `decoded maximum ${stats.max} discarded RAW headroom`)
+
     // With every editable detail control disabled this is intentionally the
     // sensor-facing baseline, not a secretly pre-smoothed image. Keep a broad
     // guard against demosaic regressions, then hold the actual default rendering
@@ -449,8 +507,12 @@ async function run() {
       `RAW chroma variation ${defaultAppearance.chromaVariation} exceeds camera JPEG ${cameraJpegAppearance?.chromaVariation}`,
     )
     ok(
-      !cameraJpegAppearance || defaultAppearance.edgeP99 >= cameraJpegAppearance.edgeP99 * 0.95,
-      `RAW edge acutance ${defaultAppearance.edgeP99} trails camera JPEG ${cameraJpegAppearance?.edgeP99}`,
+      !matchedAppearance ||
+        !cameraJpegAppearance ||
+        matchedAppearance.stats.edgeP99 >= cameraJpegAppearance.edgeP99 * 0.95,
+      `RAW edge acutance ${matchedAppearance?.stats.edgeP99} at +${matchedAppearance?.exposure.toFixed(2)}EV ` +
+        `trails camera JPEG ${cameraJpegAppearance?.edgeP99} at matched brightness ` +
+        `(${matchedAppearance?.stats.p90} vs ${cameraJpegAppearance?.p90})`,
     )
 
     const lowSmoothness = defaultEdits('raw', image.asShot)
@@ -556,6 +618,7 @@ async function run() {
     renderedRgb,
     defaultAppearance,
     cameraJpegAppearance,
+    matchedAppearance,
     qualityVariants,
     proxyQuality: 'native demosaic',
     decodeQuality,

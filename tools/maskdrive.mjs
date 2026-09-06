@@ -371,7 +371,7 @@ if (g.dabs?.length) {
   await new Promise((r) => setTimeout(r, 300))
 
   const rows = await page.evaluate(() =>
-    [...document.querySelectorAll('[role="menu"] [role="menuitem"]')].map((b) =>
+    [...document.querySelectorAll('[role="menu"] [role^="menuitem"]')].map((b) =>
       b.textContent.trim(),
     ),
   )
@@ -379,7 +379,7 @@ if (g.dabs?.length) {
   ok('Create Mask lists Radial', rows.some((r) => /Radial/i.test(r)), rows.join(', '))
 
   const made = await page.evaluate(() => {
-    const item = [...document.querySelectorAll('[role="menu"] [role="menuitem"]')].find((b) =>
+    const item = [...document.querySelectorAll('[role="menu"] [role^="menuitem"]')].find((b) =>
       /Radial/i.test(b.textContent),
     )
     item?.click()

@@ -13,7 +13,8 @@
  */
 import { defaultEdits, defaultMaskAdjustments, sectionOfPath } from '../core/defaults'
 import { CAMERA_PROFILES, cameraProfile } from '../core/profiles'
-import { COLOR_BANDS } from '../core/types'
+import { COLOR_BANDS, EDITS_VERSION } from '../core/types'
+import { migratePartialEdits } from './migrate'
 import type {
   ColorBand,
   CropAspect,
@@ -512,14 +513,23 @@ export function parseXmp(xml: string): ParsedXmp | null {
     r.str('Cluster') ||
     ''
 
+  // `crs:RawFileName` names the file the settings belong to, which a preset
+  // never has. Lightroom writes `HasSettings="True"` into a developed photo's
+  // sidecar as well as into presets, so treating that flag as decisive read
+  // every edited photo's sidecar as a preset the user could apply elsewhere.
+  const isSidecar = bag.has('RawFileName')
   const isPreset =
-    r.str('PresetType') !== '' || r.bool('HasSettings') || (!!name && !bag.has('RawFileName'))
+    !isSidecar && (r.str('PresetType') !== '' || r.bool('HasSettings') || !!name)
 
   const paths = [...r.touched]
+  // An XMP file is written once and read for years, so it carries the edit
+  // version it was written under. Absent means it predates the field, which is
+  // v1 — the same rule the catalogue upgrade uses.
+  const editVersion = Math.max(1, Math.round(r.num('esq:EditVersion'))) || 1
   return {
     name,
     group,
-    edits: e,
+    edits: migratePartialEdits(e, editVersion) as Edits,
     sections: [...new Set(paths.map(sectionOfPath))],
     paths,
     isPreset,
@@ -668,7 +678,11 @@ const WB_OUT: Record<WhiteBalanceMode, string> = {
 function crsAttributes(e: Edits, sections: EditSection[], only?: string[] | null): string[] {
   const want = new Set(sections)
   const allow = only?.length ? new Set(only) : null
-  const out: string[] = ['crs:Version="15.0"', 'crs:ProcessVersion="11.0"']
+  const out: string[] = [
+    'crs:Version="15.0"',
+    'crs:ProcessVersion="11.0"',
+    `esq:EditVersion="${EDITS_VERSION}"`,
+  ]
 
   /** Emits `attr` when its field is in scope. */
   const put = (path: string, ...attrs: string[]) => {

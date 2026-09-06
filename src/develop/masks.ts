@@ -163,3 +163,35 @@ export function isNeutralMask(mask: Mask): boolean {
 export function findMask(edits: Edits, id: string | null): Mask | undefined {
   return id ? edits.masks.find((m) => m.id === id) : undefined
 }
+
+/**
+ * Clears the cached-alpha pointers on detected masks.
+ *
+ * A detected mask stores where its alpha was cached, and that cache is keyed by
+ * the photo it was computed from. Copying edits onto a different photo without
+ * clearing the pointer makes the target render the *source* photo's subject
+ * cut-out — a mask of a picture that isn't on screen, with no visible cause.
+ * The pointer is dropped rather than repaired: re-detecting is the only way to
+ * get an alpha that matches the new frame, and a null key is what asks for it.
+ *
+ * Apply this to the settings being *transferred*, never to the merged result.
+ * The target's own masks are already keyed to the target, and clearing those
+ * would make a photo lose coverage it had computed for itself — including when
+ * the transfer didn't involve masking at all.
+ */
+export function detachDetectedAlpha(edits: Edits): Edits {
+  if (!edits.masks.some((m) => m.components.some((c) => 'cacheKey' in c.geometry))) {
+    return edits
+  }
+  return {
+    ...edits,
+    masks: edits.masks.map((mask) => ({
+      ...mask,
+      components: mask.components.map((component) =>
+        'cacheKey' in component.geometry
+          ? { ...component, geometry: { ...component.geometry, cacheKey: null } }
+          : component,
+      ),
+    })),
+  }
+}

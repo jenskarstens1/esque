@@ -1,11 +1,9 @@
-import { useCallback, useEffect, useState, type ReactNode } from 'react'
+import { useCallback, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { cn } from '../lib/cn'
 import { Button } from './Controls'
 import { Scroller } from './Scroller'
-
-/** Open dialogs, innermost last — only the top one answers Escape. */
-const stack: object[] = []
+import { ModalFocusContext, useModalFocus } from './focusScope'
 
 export function Dialog({
   open,
@@ -53,24 +51,7 @@ export function Dialog({
   dividers?: boolean
   bodyClassName?: string
 }) {
-  useEffect(() => {
-    if (!open || !dismissable) return
-    const id = {}
-    stack.push(id)
-    const onKey = (e: KeyboardEvent) => {
-      // A nested dialog owns Escape while it is up, so dismissing it doesn't
-      // take its parent down with it.
-      if (e.key === 'Escape' && stack[stack.length - 1] === id) {
-        e.stopPropagation()
-        onClose()
-      }
-    }
-    window.addEventListener('keydown', onKey, true)
-    return () => {
-      stack.splice(stack.indexOf(id), 1)
-      window.removeEventListener('keydown', onKey, true)
-    }
-  }, [open, onClose, dismissable])
+  const { ref, scope } = useModalFocus(open, dismissable ? onClose : undefined)
 
   const [scroll, setScroll] = useState({ top: false, bottom: false })
   // Hairlines only appear when there is content hidden past the edge, so a
@@ -87,69 +68,93 @@ export function Dialog({
     const ro = new ResizeObserver(read)
     ro.observe(el)
     for (const child of el.children) ro.observe(child)
+    // A ref callback that returns a cleanup is *not* called again with null, so
+    // this is the only place the observer and the listener can be released. A
+    // dialog opened and closed repeatedly used to leave one of each behind,
+    // still holding its detached body.
+    return () => {
+      el.removeEventListener('scroll', read)
+      ro.disconnect()
+    }
   }, [])
 
   if (!open) return null
 
+  /*
+   * A rule separates the body from the header or the footer, so with no body
+   * there is nothing to separate. Without this, a plain confirm drew the
+   * header's bottom hairline and the footer's top hairline against each other
+   * and the pair read as one rule of twice the weight of every other rule in
+   * the app.
+   */
+  const hasBody = Boolean(children)
+  const divided = (overflowing: boolean) => dividers ?? (overflowing || !scrollable)
+
   return createPortal(
-    <div className="fixed inset-0 z-[1100] flex items-center justify-center p-4 md:p-8">
-      <div
-        className="absolute inset-0 bg-scrim backdrop-blur-[2px] animate-[fadeIn_var(--duration-base)_var(--ease-out)]"
-        onClick={dismissable ? onClose : undefined}
-      />
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-label={title}
-        // `width` caps rather than fixes the size, so a 460px dialog still fits
-        // a 390px phone instead of running off both edges.
-        style={{ width: '100%', maxWidth: width, height }}
-        className={cn(
-          'material-thick relative max-h-full overflow-hidden rounded-xl shadow-lg',
-          'flex flex-col animate-[dialogIn_var(--duration-base)_var(--ease-out)]',
-        )}
-      >
-        <header
-          className={cn('shrink-0 px-5 pt-5 pb-3', (dividers ?? (scroll.top || !scrollable)) && 'hairline-b')}
-        >
-          <div className="flex items-center gap-[3px]">
-            {titleIcon}
-            <h2 className="text-title text-label">{title}</h2>
-          </div>
-          {description && (
-            <p className="mt-1 text-ui leading-relaxed text-label-secondary">{description}</p>
-          )}
-        </header>
-        {children &&
-          (scrollable ? (
-            <Scroller
-              ref={measure}
-              frameClassName="min-h-0 flex-1"
-              className={bodyClassName ?? 'px-5 pb-2'}
-            >
-              {children}
-            </Scroller>
-          ) : (
-            <div className={cn('flex min-h-0 flex-1', bodyClassName)}>{children}</div>
-          ))}
-        <footer
+    <ModalFocusContext.Provider value={scope}>
+      <div className="fixed inset-0 z-[1100] flex items-center justify-center p-4 md:p-8">
+        <div
+          className="absolute inset-0 bg-scrim backdrop-blur-[2px] animate-[fadeIn_var(--duration-base)_var(--ease-out)]"
+          onClick={dismissable ? onClose : undefined}
+        />
+        <div
+          ref={ref}
+          role="dialog"
+          tabIndex={-1}
+          aria-modal="true"
+          aria-label={title}
+          // `width` caps rather than fixes the size, so a 460px dialog still fits
+          // a 390px phone instead of running off both edges.
+          style={{ width: '100%', maxWidth: width, height }}
           className={cn(
-            'flex shrink-0 items-center justify-end gap-2 px-5 pt-3 pb-5',
-            (dividers ?? (scroll.bottom || !scrollable)) && 'hairline-t',
+            'material-solid relative max-h-full overflow-hidden rounded-xl shadow-lg',
+            'flex flex-col animate-[dialogIn_var(--duration-base)_var(--ease-out)]',
           )}
         >
-          {footer ?? (
-            <Button variant="primary" onClick={onClose}>
-              OK
-            </Button>
-          )}
-        </footer>
+          <header
+            className={cn('shrink-0 px-5 pt-5 pb-3', hasBody && divided(scroll.top) && 'hairline-b')}
+          >
+            <div className="flex items-center gap-[3px]">
+              {titleIcon}
+              <h2 className="text-title text-balance text-label">{title}</h2>
+            </div>
+            {description && (
+              <p className="mt-1 text-ui leading-relaxed text-pretty text-label-secondary">
+                {description}
+              </p>
+            )}
+          </header>
+          {children &&
+            (scrollable ? (
+              <Scroller
+                ref={measure}
+                frameClassName="min-h-0 flex-1"
+                className={bodyClassName ?? 'px-5 pb-2'}
+              >
+                {children}
+              </Scroller>
+            ) : (
+              <div className={cn('flex min-h-0 flex-1', bodyClassName)}>{children}</div>
+            ))}
+          <footer
+            className={cn(
+              'flex shrink-0 items-center justify-end gap-2 px-5 pt-3 pb-5',
+              hasBody && divided(scroll.bottom) && 'hairline-t',
+            )}
+          >
+            {footer ?? (
+              <Button variant="primary" onClick={onClose}>
+                OK
+              </Button>
+            )}
+          </footer>
+        </div>
+        <style>{`
+          @keyframes fadeIn{from{opacity:0}to{opacity:1}}
+          @keyframes dialogIn{from{opacity:0;scale:0.94;translate:0 8px}to{opacity:1;scale:1;translate:0 0}}
+        `}</style>
       </div>
-      <style>{`
-        @keyframes fadeIn{from{opacity:0}to{opacity:1}}
-        @keyframes dialogIn{from{opacity:0;scale:0.94;translate:0 8px}to{opacity:1;scale:1;translate:0 0}}
-      `}</style>
-    </div>,
+    </ModalFocusContext.Provider>,
     document.body,
   )
 }

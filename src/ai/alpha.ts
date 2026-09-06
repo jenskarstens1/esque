@@ -59,6 +59,11 @@ export function dropAlphasFor(photoId: string): void {
   }
 }
 
+/** Releases a render worker's coverage between jobs, not its persisted files. */
+export function clearAlphas(): void {
+  memory.clear()
+}
+
 /**
  * Persists coverage as bytes rather than floats.
  *
@@ -77,11 +82,7 @@ export async function saveAlpha(key: string, alpha: AlphaMap): Promise<void> {
   for (let i = 0; i < alpha.data.length; i++) {
     bytes[HEADER_BYTES + i] = Math.round(Math.min(1, Math.max(0, alpha.data[i])) * 255)
   }
-  try {
-    await cacheWrite(key, bytes)
-  } catch {
-    /* a full origin costs a re-detect, not an error */
-  }
+  await cacheWrite(key, bytes)
 }
 
 /**

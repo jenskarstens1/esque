@@ -19,6 +19,22 @@ import {
   type ThumbPixelInput,
 } from './pipeline'
 import { detectFormats } from './formats'
+import { clearAlphas } from '../ai/alpha'
+
+let previousRender: Promise<void> = Promise.resolve()
+
+function enqueueRender<T>(work: () => Promise<T>): Promise<T> {
+  const result = previousRender.then(async () => {
+    try {
+      return await work()
+    } finally {
+      clearAlphas()
+    }
+  })
+  // A failed job rejects its own caller without poisoning the next job.
+  previousRender = result.then(() => undefined, () => undefined)
+  return result
+}
 
 const api = {
   async detectFormats(): Promise<string[]> {
@@ -32,11 +48,11 @@ const api = {
     input: ExportPixelInput,
     onProgress?: (stage: PipelineStage, fraction: number) => void,
   ): Promise<ExportPixelResult> {
-    return renderExport(input, onProgress)
+    return enqueueRender(() => renderExport(input, onProgress))
   },
 
   async renderThumb(input: ThumbPixelInput): Promise<Blob | null> {
-    return renderThumb(input)
+    return enqueueRender(() => renderThumb(input))
   },
 }
 

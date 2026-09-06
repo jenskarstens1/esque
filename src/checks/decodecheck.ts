@@ -85,24 +85,27 @@ function writeTiff(
 function floatPredictorTiff(le: boolean) {
   const width = 3
   const channels = 3
-  const values = [0, 0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875, 1]
+  // The last two are above 1 on purpose: a float TIFF is scene-linear and a
+  // decoder that clamps to SDR throws away the highlights it was written for.
+  const values = [0, 0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 2.5, 4]
   const samples = values.length
   const raw = new Uint8Array(samples * 4)
   const rawView = new DataView(raw.buffer)
   values.forEach((value, index) => rawView.setFloat32(index * 4, value, le))
 
-  // TIFF predictor 3 stores most-significant byte planes first, then applies
-  // horizontal differencing independently within each plane.
+  // TIFF predictor 3 stores most-significant byte planes first, then differences
+  // the shuffled row as one continuous run. Differencing per plane instead is a
+  // tempting misreading, and one an encoder and decoder can share while both
+  // being wrong — which is how a fixture ends up certifying a bug.
   const payload = new Uint8Array(raw.length)
   for (let plane = 0; plane < 4; plane++) {
     const sourceByte = le ? 3 - plane : plane
     for (let sample = 0; sample < samples; sample++) {
       payload[plane * samples + sample] = raw[sample * 4 + sourceByte]
     }
-    for (let sample = samples - 1; sample >= channels; sample--) {
-      const at = plane * samples + sample
-      payload[at] = (payload[at] - payload[at - channels]) & 0xff
-    }
+  }
+  for (let at = payload.length - 1; at >= channels; at--) {
+    payload[at] = (payload[at] - payload[at - channels]) & 0xff
   }
 
   const count = 12
@@ -136,7 +139,7 @@ function floatPredictorTiff(le: boolean) {
       pixelOffset,
       payload,
     ),
-    expected: new Uint16Array(values.map((value) => Math.floor(value * 65535))),
+    expected: new Float32Array(values),
   }
 }
 
@@ -200,7 +203,7 @@ async function run() {
     const fixture = floatPredictorTiff(le)
     const decoded = await decodeTiff(fixture.bytes)
     if (!decoded) failures.push(`float TIFF ${le ? 'LE' : 'BE'} did not decode`)
-    else same(decoded.data, fixture.expected, `float TIFF ${le ? 'LE' : 'BE'}`, 1)
+    else same(decoded.data, fixture.expected, `float TIFF ${le ? 'LE' : 'BE'}`, 1e-6)
   }
 
   const signed = await decodeTiff(signedPredictorTiff())

@@ -89,13 +89,12 @@ export function EditSlider({
   const menuItems = useCallback(
     ({ reset }: { reset: number }) =>
       sliderMenuItems({
-        label,
         value: value ?? 0,
         defaultValue: reset,
         onReset: () => onChange(reset),
         onSet: (v) => onChange(v),
       }),
-    [label, value, onChange],
+    [value, onChange],
   )
 
   return (

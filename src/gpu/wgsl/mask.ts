@@ -353,9 +353,12 @@ fn fs(@location(0) uv: vec2f) -> @location(0) vec4f {
   if (abs(u.uTemp) > 1e-4 || abs(u.uTint) > 1e-4) {
     // A cheap channel tilt rather than a full chromatic adaptation: the local
     // control is a nudge, and the global white balance already did the physics.
-    let g = vec3f(1.0 + u.uTemp * 0.30 - u.uTint * 0.06,
-                  1.0 + u.uTint * 0.22,
-                  1.0 - u.uTemp * 0.30 - u.uTint * 0.06);
+    // Signs follow the global sliders: positive temp is warmer, positive tint is
+    // magenta. Tinting green on a positive value would make the local slider run
+    // backwards against the one directly above it in the panel.
+    let g = vec3f(1.0 + u.uTemp * 0.30 + u.uTint * 0.06,
+                  1.0 - u.uTint * 0.22,
+                  1.0 - u.uTemp * 0.30 + u.uTint * 0.06);
     lin = lin * max(g, vec3f(0.02));
   }
 

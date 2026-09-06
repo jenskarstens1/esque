@@ -2,7 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { cn } from '../lib/cn'
 import { clamp, quantize } from '../lib/math'
 import { useMenu } from './useMenu'
-import type { MenuItem } from './Menu'
+import { MENU_ICON, type MenuItem } from './Menu'
+import { ResetIcon } from './icons'
 
 /**
  * Slider.
@@ -369,7 +370,13 @@ export function SliderRow({
    */
   const rowMenu = (): MenuItem[] => {
     const own: MenuItem[] = [
-      { kind: 'item', label: `Reset ${label}`, disabled: slider.disabled, onSelect: doReset },
+      {
+        kind: 'item',
+        label: `Reset ${label}`,
+        icon: <ResetIcon size={MENU_ICON} />,
+        disabled: slider.disabled,
+        onSelect: doReset,
+      },
     ]
     const extra = menuItems?.({ reset })
     return extra?.length ? [...own, { kind: 'separator' }, ...extra] : own

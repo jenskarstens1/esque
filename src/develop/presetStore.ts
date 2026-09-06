@@ -15,6 +15,7 @@ import { nextId } from '../lib/math'
 import { BUILTIN_PRESETS, scopePaths } from './presets'
 import { parsePresetFile, presetToXmp } from './xmp'
 import { defaultEdits, getPath, sectionOfPath, setPath, type FileKind } from '../core/defaults'
+import { EDITS_VERSION } from '../core/types'
 import type { Edits, Preset } from '../core/types'
 
 export interface ImportResult {
@@ -227,7 +228,10 @@ export async function createPreset(
   // The patch keeps a whole section's shape so it stays inspectable, but every
   // field outside the ticked scopes stays at its default — a preset should not
   // be quietly carrying around the white balance of the photo it was made from.
-  const patch: Partial<Edits> = {}
+  // Stamped so a later migration can tell what the numbers in here mean. A
+  // patch with no version reads as the oldest one, which would put a preset
+  // saved today through a migration it does not need.
+  const patch: Partial<Edits> = { version: EDITS_VERSION }
   const fresh = defaultEdits(kind) as unknown as Record<string, unknown>
   for (const section of sections) {
     ;(patch as unknown as Record<string, unknown>)[section] = structuredClone(fresh[section])

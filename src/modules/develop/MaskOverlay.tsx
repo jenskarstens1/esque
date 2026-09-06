@@ -5,6 +5,7 @@ import { useUI } from '../../state/ui'
 import type { FrameBox } from './CropOverlay'
 import type { BrushDab, MaskComponent, Point2 } from '../../core/types'
 import { activeRenderer } from './activeRenderer'
+import { SRGB_D65_TO_PROPHOTO_D50 } from '../../core/color'
 
 /**
  * The mask handles, drawn over the photo.
@@ -327,7 +328,16 @@ export function MaskOverlay({ frame }: { frame: FrameBox }) {
         />
       )}
 
-      {brushing && <BrushRing size={brushSize * frame.width} erase={brushErase} host={hostRef} />}
+      {/* The dab radius is a fraction of the frame's *long* edge, which is the
+          height on a portrait photo. Scaling the ring by the width there draws a
+          cursor smaller than the stroke it promises. */}
+      {brushing && (
+        <BrushRing
+          size={brushSize * Math.max(frame.width, frame.height)}
+          erase={brushErase}
+          host={hostRef}
+        />
+      )}
 
       {pendingKind && !drag && (
         <div className="material pointer-events-none absolute left-1/2 top-4 -translate-x-1/2 rounded-full px-2.5 py-1 text-mini text-label-secondary shadow-hud">
@@ -373,6 +383,11 @@ export function MaskOverlay({ frame }: { frame: FrameBox }) {
  * over the *image*, not the canvas, and the two only agree when the image
  * happens to fill the viewport exactly. Sampling the output texture is in image
  * space by construction, so zoom, pan and letterboxing stop mattering.
+ *
+ * The read is of the picture *before* the mask overlay, since the pixel under
+ * the cursor is usually one the mask already covers and is therefore tinted.
+ * Sampling that would store the tint as the target colour and shrink the
+ * selection towards nothing with every re-pick.
  */
 async function samplePixel(p: Point2): Promise<{ r: number; g: number; b: number } | null> {
   if (p.x < 0 || p.x > 1 || p.y < 0 || p.y > 1) return null
@@ -383,16 +398,28 @@ async function samplePixel(p: Point2): Promise<{ r: number; g: number; b: number
   const x = Math.min(size.width - 1, Math.max(0, Math.round(p.x * (size.width - 1))))
   // Both `p` and the output texture count y downward, so nothing is flipped.
   const y = Math.min(size.height - 1, Math.max(0, Math.round(p.y * (size.height - 1))))
-  const out = await renderer.readPixels('srgb', 8, { x, y, width: 1, height: 1 })
+  const out = await renderer.readPixels('srgb', 8, { x, y, width: 1, height: 1 }, true)
   if (!out) return null
 
   const buf = out.data as Uint8ClampedArray
-  // Back to linear light, which is the space the shader compares in.
+  // Back to linear light, and then back to the working space. The readback is
+  // display sRGB; the shader compares against the working image, which is
+  // ProPhoto. Skipping the second step leaves the sample under the wrong
+  // primaries, so clicking a saturated colour selects a noticeably different
+  // one — and the more saturated the pick, the further off it lands.
   const lin = (v: number) => {
     const s = v / 255
     return s <= 0.04045 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4)
   }
-  return { r: lin(buf[0]), g: lin(buf[1]), b: lin(buf[2]) }
+  const r = lin(buf[0])
+  const g = lin(buf[1])
+  const b = lin(buf[2])
+  const m = SRGB_D65_TO_PROPHOTO_D50
+  return {
+    r: m[0] * r + m[1] * g + m[2] * b,
+    g: m[3] * r + m[4] * g + m[5] * b,
+    b: m[6] * r + m[7] * g + m[8] * b,
+  }
 }
 
 function LinearHandles({

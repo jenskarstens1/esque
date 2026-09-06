@@ -10,6 +10,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { db } from './db'
 import { loadPhotoFile } from './previews'
+import { loadProxy } from '../develop/proxy'
+import { renderThumbInWorker } from '../export/client'
 import { rawPool } from '../raw/pool'
 import { createDemandQueue } from '../lib/demandQueue'
 import type { Photo } from '../core/types'
@@ -62,6 +64,30 @@ async function render(
   const photo = await db.photos.get(photoId)
   if (!photo) return null
   signal.throwIfAborted()
+
+  // An edited photo is rendered rather than decoded, for the same reason the
+  // preview tier below it is: zooming in must not swap the photographer's work
+  // for the camera's rendering of the uncropped frame.
+  if (photo.edits) {
+    const proxy = await loadProxy(photoId, edge, signal)
+    if (!proxy) return null
+    signal.throwIfAborted()
+    const blob = await renderThumbInWorker({
+      width: proxy.width,
+      height: proxy.height,
+      // The proxy stays in the LRU, so the worker gets a copy it can detach.
+      data: proxy.data.slice(),
+      isRaw: proxy.isRaw,
+      asShot: proxy.asShot,
+      whiteLevel: proxy.whiteLevel,
+      edits: photo.edits,
+      edge,
+      quality: 0.92,
+    })
+    signal.throwIfAborted()
+    return blob ? { photoId, edge, url: URL.createObjectURL(blob) } : null
+  }
+
   // Virtual copies share the master's pixels.
   const file = await loadPhotoFile(photo.masterId ?? photo.id)
   if (!file) return null
@@ -104,6 +130,20 @@ export function clearDetails() {
 }
 
 /**
+ * Drops one photo's 1:1 render.
+ *
+ * Called when its settings change: the cache is keyed by photo alone, so
+ * without this the loupe would keep zooming into the render of an edit the
+ * photographer has already moved past.
+ */
+export function dropDetail(photoId: string) {
+  const hit = cache.get(photoId)
+  if (!hit) return
+  cache.delete(photoId)
+  setTimeout(() => URL.revokeObjectURL(hit.url), 1000)
+}
+
+/**
  * Resolves a detail render once the view asks for more pixels than the standard
  * preview holds. Returns `null` until one exists, so callers keep showing what
  * they already have instead of flashing an empty frame, and reports whether one
@@ -138,11 +178,14 @@ export function useDetailRender(
   // concerned, so the flag is raised for both rather than only the second half.
   const [pending, setPending] = useState(false)
   const requested = useRef(0)
+  // Identity, not contents: the catalogue hands back a fresh row when the
+  // photo is saved, and that is precisely when the render stops being valid.
+  const edits = photo?.edits ?? null
 
   useEffect(() => {
     requested.current = 0
     setUrl(id ? (peekDetail(id)?.url ?? null) : null)
-  }, [id])
+  }, [id, edits])
 
   useEffect(() => {
     if (!id || !want) return
@@ -178,7 +221,7 @@ export function useDetailRender(
       controller.abort()
       clearTimeout(timer)
     }
-  }, [id, want])
+  }, [id, want, edits])
 
   return { url, pending }
 }

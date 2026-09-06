@@ -3,6 +3,7 @@ import { useUI } from '../state/ui'
 import { useCatalog } from '../state/catalog'
 import { useDevelop } from '../develop/session'
 import { chordOf, resolve } from './commands'
+import { keyboardOverlayOpen } from '../lib/keyboardScope'
 
 const isTyping = (t: EventTarget | null) => {
   const el = t as HTMLElement | null
@@ -10,13 +11,6 @@ const isTyping = (t: EventTarget | null) => {
   const tag = el.tagName
   return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el.isContentEditable
 }
-
-/**
- * A modal owns the keyboard while it is up. Without this the app's own Tab
- * binding eats the key a dialog needs to move focus through its controls, and
- * every bare letter fires a command against the photo behind the scrim.
- */
-const isModalUp = () => !!document.querySelector('[role="dialog"]')
 
 /**
  * The Lightroom keymap, minus the modules esque doesn't ship.
@@ -29,7 +23,7 @@ const isModalUp = () => !!document.querySelector('[role="dialog"]')
 export function useKeymap() {
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      if (isTyping(e.target) || isModalUp()) return
+      if (e.defaultPrevented || isTyping(e.target) || keyboardOverlayOpen()) return
 
       const ui = useUI.getState()
       const cat = useCatalog.getState()

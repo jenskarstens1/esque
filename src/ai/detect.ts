@@ -24,6 +24,7 @@ import {
 } from './models'
 import type { SegmentWorkerApi } from './segmentWorker'
 import { peekProxy } from '../develop/proxy'
+import { cacheHas } from '../catalog/opfs'
 
 export type DetectPhase = 'idle' | 'downloading' | 'running' | 'ready' | 'error'
 
@@ -96,6 +97,33 @@ export function detectKey(req: DetectRequest): string {
   return alphaKey(req.photoId, req.kind, req.modelId)
 }
 
+/** Restores saved coverage without downloading a model or changing any edits. */
+export async function restoreCoverage(key: string): Promise<boolean> {
+  const existing = running.get(key)
+  if (existing) return existing
+  try {
+    const cached = await loadAlpha(key)
+    const detection = running.get(key)
+    if (detection) return detection
+    if (cached) {
+      setStatus(key, { phase: 'ready', progress: null, message: null, ms: null })
+      return true
+    }
+    setStatus(key, {
+      phase: 'error',
+      progress: null,
+      message: 'Saved coverage is unavailable. Run detection again; your mask adjustments are unchanged.',
+    })
+  } catch (err) {
+    setStatus(key, {
+      phase: 'error',
+      progress: null,
+      message: err instanceof Error ? err.message : String(err),
+    })
+  }
+  return false
+}
+
 /**
  * Produces coverage for one photo, or reports why it could not.
  *
@@ -122,6 +150,10 @@ async function run(req: DetectRequest, key: string): Promise<boolean> {
     // inference. This is the path a reopened photo takes.
     const cached = await loadAlpha(key)
     if (cached) {
+      // A previous write may have failed while the live coverage stayed in RAM.
+      if (detectStatus(key).phase === 'error' || !(await cacheHas(key))) {
+        await saveAlpha(key, cached)
+      }
       setStatus(key, { phase: 'ready', progress: null, message: null, ms: null })
       useDetect.setState((s) => ({ revision: s.revision + 1 }))
       return true
@@ -175,7 +207,8 @@ async function run(req: DetectRequest, key: string): Promise<boolean> {
 
     const alpha = { size: result.size, data: result.alpha }
     putAlpha(key, alpha)
-    void saveAlpha(key, alpha)
+    useDetect.setState((s) => ({ revision: s.revision + 1 }))
+    await saveAlpha(key, alpha)
 
     setStatus(key, {
       phase: 'ready',
@@ -184,13 +217,14 @@ async function run(req: DetectRequest, key: string): Promise<boolean> {
       gpu: result.gpu,
       ms: Math.round(result.ms),
     })
-    useDetect.setState((s) => ({ revision: s.revision + 1 }))
     return true
   } catch (err) {
     setStatus(key, {
       phase: 'error',
       progress: null,
-      message: err instanceof Error ? err.message : 'Detection failed.',
+      message: err instanceof Error && err.name === 'QuotaExceededError'
+        ? 'Browser storage is full. Free some cache space in Settings, then retry detection.'
+        : err instanceof Error ? err.message : 'Detection failed.',
     })
     return false
   }

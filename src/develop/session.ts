@@ -14,17 +14,31 @@ import { RENDERED_WHITE_POINT } from '../core/workingImage'
 import { defaultEdits, editsKind, SECTION_LABELS, type FileKind } from '../core/defaults'
 import type { Edits, EditSection, HistoryStep, Photo, Snapshot } from '../core/types'
 import { saveEdits } from '../catalog/actions'
+import { detachDetectedAlpha } from './masks'
 import { produce, setAutoFreeze } from 'immer'
 import { db } from '../catalog/db'
 import { nextId } from '../lib/math'
+import { toast } from '../design/toast'
 import { sameEdits } from './equal'
 
 /** Slider drags within this window fold into the previous history entry. */
 const COALESCE_MS = 900
 const HISTORY_LIMIT = 250
 
-export interface DevelopSession {
+export interface EditSaveState {
+  saveStatus: 'saved' | 'pending' | 'saving' | 'error'
+  saveError: string | null
+  pendingSaveCount: number
+}
+
+export interface DevelopSession extends EditSaveState {
   photoId: string | null
+  /**
+   * The row whose pixels are on screen: a virtual copy's master, or the photo
+   * itself. Two variants of one frame share a detected mask's coverage, so
+   * anything reasoning about "the same photograph" means this, not `photoId`.
+   */
+  imageId: string | null
   /**
    * Which baseline this photo's defaults come from. A RAW starts with capture
    * sharpening and colour noise reduction because it has been demosaiced and
@@ -63,15 +77,23 @@ export interface DevelopSession {
   /** Key of the last coalescable change, e.g. `basic.exposure`. */
   lastKey: string | null
   lastAt: number
-  clipboard: { edits: Edits; sections: EditSection[] } | null
+  /**
+   * The copied settings, with the identity of the photograph they came from.
+   *
+   * `imageId` is the row a virtual copy renders through, not the copy's own id:
+   * two variants of one frame share their pixels, so a detected mask computed
+   * for either is valid for the other.
+   */
+  clipboard: { edits: Edits; sections: EditSection[]; imageId: string | null } | null
   /**
    * A transient override shown on the canvas without touching `edits` or
    * history — used for hovering a preset. `null` means "show the real edits".
    */
   previewEdits: Edits | null
 
-  load(photo: Photo | null): Promise<void>
+  load(photo: Photo | null, opts?: { reopen?: boolean }): Promise<void>
   flush(): Promise<void>
+  retrySave(): Promise<void>
   update(key: string, label: string, mutate: (e: Edits) => void, coalesce?: boolean): void
   replace(label: string, next: Edits): void
   resetSection(section: EditSection): void
@@ -140,22 +162,151 @@ function collapseNoOps(history: HistoryStep[]): HistoryStep[] {
   }
 }
 
-let saveTimer: ReturnType<typeof setTimeout> | null = null
-let pending: { photoId: string; edits: Edits } | null = null
+/**
+ * A queued version belongs to its photo until the catalog acknowledges it.
+ * Replacing a queued version during a write must not let that older write
+ * acknowledge the replacement. Failed versions stay available for retry/load.
+ */
+export function createEditSaveQueue(
+  write: (photoId: string, edits: Edits) => Promise<void>,
+  onChange: (state: EditSaveState) => void,
+  delay = 350,
+) {
+  const pending = new Map<string, { edits: Edits }>()
+  // Photos whose settings are being replaced from outside the session. Their
+  // queued versions are stale by definition, so the queue neither writes nor
+  // accepts them until the replacement has landed. Counted rather than flagged
+  // so two overlapping replacements can't have the first to finish release the
+  // photo out from under the second.
+  const suspended = new Map<string, number>()
+  let timer: ReturnType<typeof setTimeout> | null = null
+  let inFlight: Promise<void> | null = null
+  let error: string | null = null
+
+  const notify = () =>
+    onChange({
+      saveStatus: error ? 'error' : inFlight ? 'saving' : pending.size ? 'pending' : 'saved',
+      saveError: error,
+      pendingSaveCount: pending.size,
+    })
+
+  const nextWritable = (): [string, { edits: Edits }] | null => {
+    for (const entry of pending) if (!suspended.has(entry[0])) return entry
+    return null
+  }
+
+  const flush = (): Promise<void> => {
+    if (timer) {
+      clearTimeout(timer)
+      timer = null
+    }
+    if (inFlight) return inFlight.then(() => flush())
+    if (!nextWritable()) return Promise.resolve()
+
+    error = null
+    inFlight = Promise.resolve()
+      .then(async () => {
+        for (let next = nextWritable(); next; next = nextWritable()) {
+          const [photoId, version] = next
+          await write(photoId, version.edits)
+          if (pending.get(photoId) === version) pending.delete(photoId)
+          notify()
+        }
+      })
+      .catch((err: unknown) => {
+        error =
+          err instanceof Error && err.name === 'QuotaExceededError'
+            ? 'Browser storage is full. Free some space, then retry saving.'
+            : err instanceof Error
+              ? err.message
+              : String(err)
+        throw err
+      })
+      .finally(() => {
+        inFlight = null
+        notify()
+      })
+    notify()
+    return inFlight
+  }
+
+  return {
+    peek: (photoId: string) => pending.get(photoId)?.edits,
+    /** Abandons a photo's queued edits, for when something replaced them. */
+    drop(photoId: string) {
+      pending.delete(photoId)
+      notify()
+    },
+    flush,
+    /**
+     * Hands `photoIds` to a writer outside this queue for the duration of `apply`.
+     *
+     * Dropping the queued version is not enough on its own. A write already
+     * running holds its version on the stack, so it lands *after* the drop and
+     * puts the old settings back over whatever the outside writer just stored.
+     * Waiting for that write to finish before abandoning the version — and
+     * refusing new ones until `apply` returns — is what makes the replacement
+     * final rather than merely first.
+     */
+    async suspend<T>(photoIds: string[], apply: () => Promise<T>): Promise<T> {
+      const ids = [...new Set(photoIds)]
+      for (const id of ids) suspended.set(id, (suspended.get(id) ?? 0) + 1)
+      try {
+        // A failed write leaves its version queued for retry; this only needs
+        // the write to be over, not to have succeeded.
+        while (inFlight) await inFlight.catch(() => {})
+        let dropped = false
+        for (const id of ids) dropped ||= pending.delete(id)
+        if (dropped) notify()
+        return await apply()
+      } finally {
+        for (const id of ids) {
+          const depth = (suspended.get(id) ?? 1) - 1
+          if (depth > 0) suspended.set(id, depth)
+          else suspended.delete(id)
+        }
+        notify()
+      }
+    },
+    schedule(photoId: string, edits: Edits) {
+      // Queueing a suspended photo would race the replacement being written
+      // for it, and would lose either way: the version is already superseded.
+      if (suspended.has(photoId)) return
+      pending.set(photoId, { edits })
+      if (timer) {
+        clearTimeout(timer)
+        timer = null
+      }
+      // A failed write needs an explicit retry, not a failing write per drag.
+      if (!error) {
+        timer = setTimeout(() => {
+          timer = null
+          void flush().catch(() => {
+            // The queue retains the version and publishes the failure above.
+          })
+        }, delay)
+      }
+      notify()
+    },
+  }
+}
+
+const saves = createEditSaveQueue(saveEdits, (state) => {
+  const previousError = useDevelop.getState().saveError
+  useDevelop.setState(state)
+  if (state.saveError && state.saveError !== previousError) {
+    toast.error('Edits not saved', `${state.saveError} Your changes are still in this tab.`)
+  }
+})
+let loadRequest = 0
 
 function scheduleSave(photoId: string, edits: Edits) {
-  pending = { photoId, edits }
-  if (saveTimer) clearTimeout(saveTimer)
-  saveTimer = setTimeout(() => {
-    saveTimer = null
-    const p = pending
-    pending = null
-    if (p) void saveEdits(p.photoId, p.edits)
-  }, 350)
+  saves.schedule(photoId, edits)
 }
 
 export const useDevelop = create<DevelopSession>()((set, get) => ({
   photoId: null,
+  imageId: null,
   kind: 'raw',
   iso: 0,
   sourceSize: { width: 0, height: 0 },
@@ -171,21 +322,26 @@ export const useDevelop = create<DevelopSession>()((set, get) => ({
   lastKey: null,
   lastAt: 0,
   clipboard: null,
+  saveStatus: 'saved',
+  saveError: null,
+  pendingSaveCount: 0,
 
-  async flush() {
-    if (saveTimer) {
-      clearTimeout(saveTimer)
-      saveTimer = null
-    }
-    const p = pending
-    pending = null
-    if (p) await saveEdits(p.photoId, p.edits)
-  },
+  flush: () => saves.flush(),
+  retrySave: () => saves.flush(),
 
-  async load(photo) {
+  async load(photo, opts) {
+    const request = ++loadRequest
+    if (photo && get().photoId === photo.id && !opts?.reopen) return
+    const retained = photo && !opts?.reopen ? saves.peek(photo.id) : undefined
+    await get().flush().catch(() => {
+      // Navigation can continue: failed edits stay queued per photo, visible
+      // in SaveStatus, and are restored if that photo is opened again.
+    })
+    if (request !== loadRequest) return
     if (!photo) {
       set({
         photoId: null,
+        imageId: null,
         kind: 'raw',
         iso: 0,
         sourceSize: { width: 0, height: 0 },
@@ -200,8 +356,6 @@ export const useDevelop = create<DevelopSession>()((set, get) => ({
       })
       return
     }
-    if (get().photoId === photo.id) return
-    await get().flush()
 
     const kind = editsKind(photo.isRaw)
     const asShot = photo.isRaw
@@ -211,8 +365,11 @@ export const useDevelop = create<DevelopSession>()((set, get) => ({
           photo.meta.camXyz,
         )
       : RENDERED_WHITE_POINT
-    const edits: Edits = photo.edits
-      ? { ...defaultEdits(kind, asShot, photo.meta.iso), ...clone(photo.edits as Edits) }
+    const working = opts?.reopen
+      ? photo.edits
+      : (saves.peek(photo.id) ?? retained ?? photo.edits)
+    const edits: Edits = working
+      ? { ...defaultEdits(kind, asShot, photo.meta.iso), ...clone(working) }
       : defaultEdits(kind, asShot, photo.meta.iso)
 
     // "As Shot" should read the camera's actual Kelvin, not the 5500 placeholder,
@@ -222,6 +379,7 @@ export const useDevelop = create<DevelopSession>()((set, get) => ({
       edits.basic.tint = asShot.tint
     }
     const snapshots = await db.snapshots.where('photoId').equals(photo.id).toArray()
+    if (request !== loadRequest) return
 
     // Before is the photo as it came off the card — the bottom of Lightroom's
     // history stack. Anchoring it to the settings on *open* instead would show
@@ -231,6 +389,7 @@ export const useDevelop = create<DevelopSession>()((set, get) => ({
 
     set({
       photoId: photo.id,
+      imageId: photo.masterId ?? photo.id,
       kind,
       iso: photo.meta.iso,
       sourceSize: { width: photo.width, height: photo.height },
@@ -362,7 +521,7 @@ export const useDevelop = create<DevelopSession>()((set, get) => ({
   },
 
   copySettings(sections) {
-    set({ clipboard: { edits: clone(get().edits), sections } })
+    set({ clipboard: { edits: clone(get().edits), sections, imageId: get().imageId } })
   },
 
   pasteSettings(sections) {
@@ -373,7 +532,15 @@ export const useDevelop = create<DevelopSession>()((set, get) => ({
       ? sections.filter((section) => clipboard.sections.includes(section))
       : clipboard.sections
     if (!targets.length) return
-    const src = clipboard.edits as unknown as Record<string, unknown>
+    // A detected mask's cached alpha belongs to the photograph it was computed
+    // from, so pasting across photos has to drop the pointer and ask for a
+    // fresh detection rather than paint the previous subject onto this one. A
+    // virtual copy of the same frame keeps it: the pixels are identical.
+    const source =
+      clipboard.imageId && clipboard.imageId !== s.imageId
+        ? detachDetectedAlpha(clipboard.edits)
+        : clipboard.edits
+    const src = source as unknown as Record<string, unknown>
     const next = produce(s.edits, (d) => {
       const rec = d as unknown as Record<string, unknown>
       for (const section of targets) rec[section] = structuredClone(src[section])
@@ -434,6 +601,66 @@ export const useDevelop = create<DevelopSession>()((set, get) => ({
     set({ snapshots: get().snapshots.filter((s) => s.id !== id) })
   },
 }))
+
+/**
+ * Replaces stored settings from outside Develop, and makes the session agree.
+ *
+ * Writing the catalogue is only half of it. The open photo's settings live in
+ * this store, and the save queue may still hold a version that was never
+ * written — or be in the middle of writing one. Left alone the panels keep
+ * showing the old look and the next slider move saves it back over what was
+ * just imported. The write therefore happens *inside* the queue's suspension,
+ * so no save can be scheduled or land around it, and the photo is re-opened
+ * from the row that was actually stored.
+ */
+export async function adoptStoredEdits(
+  photoIds: string[],
+  commit: () => Promise<void>,
+): Promise<void> {
+  await saves.suspend(photoIds, async () => {
+    await commit()
+    const open = useDevelop.getState().photoId
+    if (!open || !photoIds.includes(open)) return
+    const photo = await db.photos.get(open)
+    if (photo) await useDevelop.getState().load(photo, { reopen: true })
+  })
+}
+
+/** Install once at the app boundary, not only while Develop is mounted. */
+export function installSaveLifecycle() {
+  const flush = () => {
+    void useDevelop.getState().flush().catch(() => {
+      // SaveStatus and the save-error toast already expose this retained work.
+    })
+  }
+  const onHidden = () => {
+    if (document.visibilityState === 'hidden') flush()
+  }
+  const onBeforeUnload = (event: BeforeUnloadEvent) => {
+    if (!useDevelop.getState().pendingSaveCount) return
+    flush()
+    event.preventDefault()
+    event.returnValue = ''
+  }
+  let guarding = false
+  const guard = () => {
+    const dirty = useDevelop.getState().pendingSaveCount > 0
+    if (dirty === guarding) return
+    guarding = dirty
+    if (dirty) window.addEventListener('beforeunload', onBeforeUnload)
+    else window.removeEventListener('beforeunload', onBeforeUnload)
+  }
+  const unsubscribe = useDevelop.subscribe(guard)
+  guard()
+  document.addEventListener('visibilitychange', onHidden)
+  window.addEventListener('pagehide', flush)
+  return () => {
+    unsubscribe()
+    document.removeEventListener('visibilitychange', onHidden)
+    window.removeEventListener('pagehide', flush)
+    window.removeEventListener('beforeunload', onBeforeUnload)
+  }
+}
 
 /**
  * What Copy Settings offers, in panel order.

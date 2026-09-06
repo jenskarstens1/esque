@@ -1,20 +1,105 @@
 import { useState, type ReactNode } from "react";
+import { useLiveQuery } from "dexie-react-hooks";
 import { cn } from "../../lib/cn";
-import { Logo, SearchIcon } from "../../design/icons";
+import { CollectionIcon, FolderIcon, Logo, SearchIcon } from "../../design/icons";
 import { Button } from "../../design/Controls";
 import { useImporter } from "../../state/importer";
 import { filtersActive, useCatalog } from "../../state/catalog";
-import { useFolders } from "../../catalog/hooks";
+import { useCollections, useSourceQuery } from "../../catalog/hooks";
+import { db } from "../../catalog/db";
+import { editSmartCollection } from "../../state/smartEditor";
+import { useUI } from "../../state/ui";
 
 export function EmptyLibrary() {
-  const folders = useFolders();
+  const total = useLiveQuery(() => db.photos.count(), []);
+  const source = useCatalog((s) => s.source);
+  const setSource = useCatalog((s) => s.setSource);
+  const photos = useSourceQuery();
+  const collections = useCollections();
   const filters = useCatalog((s) => s.filters);
   const clearFilters = useCatalog((s) => s.clearFilters);
-  const hasPhotos = folders.some((f) => f.photoCount > 0);
 
-  if (hasPhotos && filtersActive(filters))
+  if (total === undefined || photos === undefined)
+    return <div className="size-full" aria-busy="true" aria-label="Loading photos" />;
+  if (total === 0) return <FirstRun />;
+  if (photos.length > 0 && filtersActive(filters))
     return <NoMatches onClear={clearFilters} />;
-  return <FirstRun />;
+
+  const showAll = () => {
+    clearFilters();
+    setSource({ kind: "all" });
+    useUI.getState().setViewMode("grid");
+  };
+  const collection =
+    source.kind === "collection" ? collections.find((c) => c.id === source.id) : undefined;
+
+  if (collection?.smart) {
+    return (
+      <EmptySource
+        title="No photos match this collection"
+        description="This smart collection’s rules don’t match any photos in your catalog."
+        icon={<SearchIcon size={18} />}
+      >
+        <Button variant="secondary" onClick={() => editSmartCollection(collection)}>
+          Edit rules…
+        </Button>
+        <Button variant="ghost" onClick={showAll}>All Photos</Button>
+      </EmptySource>
+    );
+  }
+
+  if (source.kind === "collection") {
+    return (
+      <EmptySource
+        title="This collection is empty"
+        description="Choose photos in All Photos, then use Add to Collection in the photo menu."
+        icon={<CollectionIcon size={18} />}
+      >
+        <Button variant="secondary" onClick={showAll}>Choose photos</Button>
+      </EmptySource>
+    );
+  }
+
+  return (
+    <EmptySource
+      title={
+        source.kind === "folder"
+          ? "No photos in this folder"
+          : source.kind === "previousImport"
+            ? "No photos in the previous import"
+            : "No photos in this view"
+      }
+      description="Your other photos are still in the catalog. Browse them in All Photos."
+      icon={source.kind === "folder" ? <FolderIcon size={18} /> : <CollectionIcon size={18} />}
+    >
+      <Button variant="secondary" onClick={showAll}>All Photos</Button>
+    </EmptySource>
+  );
+}
+
+function EmptySource({
+  title,
+  description,
+  icon,
+  children,
+}: {
+  title: string;
+  description: string;
+  icon: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <Centered>
+      <div className="flex max-w-[36ch] flex-col items-center gap-3 text-center">
+        <span className="text-icon-quaternary">{icon}</span>
+        <div className="flex flex-col gap-1">
+          <h2 className="text-title text-label">{title}</h2>
+          <p className="text-ui text-balance text-label-secondary">{description}</p>
+        </div>
+        <div className="flex flex-wrap justify-center gap-2">{children}</div>
+      </div>
+    </Centered>
+  );
 }
 
 // ---------------------------------------------------------------------------

@@ -313,8 +313,21 @@ export class Pass {
         resource: { buffer: this.buffer, offset: 0, size: this.data.byteLength },
       })
     }
+    // A mip sampler over a texture whose mips were never generated reads
+    // uninitialised memory. `mipmapFilter` starts blending level 1 in as soon
+    // as the draw minifies at all, so the output pass only has to be a few per
+    // cent under 1:1 for that to reach the screen — long before anything
+    // decides the view is small enough to be worth building a chain for.
+    const mipsReady = this.bindings.textures.some((t) => {
+      const tex = this.bound.get(t.name)
+      return !!tex && tex.mipLevels > 1 && tex.mipsReady
+    })
     for (const s of this.bindings.samplers) {
-      entries.push({ binding: s.binding, resource: this.ctx.samplers[samplerKind(s.name)] })
+      const kind = samplerKind(s.name)
+      entries.push({
+        binding: s.binding,
+        resource: this.ctx.samplers[kind === 'mip' && !mipsReady ? 'linear' : kind],
+      })
     }
     for (const t of this.bindings.textures) {
       if (!this.bound.has(t.name)) {

@@ -215,6 +215,12 @@ export interface DetailEdits {
 // ---------------------------------------------------------------------------
 
 export interface LensEdits {
+  /**
+   * Round-trips `crs:LensProfileEnable` so a sidecar written by another editor
+   * survives an import/export cycle. esque ships no lens profile database, so
+   * nothing reads it and no control exposes it — the sliders below are manual
+   * corrections and always apply. Wire this up if profiles ever land.
+   */
   enableProfile: boolean
   distortion: number
   vignetting: number
@@ -475,7 +481,7 @@ export interface RedEyeEdit {
 // The whole edit stack
 // ---------------------------------------------------------------------------
 
-export const EDITS_VERSION = 1
+export const EDITS_VERSION = 2
 
 export interface Edits {
   version: number
@@ -579,6 +585,11 @@ export interface Photo {
    * still the one made at import.
    */
   thumbRev?: number
+  /**
+   * Bumped each time the saved settings change, so the standard preview's
+   * cache key — and the blob URL memoised against it — retire with them.
+   */
+  previewRev?: number
   proxyKey: string | null
   /** Virtual copies point at their master. */
   masterId: string | null

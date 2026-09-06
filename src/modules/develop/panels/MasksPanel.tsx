@@ -1,6 +1,15 @@
 import { useCallback } from 'react'
 import { cn } from '../../../lib/cn'
-import { CloseIcon } from '../../../design/icons'
+import {
+  CloseIcon,
+  ContrastIcon,
+  CopyIcon,
+  EyeIcon,
+  PencilIcon,
+  ResetIcon,
+  TrashIcon,
+} from '../../../design/icons'
+import { MENU_ICON } from '../../../design/Menu'
 import { PanelSection, MiniAction } from '../../../design/Panel'
 import { Button, Select } from '../../../design/Controls'
 import { SliderRow } from '../../../design/Slider'
@@ -63,6 +72,7 @@ export function MasksPanel() {
   const overlay = useMasking((s) => s.overlay)
   const setOverlay = useMasking((s) => s.setOverlay)
   const setTool = useUI((s) => s.openDevelopTool)
+  const tool = useUI((s) => s.developTool)
   const { menu, open } = useMenu()
   const support = useAiSupport()
 
@@ -114,6 +124,8 @@ export function MasksPanel() {
 
   return (
     <PanelSection
+      id="develop-mask"
+      revealKey={tool === 'mask' ? tool : null}
       menuItems={() => panelMenuItems('masks')}
       title="Masking"
       defaultOpen={false}
@@ -153,26 +165,26 @@ export function MasksPanel() {
                 }}
                 onContextMenu={(ev) =>
                   open(ev, [
-                    { label: 'Rename…', onSelect: () => {
+                    { label: 'Rename…', icon: <PencilIcon size={MENU_ICON} />, onSelect: () => {
                       void promptText({ title: 'Rename Mask', initial: m.name }).then((name) => {
                         if (name) mutateMask(m.id, 'masks.name', 'Rename Mask', (mm) => { mm.name = name })
                       })
                     } },
-                    { label: 'Duplicate', onSelect: () => {
+                    { label: 'Duplicate', icon: <CopyIcon size={MENU_ICON} />, onSelect: () => {
                       const copy = duplicateMask(m, masks)
                       update('masks.add', 'Duplicate Mask', (e) => { e.masks.push(copy) }, false)
                       select(copy.id)
                     } },
-                    { label: m.inverted ? 'Un-invert' : 'Invert', checked: m.inverted, onSelect: () =>
+                    { label: m.inverted ? 'Un-invert' : 'Invert', icon: <ContrastIcon size={MENU_ICON} />, checked: m.inverted, onSelect: () =>
                       mutateMask(m.id, 'masks.invert', 'Invert Mask', (mm) => { mm.inverted = !mm.inverted }) },
-                    { label: m.visible ? 'Hide' : 'Show', checked: m.visible, onSelect: () =>
+                    { label: m.visible ? 'Hide' : 'Show', icon: <EyeIcon size={MENU_ICON} off={m.visible} />, checked: m.visible, onSelect: () =>
                       mutateMask(m.id, 'masks.visible', 'Toggle Mask', (mm) => { mm.visible = !mm.visible }) },
                     { kind: 'separator' },
-                    { label: 'Reset Adjustments', onSelect: () =>
+                    { label: 'Reset Adjustments', icon: <ResetIcon size={MENU_ICON} />, onSelect: () =>
                       mutateMask(m.id, 'masks.adjust', 'Reset Mask Adjustments', (mm) => {
                         mm.adjustments = defaultMaskAdjustments()
                       }) },
-                    { label: 'Delete', danger: true, onSelect: () => {
+                    { label: 'Delete', icon: <TrashIcon size={MENU_ICON} />, danger: true, onSelect: () => {
                       update('masks.delete', 'Delete Mask', (e) => {
                         e.masks = e.masks.filter((x) => x.id !== m.id)
                       }, false)
@@ -332,7 +344,6 @@ export function MasksPanel() {
                 modified={value !== reset}
                 menuItems={() =>
                   sliderMenuItems({
-                    label: a.label,
                     value,
                     defaultValue: reset,
                     onReset: () =>

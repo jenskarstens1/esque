@@ -9,12 +9,17 @@
  *
  * Run through `tools/headless.mjs /checks/exportcheck.html`.
  */
-import { renderFull } from '../export/render'
-import { defaultEdits } from '../core/defaults'
+import { ExportCancelled, renderFull } from '../export/render'
+import { defaultEdits, defaultMaskAdjustments } from '../core/defaults'
 import { geometryOutputSize } from '../gpu/geometry'
-import type { Edits } from '../core/types'
+import { isAiGeometry, type Edits } from '../core/types'
 import { RENDERED_WHITE_POINT } from '../core/workingImage'
 import { halfRgbaToRgb16 } from '../export/dng'
+import { alphaKey, dropAlphasFor, getAlpha, putAlpha, saveAlpha } from '../ai/alpha'
+import { detect, restoreCoverage, useDetect } from '../ai/detect'
+import { cacheDelete, cacheRead } from '../catalog/opfs'
+import { newMask } from '../develop/masks'
+import { disposeExportWorker, renderThumbInWorker } from '../export/client'
 
 const RENDERED_SOURCE = {
   isRaw: false,
@@ -59,10 +64,160 @@ function ramped(width: number, height: number) {
 
 const W = 900
 const H = 700
+let lastAssertion = 'Starting mask coverage'
+
+async function checkMaskCoverage() {
+  const failures: string[] = []
+  let assertions = 0
+  const check = (ok: boolean, name: string) => {
+    assertions++
+    lastAssertion = name
+    if (!ok) failures.push(name)
+  }
+  const image = ramped(32, 24)
+  const photoId = `export-check-${crypto.randomUUID()}`
+  const key = alphaKey(photoId, 'aiSubject', 'u2netp')
+  const alpha = { size: 8, data: new Float32Array(64).fill(1) }
+  const edits = defaultEdits()
+  const mask = newMask([], 'aiSubject')
+  const geometry = mask.components[0].geometry
+  if (!isAiGeometry(geometry)) throw new Error('Expected a detected mask fixture')
+  geometry.cacheKey = key
+  mask.adjustments.exposure = 1
+  edits.masks = [mask]
+  const render = (settings: Edits) => renderFull(image, {
+    edits: settings, outputSpace: 'srgb', depth: 8,
+  })
+  const expectMissing = async (work: () => Promise<unknown>, name: string) => {
+    try {
+      await work()
+      check(false, name)
+    } catch (err) {
+      check(err instanceof Error && err.message.includes('needs detection'), name)
+    }
+  }
+  const thumbBlue = async (thumb: Blob | null) => {
+    if (!thumb) throw new Error('The export worker returned no thumbnail')
+    const bitmap = await createImageBitmap(thumb)
+    const canvas = new OffscreenCanvas(bitmap.width, bitmap.height)
+    const context = canvas.getContext('2d')
+    if (!context) throw new Error('The browser cannot read the worker result')
+    context.drawImage(bitmap, 0, 0)
+    bitmap.close()
+    return context.getImageData(16, 12, 1, 1).data[2]
+  }
+
+  try {
+    await saveAlpha(key, alpha)
+    check(!!(await cacheRead(key)), 'Coverage fixture is persisted')
+    putAlpha(key, alpha)
+    const plain = await render(defaultEdits())
+    const warm = await render(edits)
+    const sample = (12 * image.width + 16) * 4 + 2
+    check(warm.data[sample] - plain.data[sample] > 8, 'Detected coverage changes rendered pixels')
+
+    dropAlphasFor(photoId)
+    check(!getAlpha(key), 'Cold render starts without in-memory coverage')
+    const cold = await render(edits)
+    check(cold.data.every((value, i) => Math.abs(value - warm.data[i]) <= 1),
+      'Cold rendered export matches the previously detected mask')
+
+    const thumb = () => renderThumbInWorker({ ...image, data: image.data.slice(), edits })
+    const plainThumb = () => renderThumbInWorker({
+      ...image, data: image.data.slice(), edits: defaultEdits(),
+    })
+    check(Math.abs(await thumbBlue(await thumb()) - warm.data[sample]) <= 6,
+      'The separate render worker hydrates saved coverage before encoding')
+    await saveAlpha(key, { size: 8, data: new Float32Array(64) })
+    check(Math.abs(await thumbBlue(await thumb()) - plain.data[sample]) <= 6,
+      'The worker releases old coverage between jobs and reads updated persisted data')
+    await saveAlpha(key, alpha)
+    const [concurrentMask, concurrentPlain] = await Promise.all([thumb(), plainThumb()])
+    check(Math.abs(await thumbBlue(concurrentMask) - warm.data[sample]) <= 6,
+      'Concurrent requests retain the masked job pixels')
+    check(Math.abs(await thumbBlue(concurrentPlain) - plain.data[sample]) <= 6,
+      'Concurrent requests retain the unmasked job pixels')
+    check(getAlpha(key)?.data[0] === 1, 'Worker cleanup does not discard the viewport coverage cache')
+
+    await cacheDelete(key)
+    const writable = Object.getOwnPropertyDescriptor(FileSystemFileHandle.prototype, 'createWritable')
+    if (!writable) throw new Error('The browser cannot inject a coverage write failure')
+    try {
+      Object.defineProperty(FileSystemFileHandle.prototype, 'createWritable', {
+        ...writable,
+        value: async () => { throw new DOMException('Fixture storage full', 'QuotaExceededError') },
+      })
+      try {
+        await saveAlpha(key, alpha)
+        check(false, 'Coverage persistence failures are not swallowed')
+      } catch (err) {
+        check(err instanceof Error && err.name === 'QuotaExceededError',
+          'Coverage persistence failures are not swallowed')
+      }
+      const saved = await detect({ photoId, kind: 'aiSubject', modelId: 'u2netp' })
+      check(!saved && useDetect.getState().status[key]?.phase === 'error',
+        'Detection reports a retained-coverage save failure')
+      check(getAlpha(key)?.data[0] === 1, 'Failed persistence retains the live mask for retry')
+    } finally {
+      Object.defineProperty(FileSystemFileHandle.prototype, 'createWritable', writable)
+    }
+    check(await detect({ photoId, kind: 'aiSubject', modelId: 'u2netp' }) && !!(await cacheRead(key)),
+      'Retrying detection persists retained coverage without another model run')
+
+    dropAlphasFor(photoId)
+    check(await restoreCoverage(key), 'Develop restores saved coverage without detection')
+    check(!!getAlpha(key) && useDetect.getState().status[key]?.phase === 'ready',
+      'Reopened coverage is available to the viewport and detection controls')
+
+    await cacheDelete(key)
+    dropAlphasFor(photoId)
+    await expectMissing(() => render(edits), 'Missing coverage refuses a misleading rendered export')
+    await expectMissing(
+      () => renderThumbInWorker({ ...image, data: image.data.slice(), edits }),
+      'The render worker reports unavailable coverage instead of dropping edits',
+    )
+    check(Math.abs(await thumbBlue(await plainThumb()) - plain.data[sample]) <= 6,
+      'A failed render does not block later worker jobs')
+    check(!(await restoreCoverage(key)) && useDetect.getState().status[key]?.phase === 'error',
+      'Unavailable coverage has a visible detection error state')
+
+    const undetected = structuredClone(edits)
+    const pendingGeometry = undetected.masks[0].components[0].geometry
+    if (!isAiGeometry(pendingGeometry)) throw new Error('Expected a detected mask fixture')
+    pendingGeometry.cacheKey = null
+    await expectMissing(() => render(undetected), 'Unfinished non-neutral detection cannot export silently')
+
+    for (const state of ['hidden', 'transparent', 'neutral'] as const) {
+      const ignored = structuredClone(edits)
+      if (state === 'hidden') ignored.masks[0].visible = false
+      else if (state === 'transparent') ignored.masks[0].opacity = 0
+      else ignored.masks[0].adjustments = defaultMaskAdjustments()
+      const result = await render(ignored)
+      check(result.data.every((value, i) => Math.abs(value - plain.data[i]) <= 1),
+        `${state} masks do not block or change an export`)
+    }
+
+    try {
+      await renderFull(image, {
+        edits, outputSpace: 'srgb', depth: 8, signal: { cancelled: true },
+      })
+      check(false, 'Cancellation takes precedence over missing mask coverage')
+    } catch (err) {
+      check(err instanceof ExportCancelled, 'Cancellation takes precedence over missing mask coverage')
+    }
+  } finally {
+    disposeExportWorker()
+    dropAlphasFor(photoId)
+    await cacheDelete(key)
+  }
+  return { pass: failures.length === 0, assertions, failures }
+}
 
 async function run() {
-  const out: Record<string, unknown> = {}
-  const failures: string[] = []
+  const masks = await checkMaskCoverage()
+  if (new URLSearchParams(location.search).get('case') === 'masks') return masks
+  const out: Record<string, unknown> = { masks }
+  const failures: string[] = [...masks.failures]
   const image = ramped(W, H)
 
   const dngCodes = halfRgbaToRgb16(
@@ -236,7 +391,11 @@ run()
     window.__result = r
   })
   .catch((err) => {
-    window.__result = { error: err instanceof Error ? err.message : String(err) }
+    window.__result = {
+      error: err instanceof Error ? err.message : String(err),
+      stack: err instanceof Error ? err.stack : undefined,
+      lastAssertion,
+    }
   })
   .finally(() => {
     window.__done = true

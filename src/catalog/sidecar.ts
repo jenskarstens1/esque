@@ -1,7 +1,8 @@
 import { db } from './db'
 import { resolveFile, writeSibling } from './fs'
+import { invalidateRendered } from './previews'
 import { parseXmp, parseSidecarMetadata, editsToSidecar } from '../develop/xmp'
-import { ALL_SECTIONS } from '../develop/session'
+import { ALL_SECTIONS, adoptStoredEdits } from '../develop/session'
 import { defaultEdits, editsKind } from '../core/defaults'
 import type { ColorLabel, Photo } from '../core/types'
 
@@ -133,6 +134,10 @@ export async function readSidecars(photos: Photo[]): Promise<{
   let read = 0
   let missing = 0
   let failed = 0
+  // Parsed first, applied second. The commit has to run inside the save
+  // queue's suspension, and holding a whole folder's worth of disk reads open
+  // inside it would stall Develop's saves for the length of the sweep.
+  const parsed: Array<{ photo: Photo; changes: Partial<Photo> }> = []
 
   for (const photo of photos) {
     let xml: string | null
@@ -151,15 +156,47 @@ export async function readSidecars(photos: Photo[]): Promise<{
       missing++
       continue
     }
-    await db.photos.update(photo.id, result.changes)
-    read++
+    parsed.push({ photo, changes: result.changes })
+    if (!result.applied.edits) {
+      // Ratings and keywords don't collide with the edit save queue, so they
+      // are stored straight away and cost the suspension nothing.
+      await db.photos.update(photo.id, result.changes)
+      parsed.pop()
+      read++
+    }
+  }
+
+  const changed = parsed.map((p) => p.photo.id)
+  if (!changed.length) return { read, missing, failed }
+
+  await adoptStoredEdits(changed, async () => {
+    for (const { photo, changes } of parsed) {
+      await db.photos.update(photo.id, changes)
+      read++
+    }
+  })
+
+  // Everything the Library renders from the old settings has to go too.
+  const rows = (await db.photos.bulkGet(changed)).filter((p): p is Photo => !!p)
+  await Promise.all(rows.map((p) => invalidateRendered(p.id)))
+  const { refreshThumb, resetThumb } = await import('../develop/thumbs')
+  for (const p of rows) {
+    if (p.edits) refreshThumb(p.id, p.edits)
+    else await resetThumb(p.id)
   }
 
   return { read, missing, failed }
 }
 
-/** Writes a photo's settings and metadata to its sidecar. */
+/**
+ * Writes a photo's settings and metadata to its sidecar.
+ *
+ * A virtual copy is refused: it has no file of its own, so its sidecar path is
+ * the master's, and writing one variant there would silently replace the
+ * master's own settings.
+ */
 export async function writeSidecar(photo: Photo): Promise<boolean> {
+  if (photo.masterId) return false
   const folder = await db.folders.get(photo.folderId)
   if (!folder?.handle) return false
   const xml = editsToSidecar(
@@ -177,12 +214,21 @@ export async function writeSidecar(photo: Photo): Promise<boolean> {
   return writeSibling(folder.handle, sidecarPath(photo.relPath), xml)
 }
 
-export async function writeSidecars(photos: Photo[]): Promise<{ written: number; failed: number }> {
+export async function writeSidecars(
+  photos: Photo[],
+): Promise<{ written: number; failed: number; skipped: number }> {
   let written = 0
   let failed = 0
+  let skipped = 0
   for (const photo of photos) {
+    // Virtual copies share their master's sidecar path, so they are passed
+    // over rather than counted as a failure the photographer should act on.
+    if (photo.masterId) {
+      skipped++
+      continue
+    }
     if (await writeSidecar(photo)) written++
     else failed++
   }
-  return { written, failed }
+  return { written, failed, skipped }
 }

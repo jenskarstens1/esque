@@ -188,6 +188,11 @@ function handOff(slot: Slot): boolean {
     waiter.signal.removeEventListener('abort', waiter.onAbort)
   }
   busy++
+  // Claimed on the slot itself, not just in the counter: `destroy` hands off a
+  // freshly created replacement, which starts idle, and an unclaimed idle slot
+  // is exactly what `acquire` scans for. Without this the same worker could be
+  // handed to a waiter and to the next caller at once.
+  slot.busy = true
   waiter.resolve(slot)
   return true
 }

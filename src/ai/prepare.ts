@@ -74,18 +74,61 @@ function encodeSrgb(v: number): number {
 }
 
 /**
- * Box-averages the proxy down to `size` × `size` of linear sRGB.
+ * Resamples the proxy to `size` × `size` of linear sRGB.
  *
- * Source rows are walked once and accumulated into the destination cell they
- * fall in, so cost is proportional to the proxy rather than to the square —
- * the same pass whether the network wants 320 px or 1024.
+ * Two paths, because the proxy is not always the larger of the two. A 320 px
+ * network gets a box average, walking the source once and accumulating into the
+ * cell each pixel falls in, so cost tracks the proxy rather than the square. A
+ * 1024 px network asking for more pixels than the proxy has gets bilinear
+ * interpolation instead: scattering upward would leave most destination cells
+ * with nothing written to them, and those cells read back as black — a grid of
+ * holes through the tensor, which the network reads as structure that isn't
+ * there.
  */
 function reduceToSquare(src: PrepareSource, size: number): Float32Array {
   const { width, height, data } = src
   const table = halfTable()
   const m = PROPHOTO_D50_TO_SRGB_D65
+  const out = new Float32Array(size * size * 3)
 
-  const sum = new Float64Array(size * size * 3)
+  // Written into by both paths, to keep the matrix in one place.
+  const toSrgb = (r: number, g: number, b: number, o: number, w = 1) => {
+    out[o] += (m[0] * r + m[1] * g + m[2] * b) * w
+    out[o + 1] += (m[3] * r + m[4] * g + m[5] * b) * w
+    out[o + 2] += (m[6] * r + m[7] * g + m[8] * b) * w
+  }
+
+  if (width < size || height < size) {
+    const xScale = width / size
+    const yScale = height / size
+    for (let dy = 0; dy < size; dy++) {
+      // Sample at cell centres, so the resample does not drift half a pixel.
+      const sy = Math.min(height - 1, Math.max(0, (dy + 0.5) * yScale - 0.5))
+      const y0 = Math.floor(sy)
+      const y1 = Math.min(height - 1, y0 + 1)
+      const fy = sy - y0
+      for (let dx = 0; dx < size; dx++) {
+        const sx = Math.min(width - 1, Math.max(0, (dx + 0.5) * xScale - 0.5))
+        const x0 = Math.floor(sx)
+        const x1 = Math.min(width - 1, x0 + 1)
+        const fx = sx - x0
+        const o = (dy * size + dx) * 3
+        const corners = [
+          [x0, y0, (1 - fx) * (1 - fy)],
+          [x1, y0, fx * (1 - fy)],
+          [x0, y1, (1 - fx) * fy],
+          [x1, y1, fx * fy],
+        ]
+        for (const [cx, cy, w] of corners) {
+          if (w <= 0) continue
+          const i = (cy * width + cx) * 4
+          toSrgb(table[data[i]], table[data[i + 1]], table[data[i + 2]], o, w)
+        }
+      }
+    }
+    return out
+  }
+
   const count = new Float64Array(size * size)
 
   // Precomputed column bucket, so the inner loop is not doing a divide per pixel.
@@ -99,33 +142,21 @@ function reduceToSquare(src: PrepareSource, size: number): Float32Array {
     const rowBase = row * size
     let i = y * width * 4
     for (let x = 0; x < width; x++, i += 4) {
-      const r = table[data[i]]
-      const g = table[data[i + 1]]
-      const b = table[data[i + 2]]
-
       // ProPhoto D50 → sRGB D65 while still linear. Out-of-gamut colours go
       // negative here; they are clamped after the exposure scale so the
       // percentile still sees the real distribution.
-      const sr = m[0] * r + m[1] * g + m[2] * b
-      const sg = m[3] * r + m[4] * g + m[5] * b
-      const sb = m[6] * r + m[7] * g + m[8] * b
-
       const cell = rowBase + colBucket[x]
-      const o = cell * 3
-      sum[o] += sr
-      sum[o + 1] += sg
-      sum[o + 2] += sb
+      toSrgb(table[data[i]], table[data[i + 1]], table[data[i + 2]], cell * 3)
       count[cell] += 1
     }
   }
 
-  const out = new Float32Array(size * size * 3)
   for (let c = 0; c < size * size; c++) {
     const n = count[c] || 1
     const o = c * 3
-    out[o] = sum[o] / n
-    out[o + 1] = sum[o + 1] / n
-    out[o + 2] = sum[o + 2] / n
+    out[o] /= n
+    out[o + 1] /= n
+    out[o + 2] /= n
   }
   return out
 }

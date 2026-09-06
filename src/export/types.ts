@@ -120,7 +120,7 @@ export interface ExportPreset {
   settings: ExportSettings
 }
 
-export type JobState = 'queued' | 'running' | 'done' | 'failed' | 'skipped' | 'cancelled'
+export type JobState = 'queued' | 'running' | 'prepared' | 'done' | 'failed' | 'skipped' | 'cancelled'
 
 export interface ExportJob {
   id: string

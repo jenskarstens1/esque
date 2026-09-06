@@ -1,6 +1,7 @@
 import { useCallback } from 'react'
 import { cn } from '../../../lib/cn'
-import { CloseIcon } from '../../../design/icons'
+import { CloseIcon, HealIcon, TrashIcon } from '../../../design/icons'
+import { MENU_ICON } from '../../../design/Menu'
 import { PanelSection, MiniAction } from '../../../design/Panel'
 import { Button, Select } from '../../../design/Controls'
 import { SliderRow } from '../../../design/Slider'
@@ -56,6 +57,8 @@ export function RetouchPanel() {
 
   return (
     <PanelSection
+      id="develop-retouch"
+      revealKey={tool === 'heal' || tool === 'redeye' ? tool : null}
       menuItems={() => panelMenuItems('spots')}
       title="Retouch"
       defaultOpen={false}
@@ -176,11 +179,11 @@ export function RetouchPanel() {
                 }}
                 onContextMenu={(ev) =>
                   open(ev, [
-                    { label: 'Toggle Heal / Clone', onSelect: () =>
+                    { label: 'Toggle Heal / Clone', icon: <HealIcon size={MENU_ICON} />, onSelect: () =>
                       editSpot(s.id, 'spot.mode', 'Spot Mode', (x) => {
                         x.mode = x.mode === 'heal' ? 'clone' : 'heal'
                       }, false) },
-                    { label: 'Delete', danger: true, onSelect: () => {
+                    { label: 'Delete', icon: <TrashIcon size={MENU_ICON} />, danger: true, onSelect: () => {
                       update('spot.delete', 'Delete Spot', (e) => {
                         e.spots = e.spots.filter((x) => x.id !== s.id)
                       }, false)

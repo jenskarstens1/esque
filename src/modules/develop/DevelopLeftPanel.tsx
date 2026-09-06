@@ -39,12 +39,22 @@ import { toast } from '../../design/toast'
 import { confirmAction, promptText } from '../../design/prompt'
 import { useUI } from '../../state/ui'
 import {
-  CloseIcon,
-  MoreHorizontalIcon,
-  PlusIcon,
   ChevronDownIcon,
+  CloseIcon,
+  CollapseAllIcon,
+  ExpandAllIcon,
+  ExportIcon,
+  ImportIcon,
+  FolderIcon,
+  MoreHorizontalIcon,
+  MoveIcon,
+  PencilIcon,
+  PlusIcon,
+  PresetIcon,
+  SaveIcon,
+  TrashIcon,
 } from '../../design/icons'
-import type { MenuItem } from '../../design/Menu'
+import { MENU_ICON, type MenuItem } from '../../design/Menu'
 import type { Preset } from '../../core/types'
 
 /** Stable identity so the `useMemo` below doesn't re-group on every render. */
@@ -452,31 +462,44 @@ function PresetsSection() {
   const libraryMenu = (): MenuItem[] => [
     {
       label: 'Save Current Settings as Preset…',
+      icon: <SaveIcon size={MENU_ICON} />,
       disabled: !photoId,
       onSelect: () => setSaving(true),
     },
     { kind: 'separator' },
-    { label: 'Import Presets…', onSelect: () => void pickAndImportPresets().then(reportImport) },
+    {
+      label: 'Import Presets…',
+      icon: <ImportIcon size={MENU_ICON} />,
+      onSelect: () => void pickAndImportPresets().then(reportImport),
+    },
     {
       label: 'Import Preset Folder…',
+      icon: <FolderIcon size={MENU_ICON} />,
       onSelect: () => void pickAndImportPresetFolder().then(reportImport),
     },
     { kind: 'separator' },
     {
       label: allOpen ? 'Collapse All' : 'Expand All',
+      icon: allOpen ? <CollapseAllIcon size={MENU_ICON} /> : <ExpandAllIcon size={MENU_ICON} />,
       onSelect: () => setGroupsExpanded(allOpen ? [] : groups.map((g) => g.group)),
     },
   ]
 
   const presetMenu = (e: React.MouseEvent, preset: Preset) => {
     open(e, [
-      { label: 'Apply', disabled: !photoId, onSelect: () => apply(preset) },
+      {
+        label: 'Apply',
+        icon: <PresetIcon size={MENU_ICON} />,
+        disabled: !photoId,
+        onSelect: () => apply(preset),
+      },
       { kind: 'separator' },
       ...(preset.builtin
         ? []
         : ([
             {
               label: 'Rename…',
+              icon: <PencilIcon size={MENU_ICON} />,
               onSelect: () =>
                 void promptText({
                   title: 'Rename Preset',
@@ -488,6 +511,7 @@ function PresetsSection() {
             },
             {
               label: 'Move to Group…',
+              icon: <MoveIcon size={MENU_ICON} />,
               onSelect: () =>
                 void promptText({
                   title: 'Move Preset',
@@ -501,13 +525,18 @@ function PresetsSection() {
                 }),
             },
           ] as MenuItem[])),
-      { label: 'Export as .xmp…', onSelect: () => exportPreset(preset) },
+      {
+        label: 'Export as .xmp…',
+        icon: <ExportIcon size={MENU_ICON} />,
+        onSelect: () => exportPreset(preset),
+      },
       ...(preset.builtin
         ? []
         : ([
             { kind: 'separator' },
             {
               label: 'Delete',
+              icon: <TrashIcon size={MENU_ICON} />,
               danger: true,
               onSelect: () =>
                 void confirmAction({
@@ -525,11 +554,17 @@ function PresetsSection() {
     open(e, [
       {
         label: expanded.includes(group) ? 'Collapse' : 'Expand',
+        icon: expanded.includes(group) ? (
+          <CollapseAllIcon size={MENU_ICON} />
+        ) : (
+          <ExpandAllIcon size={MENU_ICON} />
+        ),
         onSelect: () => toggleGroup(group),
       },
       { kind: 'separator' },
       {
         label: 'Export Group…',
+        icon: <ExportIcon size={MENU_ICON} />,
         onSelect: () =>
           void exportPresets(presets).then((n) => {
             if (n) toast.show(`Exported ${n} preset${n === 1 ? '' : 's'}`)
@@ -538,6 +573,7 @@ function PresetsSection() {
       { kind: 'separator' },
       {
         label: allOpen ? 'Collapse All' : 'Expand All',
+        icon: allOpen ? <CollapseAllIcon size={MENU_ICON} /> : <ExpandAllIcon size={MENU_ICON} />,
         onSelect: () => setGroupsExpanded(allOpen ? [] : groups.map((g) => g.group)),
       },
     ])

@@ -131,7 +131,7 @@ if (!tile) {
   await longPress(tile.x, tile.y)
   await new Promise((r) => setTimeout(r, 400))
   const menuOpen = await page.evaluate(
-    () => !!document.querySelector('[role="menu"]') && document.querySelectorAll('[role="menuitem"]').length > 0,
+    () => !!document.querySelector('[role="menu"]') && document.querySelectorAll('[role^="menuitem"]').length > 0,
   )
   check('long-press context menu', menuOpen, menuOpen ? 'menu opened on a grid tile' : 'no [role=menu] appeared')
   if (menuOpen) {

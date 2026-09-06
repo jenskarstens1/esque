@@ -17,7 +17,8 @@ import {
 import { useUI, type GridLayout, type ViewMode } from '../state/ui'
 import { useCatalog, type SortKey } from '../state/catalog'
 import { setFlag, setRating } from '../catalog/actions'
-import { usePhoto } from '../catalog/hooks'
+import { usePhoto, usePhotoSelection } from '../catalog/hooks'
+import type { PickFlag } from '../core/types'
 import { hdrReach } from '../core/hdr'
 import { photoIsHdr } from '../core/hdrContent'
 import { useDisplayHdr } from '../lib/useDisplayHdr'
@@ -55,11 +56,9 @@ export function Toolbar() {
   const sortKey = useCatalog((s) => s.sortKey)
   const sortAsc = useCatalog((s) => s.sortAsc)
   const setSort = useCatalog((s) => s.setSort)
-  const selected = useCatalog((s) => s.selected)
   const primaryId = useCatalog((s) => s.primaryId)
   const photo = usePhoto(primaryId)
-
-  const targets = selected.length ? selected : primaryId ? [primaryId] : []
+  const selection = usePhotoSelection()
 
   // Extended range is only offered over a photo that has any: a gain-map JPEG,
   // a PQ/HLG file, or a RAW. Over an ordinary sRGB frame the toggle would
@@ -89,7 +88,7 @@ export function Toolbar() {
   const gridControls = module === 'library' && viewMode === 'grid'
 
   return (
-    <div className="hairline-t esq-safe-px-3 esq-safe-b flex h-10 shrink-0 items-center gap-3 bg-panel">
+    <div data-photo-toolbar className="hairline-t esq-safe-px-3 esq-safe-b flex h-10 shrink-0 items-center gap-3 bg-panel">
       {module === 'library' && (
         <SegmentedControl
           size="sm"
@@ -103,15 +102,15 @@ export function Toolbar() {
 
       <div className="flex shrink-0 items-center gap-2">
         <FlagCluster
-          disabled={!targets.length}
-          flag={photo?.flag ?? 'unflagged'}
-          onSet={(f) => setFlag(targets, f)}
+          disabled={!selection.ready}
+          flag={selection.values.flag}
+          onSet={(f) => setFlag(selection.ids, f)}
         />
         <span className="h-3.5 w-px bg-hairline" />
         <RatingCluster
-          disabled={!targets.length}
-          rating={photo?.rating ?? 0}
-          onSet={(r) => setRating(targets, r)}
+          disabled={!selection.ready}
+          rating={selection.values.rating}
+          onSet={(r) => setRating(selection.ids, r)}
         />
       </div>
 
@@ -180,12 +179,16 @@ function FlagCluster({
   disabled,
   onSet,
 }: {
-  flag: string
+  flag: PickFlag | null
   disabled: boolean
   onSet: (f: 'pick' | 'unflagged' | 'reject') => void
 }) {
   return (
-    <div className="flex items-center gap-1">
+    <div
+      role="group"
+      aria-label={flag === null ? 'Flag: mixed values' : 'Flag'}
+      className="flex items-center gap-1"
+    >
       <ToolbarToggle
         title="Pick  (P)"
         active={flag === 'pick'}
@@ -202,6 +205,9 @@ function FlagCluster({
       >
         <RejectIcon size={12} />
       </ToolbarToggle>
+      {flag === null && (
+        <span aria-hidden title="Mixed flags" className="text-micro text-label-secondary">—</span>
+      )}
     </div>
   )
 }
@@ -211,27 +217,36 @@ function RatingCluster({
   disabled,
   onSet,
 }: {
-  rating: number
+  rating: number | null
   disabled: boolean
   onSet: (r: number) => void
 }) {
   return (
-    <div className="flex items-center gap-0.5">
+    <div
+      role="group"
+      aria-label={rating === null ? 'Rating: mixed values' : 'Rating'}
+      className="flex items-center gap-0.5"
+    >
       {[1, 2, 3, 4, 5].map((n) => (
         <button
           key={n}
           type="button"
-          title={`${n}`}
+          title={`${n} star${n === 1 ? '' : 's'}`}
+          aria-label={`${n} star${n === 1 ? '' : 's'}`}
+          aria-pressed={rating === n}
           disabled={disabled}
           onClick={() => onSet(rating === n ? 0 : n)}
           className={cn(
             'esq-tap p-0.5 transition-colors duration-[--duration-fast] disabled:opacity-25',
-            n <= rating ? 'text-icon' : 'text-icon-quaternary hover:text-icon-tertiary',
+            rating !== null && n <= rating ? 'text-icon' : 'text-icon-quaternary hover:text-icon-tertiary',
           )}
         >
-          <StarIcon size={11} filled={n <= rating} />
+          <StarIcon size={11} filled={rating !== null && n <= rating} />
         </button>
       ))}
+      {rating === null && (
+        <span aria-hidden className="ml-1 text-micro text-label-secondary">Mixed</span>
+      )}
     </div>
   )
 }
@@ -253,6 +268,7 @@ function ToolbarToggle({
     <button
       type="button"
       title={title}
+      aria-pressed={active}
       disabled={disabled}
       onClick={onClick}
       className={cn(

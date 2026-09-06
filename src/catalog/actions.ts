@@ -1,7 +1,11 @@
 import { db } from './db'
+import { detachDetectedAlpha } from '../develop/masks'
+import { dropDetail } from './detail'
+import { invalidateRendered } from './previews'
 import { cacheDelete, previewKey, thumbKey } from './opfs'
 import { queueSidecarWrite } from './autoSidecar'
 import { nextId } from '../lib/math'
+import { toast } from '../design/toast'
 import { cloneEdits, defaultEdits, editsKind } from '../core/defaults'
 import type { Collection, ColorLabel, Edits, PickFlag, Photo, SmartRule } from '../core/types'
 
@@ -53,9 +57,21 @@ export async function removeKeyword(target: string | string[], keyword: string) 
 export async function saveEdits(id: string, edits: Edits) {
   await db.photos.update(id, { edits })
   queueSidecarWrite(id)
-  // The cached preview no longer reflects the photo, so drop it and let the
-  // render pipeline regenerate on next view.
-  await cacheDelete(previewKey(id))
+  // A preview failure cannot turn an acknowledged catalog commit into a
+  // failed save. Keep the two outcomes separate.
+  void refreshSavedPreview(id, edits).catch((err: unknown) => {
+    toast.error(
+      'Edits saved; preview could not refresh',
+      err instanceof Error ? err.message : String(err),
+    )
+  })
+}
+
+async function refreshSavedPreview(id: string, edits: Edits) {
+  // The cached preview no longer reflects the photo, so retire it and let the
+  // render pipeline regenerate on next view. The 1:1 tier above it is held in
+  // memory rather than OPFS, and goes stale the same way.
+  await invalidateRendered(id)
   // The grid thumbnail doesn't reflect it either. Re-rendered in the
   // background so the Library shows your edit, not the camera's.
   const { refreshThumb } = await import('../develop/thumbs')
@@ -64,7 +80,7 @@ export async function saveEdits(id: string, edits: Edits) {
 
 export async function resetEdits(target: string | string[]) {
   await db.photos.bulkUpdate(ids(target).map((key) => ({ key, changes: { edits: null } })))
-  await Promise.all(ids(target).map((id) => cacheDelete(previewKey(id))))
+  await Promise.all(ids(target).map((id) => invalidateRendered(id)))
   const { resetThumb } = await import('../develop/thumbs')
   await Promise.all(ids(target).map((id) => resetThumb(id)))
   queueSidecarWrite(target)
@@ -77,12 +93,20 @@ export async function copyEditsTo(sourceId: string, targets: string[], sections?
   const srcEdits =
     src.edits ?? defaultEdits(editsKind(src.isRaw), undefined, src.meta.iso)
   const rows = (await db.photos.bulkGet(targets)).filter(Boolean) as Photo[]
+  // A detected mask's cached alpha belongs to the pixels it was computed from.
+  // Detaching the *source* leaves the target's own masks — which may not even
+  // be part of this transfer — keyed to the photo that actually owns them.
+  const detached = detachDetectedAlpha(srcEdits)
+  const sourceImage = src.masterId ?? src.id
 
   await db.photos.bulkUpdate(
     rows.map((p) => {
+      // A virtual copy is the same photograph, so a coverage map computed for
+      // one is valid for the other and re-detecting would be busywork.
+      const from = (p.masterId ?? p.id) === sourceImage ? srcEdits : detached
       let next: Edits
       if (!sections?.length) {
-        next = cloneEdits(srcEdits)
+        next = cloneEdits(from)
       } else {
         // An unedited target starts from *its own* baseline, so syncing a look
         // onto a JPEG doesn't hand it a RAW's capture sharpening as a side
@@ -92,7 +116,7 @@ export async function copyEditsTo(sourceId: string, targets: string[], sections?
         )
         for (const key of sections) {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          ;(next as any)[key] = structuredClone((srcEdits as any)[key])
+          ;(next as any)[key] = structuredClone((from as any)[key])
         }
       }
       // Crop is per-photo geometry; carrying it across differently framed shots
@@ -100,7 +124,7 @@ export async function copyEditsTo(sourceId: string, targets: string[], sections?
       return { key: p.id, changes: { edits: next } }
     }),
   )
-  await Promise.all(rows.map((p) => cacheDelete(previewKey(p.id))))
+  await Promise.all(rows.map((p) => invalidateRendered(p.id)))
   // Synced photos aren't open in Develop, so their thumbnails are the only
   // place the user will see the result — refresh them too.
   const { refreshThumb } = await import('../develop/thumbs')
@@ -110,6 +134,15 @@ export async function copyEditsTo(sourceId: string, targets: string[], sections?
 }
 
 export async function createVirtualCopy(sourceId: string): Promise<string | null> {
+  // A copy is meant to be a fork of what the photographer is looking at, and
+  // Develop holds unsaved settings for up to a beat after the last drag. Read
+  // the catalogue before that lands and the copy is born a version behind.
+  const { useDevelop } = await import('../develop/session')
+  if (useDevelop.getState().photoId === sourceId) {
+    await useDevelop.getState().flush().catch(() => {
+      // A copy of the last saved state still beats refusing to make one.
+    })
+  }
   const src = await db.photos.get(sourceId)
   if (!src) return null
   const masterId = src.masterId ?? src.id
@@ -129,11 +162,26 @@ export async function createVirtualCopy(sourceId: string): Promise<string | null
 
 /** Removes photos from the catalog. Files on disk are never touched. */
 export async function removePhotos(target: string | string[]) {
-  const list = ids(target)
+  const requested = ids(target)
+  // A virtual copy resolves its pixels through its master's row, so a master
+  // removed on its own would leave its copies pointing at nothing and unable
+  // to open. They go with it, as they do in Lightroom.
+  const dependents = await db.photos
+    .where('masterId')
+    .anyOf(requested)
+    .primaryKeys()
+  const list = [...new Set([...requested, ...(dependents as string[])])]
+  // Read the rows before deleting them: a preview's cache key carries the
+  // photo's revision, so the key can't be reconstructed once the row is gone.
+  const doomed = (await db.photos.bulkGet(list)).filter((p): p is Photo => !!p)
   await db.photos.bulkDelete(list)
   await Promise.all(
-    list.flatMap((id) => [cacheDelete(thumbKey(id)), cacheDelete(previewKey(id))]),
+    doomed.flatMap((p) => [
+      cacheDelete(p.thumbKey ?? thumbKey(p.id)),
+      cacheDelete(previewKey(p.id, p.previewRev ?? 0)),
+    ]),
   )
+  for (const id of list) dropDetail(id)
   const collections = await db.collections.toArray()
   await Promise.all(
     collections

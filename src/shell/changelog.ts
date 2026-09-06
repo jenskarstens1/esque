@@ -46,6 +46,64 @@ export const KIND_ORDER: ChangeKind[] = ['added', 'improved', 'fixed']
 
 export const RELEASES: Release[] = [
   {
+    version: '0.3.0',
+    date: '2026-09-06',
+    summary:
+      'The RAW pipeline is put back on the light a photograph was actually taken in, and the surfaces you make decisions on stop borrowing their tone from the picture behind them.',
+    changes: [
+      {
+        kind: 'improved',
+        term: 'RAW rendering',
+        text: 'RAW files now arrive as scene-linear light. They were being decoded onto a display curve and then rendered through a second one, which lifted the deepest shadows by about a stop and a third and flattened everything above them. Exposure, white balance and every tone control now act on the light the sensor measured, so a stop is a stop. Photographs will look different: contrast that was being washed out is back, and shadows sit where they were photographed rather than raised.',
+      },
+      {
+        kind: 'improved',
+        term: 'Edits you have already made',
+        text: 'Nothing has been rewritten. Earlier edits are kept exactly as they were and re-rendered on the corrected pipeline, so a few will want a second look — the shift is largest in the shadows and almost nothing in the highlights, which is also why no automatic correction was applied: there is no single exposure that would put them all back.',
+      },
+      {
+        kind: 'improved',
+        term: 'Dialogs',
+        text: 'Settings, export and the rest are drawn on a solid surface. A panel you have to read and decide on should not take its colour from whichever frame happens to be behind it, or change contrast when you move to the next photo.',
+      },
+      {
+        kind: 'improved',
+        term: 'Colour profiles',
+        text: 'JPEG, PNG and TIFF files are converted through all three of an ICC profile\u2019s tone curves instead of the red one applied to every channel. Files whose profile treats the channels differently no longer open with a cast.',
+      },
+      {
+        kind: 'fixed',
+        term: 'Copying edits',
+        text: 'Pasting settings across a selection could race the sidecar writer and leave a half-written .xmp beside a file. Sidecar writes now wait for the paste to finish.',
+      },
+      {
+        kind: 'fixed',
+        term: 'Previews',
+        text: 'A thumbnail could go on showing a previous edit after a reset or a paste, when a slower render finished last and published over a newer one.',
+      },
+      {
+        kind: 'fixed',
+        term: 'Compare',
+        text: 'Showing two frames with different crops side by side could pull a texture out from under the renderer mid-frame and take the view down.',
+      },
+      {
+        kind: 'fixed',
+        term: 'White balance dropper',
+        text: 'The patch was read after the mask overlay had been drawn, so sampling with a mask on screen measured the overlay tint rather than the photograph.',
+      },
+      {
+        kind: 'fixed',
+        term: 'Local adjustments',
+        text: 'Tint inside a mask moved the opposite way to the tint outside one. Masks saved before this release are corrected as they are opened.',
+      },
+      {
+        kind: 'fixed',
+        term: 'Lens corrections',
+        text: 'The profile corrections checkbox did nothing and has been taken out. Any setting already in a file is still read and written back, so nothing is lost round-tripping through Lightroom.',
+      },
+    ],
+  },
+  {
     version: '0.2.0',
     date: '2026-08-06',
     summary: 'The app learns to be looked at: on a phone, in a bright room, and by someone who has never opened it before.',

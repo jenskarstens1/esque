@@ -124,6 +124,17 @@ fn hdrExpand(c: vec3f, k: f32, h: f32) -> vec3f {
   return c * (hdrExpand1(peak, k, h) / max(peak, EPS));
 }
 
+/**
+ * The output transfer: the sRGB curve, or a plain power for a space that wants
+ * one. The sRGB formula keeps going above 1, which is exactly how an
+ * extended-range canvas reads a value over 1: same colour, brighter than
+ * display white.
+ */
+fn transfer(c: vec3f, gamma: f32) -> vec3f {
+  if (gamma <= 0.0) { return encode(c); }
+  return pow(c, vec3f(gamma));
+}
+
 @fragment
 fn fs(@builtin(position) pos: vec4f, @location(0) uv: vec2f) -> @location(0) vec4f {
   // Passes keep image row 0 at v=0; the screen wants it at the top, so the
@@ -133,10 +144,6 @@ fn fs(@builtin(position) pos: vec4f, @location(0) uv: vec2f) -> @location(0) vec
   let lin = src.rgb;
 
   var disp = u.uToOutput * lin;
-  let clipHi = u.uShowHighlightClip > 0.5 &&
-    (disp.r >= u.uClipHighlight || disp.g >= u.uClipHighlight || disp.b >= u.uClipHighlight);
-  let clipLo = u.uShowShadowClip > 0.5 &&
-    (disp.r <= u.uClipShadow && disp.g <= u.uClipShadow && disp.b <= u.uClipShadow);
 
   disp = clamp(gamutCompress(disp, u.uOutputLuma, u.uOutputGamutCompress), vec3f(0.0), vec3f(1.0));
   if (u.uProofToCanvas > 0.5) {
@@ -144,19 +151,23 @@ fn fs(@builtin(position) pos: vec4f, @location(0) uv: vec2f) -> @location(0) vec
     disp = clamp(gamutCompress(disp, u.uCanvasLuma, u.uCanvasGamutCompress), vec3f(0.0), vec3f(1.0));
   }
 
+  // Clipping is a property of the *encoded* output — the code value the display
+  // or the exported file receives — and the thresholds are written as code-value
+  // fractions. Comparing them against linear light instead moves them: 0.0025
+  // linear is code 8, not code 0, so the shadow warning paints several stops of
+  // perfectly recoverable shadow as lost, and disagrees with the histogram's own
+  // clipping readout on the same frame.
+  let code = transfer(disp, u.uGamma);
+  let clipHi = u.uShowHighlightClip > 0.5 &&
+    (code.r >= u.uClipHighlight || code.g >= u.uClipHighlight || code.b >= u.uClipHighlight);
+  let clipLo = u.uShowShadowClip > 0.5 &&
+    (code.r <= u.uClipShadow && code.g <= u.uClipShadow && code.b <= u.uClipShadow);
+
   // Last, so the gamut work above still reasons about a [0,1] cube and the
   // expansion is a pure brightness scale on colours already inside the display.
   disp = hdrExpand(disp, u.uHdrKnee, u.uHdrHeadroom);
 
-  // The sRGB formula keeps going above 1, which is exactly how an
-  // extended-range canvas reads a value over 1: same colour, brighter than
-  // display white.
-  var encoded: vec3f;
-  if (u.uGamma <= 0.0) {
-    encoded = encode(disp);
-  } else {
-    encoded = pow(disp, vec3f(u.uGamma));
-  }
+  var encoded = transfer(disp, u.uGamma);
 
   // Interleaved gradient noise, ±half a code value: kills banding without grain.
   let n = ign(pos.xy) - 0.5;

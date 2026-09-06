@@ -14,6 +14,7 @@ import * as Comlink from 'comlink'
 import LibRaw from 'libraw-wasm'
 import type { LibRawSettings } from 'libraw-wasm'
 import { floatToHalf, HALF_ONE } from '../core/half'
+import { LINEAR_SETTINGS } from './settings'
 import { flipTransposes } from './orientation'
 import { bandMargin, XTRANS_FILTERS, type BandRequest, type BandResult } from './bands'
 import {
@@ -58,63 +59,6 @@ function demosaicSettings(
 function rawNoiseSettings(iso: number | undefined): LibRawSettings {
   if (typeof iso !== 'number' || !Number.isFinite(iso) || iso <= 800) return {}
   return { fbddNoiserd: 1 }
-}
-
-/**
- * Transfer curve LibRaw encodes its 16-bit output with.
- *
- * These are dcraw's defaults, and they are stated here deliberately rather than
- * inherited. Until now this file asked for `gamm: [1, 1]` — dcraw's "give me
- * linear" idiom — and never got it: the libraw-wasm binding only copied `gamm`
- * when the array had exactly six elements, while its own type declared two, so
- * a two-element request was dropped on the floor and every decode came back on
- * the default curve. The vendored build fixes that binding (see
- * tools/build-libraw.sh), which means the request is now honoured and the value
- * has to be chosen on purpose.
- *
- * It is kept at 0.45/4.5 because that is the transfer function the renderer's
- * detail and tone stages were actually calibrated against, on real paired
- * camera-JPEG fixtures. Switching to true linear is the correct end state — it
- * is what the rest of the pipeline claims to work in — but it is not a drop-in:
- * the gain needed to restore the current rendering varies from about 2.5x in
- * the highlights to 4.5x in the shadows, so no baseline exposure can absorb it.
- * Capture sharpening measured 14 against the camera JPEG's 27 on the ISO 3200
- * 5D Mark II fixture, purely because gradients shrink with the signal. Making
- * that move means re-deriving the display-rendering shoulder and the detail
- * defaults together, against every fixture, as its own piece of work.
- */
-const OUTPUT_GAMMA: [number, number] = [0.45, 4.5]
-
-/**
- * Produces **ProPhoto RGB, 16-bit**, on {@link OUTPUT_GAMMA}. Reconstruction,
- * scene preparation, and capture cleanup then retain that headroom until the
- * renderer's explicit scene-to-display stage.
- *
- *   outputColor 4 : ProPhoto primaries (very wide, holds saturated reds/greens)
- *   noAutoBright  : never let LibRaw guess an exposure; that's the user's job
- *   useCameraWb   : start from the camera's as-shot WB, then offset from there
- *   highlight 1   : reserve WB headroom instead of clipping it before the GPU
- *   adjustMaximumThr 0 : keep the camera's declared saturation point
- *
- * That last one matters for reproducibility. LibRaw's default 0.75 lets
- * `adjust_maximum()` pull the white point down to the brightest sample actually
- * present, which is a property of the pixels handed to it — so a cropped or
- * banded decode of the same file lands on a different white point than the
- * whole frame, and the cached proxy stops matching a fresh decode. Pinning the
- * threshold to 0 costs a fraction of a stop of highlight brightness that the
- * half-float working space carries losslessly anyway, and is what makes a
- * banded decode bit-identical to the frame it replaces.
- */
-const LINEAR_SETTINGS: LibRawSettings = {
-  outputColor: 4,
-  outputBps: 16,
-  gamm: OUTPUT_GAMMA,
-  noAutoBright: true,
-  useCameraWb: true,
-  useCameraMatrix: 1,
-  highlight: 1,
-  adjustMaximumThr: 0,
-  outputTiff: false,
 }
 
 /** Display-referred settings, only for generating the cached preview JPEG. */
@@ -199,6 +143,10 @@ function downsampleRowsToHalfRGBA(
   linearScale = 1,
 ): Uint16Array {
   const lut = getHalfLUT(linearScale)
+  // A monochrome sensor gives LibRaw one channel. Reading the next two offsets
+  // anyway walks into the following pixels, so a Monochrom file comes back
+  // smeared with colour fringes instead of grey.
+  const grey = channels < 3
   const out = new Uint16Array(dw * Math.max(0, yTo - yFrom) * 4)
   const xRatio = sw / dw
   const yRatio = sh / dh
@@ -216,9 +164,16 @@ function downsampleRowsToHalfRGBA(
       for (let sy = y0; sy < y1; sy++) {
         let si = ((sy - srcTop) * srcStride + x0) * channels
         for (let sx = x0; sx < x1; sx++) {
-          r += src[si]
-          g += src[si + 1]
-          b += src[si + 2]
+          if (grey) {
+            const v = src[si]
+            r += v
+            g += v
+            b += v
+          } else {
+            r += src[si]
+            g += src[si + 1]
+            b += src[si + 2]
+          }
           si += channels
           n++
         }
@@ -242,14 +197,16 @@ function toHalfRGBA(
   linearScale = 1,
 ): Uint16Array {
   const lut = getHalfLUT(linearScale)
+  const grey = channels < 3
   const out = new Uint16Array(w * h * 4)
   const n = w * h
   for (let i = 0; i < n; i++) {
     const s = i * channels
     const o = i * 4
-    out[o] = lut[src[s]]
-    out[o + 1] = lut[src[s + 1]]
-    out[o + 2] = lut[src[s + 2]]
+    const v = lut[src[s]]
+    out[o] = v
+    out[o + 1] = grey ? v : lut[src[s + 1]]
+    out[o + 2] = grey ? v : lut[src[s + 2]]
     out[o + 3] = HALF_ONE
   }
   return out
@@ -344,8 +301,17 @@ const SETTINGS_RESET: LibRawSettings = {
 }
 
 async function openRaw(bytes: Uint8Array<ArrayBuffer>, settings: LibRawSettings) {
+  const merged: LibRawSettings = { ...SETTINGS_RESET, ...settings }
+  // A caller writing `cropbox: crop ?? null` means "decode the whole frame",
+  // but the binding *skips* a null array instead of clearing it, so the null
+  // would let the previous decode's crop through. Spreading the reset first is
+  // not enough, because the explicit null overwrites it. Folding null back to
+  // the reset value is what makes "no crop" mean no crop at every call site.
+  merged.cropbox ??= SETTINGS_RESET.cropbox
+  merged.greybox ??= SETTINGS_RESET.greybox
+  merged.userMul ??= SETTINGS_RESET.userMul
   try {
-    await decoder.open(bytes, { ...SETTINGS_RESET, ...settings })
+    await decoder.open(bytes, merged)
     return decoder
   } catch (error) {
     await releaseRaw()
@@ -507,10 +473,7 @@ async function embeddedThumbFrom(
     const blob = embeddedImageBlob(thumb.data as Uint8Array)
     // Embedded previews are usually JPEG but can be PPM on older bodies, so
     // let the browser sniff the bytes rather than trusting `format`.
-    const bmp = await createImageBitmap(
-      blob,
-      { imageOrientation: 'none' },
-    ).catch(() => null)
+    const bmp = await createImageBitmap(blob).catch(() => null)
     if (bmp) {
       // Preserve the camera's original full-resolution JPEG when no resize or
       // orientation pass is needed. Re-encoding it only loses fine detail.
@@ -755,7 +718,8 @@ const api = {
         fullHeight,
         scale: Math.max(image.width, image.height) / Math.max(1, fullWidth, fullHeight),
       })
-    } catch {
+    } catch (error) {
+      console.warn('Embedded RAW preview could not be decoded', error)
       return null
     } finally {
       if (raw) await releaseRaw().catch(() => {})
@@ -952,9 +916,7 @@ async function embeddedPreviewLinearFrom(
 ): Promise<LinearImage | null> {
   const thumb = await raw.thumbnailData()
   if (!thumb?.data?.length || thumb.format !== 'jpeg') return null
-  const bmp = await createImageBitmap(embeddedImageBlob(thumb.data as Uint8Array), {
-    imageOrientation: 'none',
-  })
+  const bmp = await createImageBitmap(embeddedImageBlob(thumb.data as Uint8Array))
   return orientLinear(bitmapToLinear(bmp, maxEdge, false), flip)
 }
 

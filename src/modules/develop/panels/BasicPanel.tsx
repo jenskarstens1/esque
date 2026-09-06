@@ -1,7 +1,8 @@
 import { PanelSection, MiniAction } from '../../../design/Panel'
 import { panelMenuItems } from '../../../shell/appMenus'
 import { Checkbox, IconButton, SegmentedControl, Select } from '../../../design/Controls'
-import { DropperIcon } from '../../../design/icons'
+import { DropperIcon, ExposureIcon } from '../../../design/icons'
+import { MENU_ICON } from '../../../design/Menu'
 import { EditSlider } from '../EditSlider'
 import { isSectionModified } from '../../../develop/modified'
 import { useDevelop } from '../../../develop/session'
@@ -113,21 +114,25 @@ export function BasicPanel() {
 
   return (
     <PanelSection
-      menuItems={() => panelMenuItems('basic')}
+      menuItems={() => [
+        { label: 'Auto Tone', icon: <ExposureIcon size={MENU_ICON} />, onSelect: () => void runAutoTone() },
+        { kind: 'separator' },
+        ...panelMenuItems('basic'),
+      ]}
       title="Basic"
       modified={modified}
+      revealActions="always"
       actions={
         <>
-          <MiniAction title="Set tone from the photo" onClick={() => void runAutoTone()}>
-            Auto Tone
-          </MiniAction>
+          <span className="esq-reveal opacity-0 transition-opacity duration-[--duration-fast] group-hover/head:opacity-100 focus-within:opacity-100">
+            <MiniAction onClick={() => reset('basic')}>Reset</MiniAction>
+          </span>
           <MiniAction
             title="Set white balance, tone and vibrance from the photo"
             onClick={() => void autoDevelopCurrent('all')}
           >
             Auto
           </MiniAction>
-          <MiniAction onClick={() => reset('basic')}>Reset</MiniAction>
         </>
       }
     >

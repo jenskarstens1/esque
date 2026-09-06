@@ -3,7 +3,7 @@ import { useMenu } from '../design/useMenu'
 import { MoreHorizontalIcon } from '../design/icons'
 import { cn } from '../lib/cn'
 import { useDevelop } from '../develop/session'
-import { toast } from '../design/toast'
+import { compareMenuItems } from './appMenus'
 import { BEFORE_AFTER_LABELS, useUI, type BeforeAfter } from '../state/ui'
 
 const MODES: Array<{ value: BeforeAfter; icon: React.ReactNode; title: string }> = [
@@ -33,43 +33,9 @@ export function CompareControl() {
   const photoId = useDevelop((s) => s.photoId)
   const { menu, open } = useMenu()
 
-  const swap = useDevelop((s) => s.swapBeforeAfter)
-  const copyAfterToBefore = useDevelop((s) => s.copyAfterToBefore)
-  const copyBeforeToAfter = useDevelop((s) => s.copyBeforeToAfter)
-  const resetBefore = useDevelop((s) => s.resetBefore)
-
   if (!photoId) return null
 
-  const actions = (e: React.MouseEvent) =>
-    open(e, [
-      {
-        label: 'Swap Before and After',
-        onSelect: () => {
-          swap()
-          toast.show('Swapped before and after')
-        },
-      },
-      { kind: 'separator' },
-      {
-        label: "Copy After's Settings to Before",
-        onSelect: () => {
-          copyAfterToBefore()
-          toast.show('Before updated to the current edit')
-        },
-      },
-      {
-        label: "Copy Before's Settings to After",
-        onSelect: () => copyBeforeToAfter(),
-      },
-      { kind: 'separator' },
-      {
-        label: 'Reset Before to Import',
-        onSelect: () => {
-          resetBefore()
-          toast.show('Before reset to the imported settings')
-        },
-      },
-    ])
+  const actions = (e: React.MouseEvent) => open(e, compareMenuItems(true))
 
   return (
     <div className="flex shrink-0 items-center gap-1.5">

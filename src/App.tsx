@@ -27,6 +27,7 @@ import { useCatalog } from './state/catalog'
 import { usePhotoCount } from './catalog/hooks'
 import { useIsCompact, useIsPhone, useWindowWidth } from './lib/useViewport'
 import { Drawer, Sheet } from './design/Sheet'
+import { installSaveLifecycle } from './develop/session'
 
 // The export engine (ICC generation, TIFF writer, tiled renderer) is large and
 // only reachable through this dialog, so it loads on demand.
@@ -118,6 +119,7 @@ export default function App() {
   // Long press stands in for a right click, so every `onContextMenu` in the app
   // is reachable with a finger.
   useTouchContextMenu()
+  useEffect(() => installSaveLifecycle(), [])
 
   // The panel toggles are reached from the keymap, the menus and the toolbar as
   // well as from here, so the breakpoint lives in the store rather than being
@@ -134,11 +136,12 @@ export default function App() {
     // Deferred to idle: nothing on screen depends on it, and the first frame
     // shouldn't wait on an IndexedDB read to find out where the last export went.
     const restore = () => void restoreDestination()
-    const idle = requestIdleCallback?.(restore) ?? window.setTimeout(restore, 1200)
-    return () => {
-      cancelIdleCallback?.(idle)
-      clearTimeout(idle)
+    if (typeof window.requestIdleCallback === 'function') {
+      const idle = window.requestIdleCallback(restore)
+      return () => window.cancelIdleCallback(idle)
     }
+    const timer = window.setTimeout(restore, 1200)
+    return () => window.clearTimeout(timer)
   }, [])
 
   /*

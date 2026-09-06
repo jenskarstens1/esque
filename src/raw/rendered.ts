@@ -11,10 +11,18 @@
  * camera's embedded preview is an ordinary JPEG once LibRaw has handed it over.
  */
 
-import { SRGB_D65_TO_PROPHOTO_D50 } from '../core/color'
-import { floatToHalf, HALF_ONE } from '../core/half'
+import {
+  mul3,
+  PROPHOTO_D50_TO_SRGB_D65,
+  SRGB_D65_TO_PROPHOTO_D50,
+  SRGB_TO_XYZ_D50,
+  XYZ_D50_TO_PROPHOTO,
+  type Mat3,
+} from '../core/color'
+import { parseIccProfile, profileFromChromaticities, type SourceProfile } from '../core/icc'
+import { floatToHalf, halfToFloat, HALF_ONE } from '../core/half'
 import { applyOrientationHalf, flipTransposes, orientationTransform } from './orientation'
-import { decodeDeepPng, isDeepPng } from './png16'
+import { decodeDeepPng, isDeepPng, type Chromaticities } from './png16'
 import { decodeTiff, isTiff } from './tiff16'
 import { classify, EMBEDDED_PREVIEW_EDGE, type LinearImage } from './decoded'
 
@@ -25,8 +33,8 @@ function writeWorkingHalf(
   r: number,
   g: number,
   b: number,
+  m: Mat3 = SRGB_D65_TO_PROPHOTO_D50,
 ) {
-  const m = SRGB_D65_TO_PROPHOTO_D50
   out[offset] = floatToHalf(m[0] * r + m[1] * g + m[2] * b)
   out[offset + 1] = floatToHalf(m[3] * r + m[4] * g + m[5] * b)
   out[offset + 2] = floatToHalf(m[6] * r + m[7] * g + m[8] * b)
@@ -143,8 +151,71 @@ export async function renderedThumb(
   preserveHdr = false,
 ): Promise<Blob> {
   if (preserveHdr && hasGainMap(buffer)) return new Blob([buffer], { type: 'image/jpeg' })
+  const edge = maxEdge > 0 ? maxEdge : EMBEDDED_PREVIEW_EDGE
+
+  // TIFF and 16-bit PNG have to go the long way round. No Chromium build
+  // decodes TIFF at all, so `createImageBitmap` throws and the import reports a
+  // blank failure — the file lands in the catalog with no thumbnail and no
+  // explanation. Deep PNG would decode, but through the canvas, which quantises
+  // to 8 bits and ignores the profile.
+  const bytes = new Uint8Array(buffer)
+  if (isTiff(bytes) || isDeepPng(bytes)) {
+    const deep = await deepThumb(bytes, edge, quality)
+    if (deep) return deep
+  }
+
   const bmp = await createImageBitmap(new Blob([buffer]), { imageOrientation: 'from-image' })
-  return encodeJpeg(bmp, maxEdge > 0 ? maxEdge : EMBEDDED_PREVIEW_EDGE, 0, quality)
+  return encodeJpeg(bmp, edge, 0, quality)
+}
+
+/**
+ * Thumbnails a deep file by way of the working space, so the profile it carries
+ * is honoured rather than assumed.
+ */
+async function deepThumb(
+  bytes: Uint8Array,
+  maxEdge: number,
+  quality: number,
+): Promise<Blob | null> {
+  const image = await decodeDeep(bytes, maxEdge)
+  if (!image) return null
+
+  const { width: w, height: h, data } = image
+  const m = PROPHOTO_D50_TO_SRGB_D65
+  const rgba = new Uint8ClampedArray(w * h * 4)
+  for (let i = 0, o = 0; i < w * h; i++, o += 4) {
+    const r = halfToFloat(data[o])
+    const g = halfToFloat(data[o + 1])
+    const b = halfToFloat(data[o + 2])
+    rgba[o] = encodeSrgb(m[0] * r + m[1] * g + m[2] * b) * 255
+    rgba[o + 1] = encodeSrgb(m[3] * r + m[4] * g + m[5] * b) * 255
+    rgba[o + 2] = encodeSrgb(m[6] * r + m[7] * g + m[8] * b) * 255
+    rgba[o + 3] = 255
+  }
+
+  const bmp = await createImageBitmap(new ImageData(rgba, w, h))
+  return encodeJpeg(bmp, maxEdge, 0, quality)
+}
+
+const encodeSrgb = (v: number): number => {
+  if (!(v > 0)) return 0
+  if (v >= 1) return 1
+  return v <= 0.0031308 ? v * 12.92 : 1.055 * Math.pow(v, 1 / 2.4) - 0.055
+}
+
+/** TIFF and deep PNG, decoded to the working space with their own profile. */
+async function decodeDeep(bytes: Uint8Array, maxEdge: number): Promise<LinearImage | null> {
+  if (isDeepPng(bytes)) {
+    const png = await decodeDeepPng(bytes).catch(() => null)
+    return png ? samplesToLinear(png, maxEdge, false, sourceProfile(png)) : null
+  }
+  if (isTiff(bytes)) {
+    const tif = await decodeTiff(bytes).catch(() => null)
+    if (!tif) return null
+    const image = samplesToLinear(tif, maxEdge, tif.linear, sourceProfile(tif))
+    return orientLinear(image, EXIF_TO_FLIP[tif.orientation - 1] ?? 0)
+  }
+  return null
 }
 
 export async function imageDataToJpeg(
@@ -162,6 +233,9 @@ export async function imageDataToJpeg(
   const dh = Math.max(1, Math.round(h * scale))
   const rgba = new Uint8ClampedArray(dw * dh * 4)
   const shift = bits === 16 ? 8 : 0
+  // A monochrome sensor gives one channel. Reading three anyway steps into the
+  // following pixels and stains a grey frame with colour.
+  const grey = channels < 3
   const xRatio = w / dw
   const yRatio = h / dh
 
@@ -178,9 +252,16 @@ export async function imageDataToJpeg(
       for (let sy = y0; sy < y1; sy++) {
         let si = (sy * w + x0) * channels
         for (let sx = x0; sx < x1; sx++) {
-          r += data[si] as number
-          g += data[si + 1] as number
-          b += data[si + 2] as number
+          if (grey) {
+            const v = data[si] as number
+            r += v
+            g += v
+            b += v
+          } else {
+            r += data[si] as number
+            g += data[si + 1] as number
+            b += data[si + 2] as number
+          }
           si += channels
           n++
         }
@@ -197,28 +278,58 @@ export async function imageDataToJpeg(
   return encodeJpeg(bmp, maxEdge, flip, quality)
 }
 
+/**
+ * Samples a profile's tone curve into the same 16-bit table shape sRGB uses.
+ *
+ * Cached against the profile itself, because a folder import decodes many files
+ * that all carry the identical embedded profile.
+ */
+const profileLUTs = new WeakMap<SourceProfile, Float32Array[]>()
+function profileLUT(profile: SourceProfile): Float32Array[] {
+  const cached = profileLUTs.get(profile)
+  if (cached) return cached
+  // Identical curves — the common case — share one table rather than three.
+  const built = new Map<(v: number) => number, Float32Array>()
+  const luts = profile.toLinear.map((f) => {
+    const hit = built.get(f)
+    if (hit) return hit
+    const lut = new Float32Array(65536)
+    for (let i = 0; i < 65536; i++) lut[i] = f(i / 65535)
+    built.set(f, lut)
+    return lut
+  })
+  profileLUTs.set(profile, luts)
+  return luts
+}
+
+/** Reads a decoder's colour tags into a profile, or null to mean "assume sRGB". */
+function sourceProfile(src: {
+  icc: Uint8Array | null
+  gamma?: number | null
+  chrm?: Chromaticities | null
+}): SourceProfile | null {
+  if (src.icc) {
+    const parsed = parseIccProfile(src.icc)
+    if (parsed) return parsed
+  }
+  return profileFromChromaticities(
+    src.gamma ?? null,
+    src.chrm ?? null,
+    SRGB_TO_XYZ_D50,
+  )
+}
+
 /** JPEG/PNG/TIFF/HEIC path: decode, undo sRGB, hand back linear half-float. */
 export async function decodeRenderedLinear(
   buffer: ArrayBuffer,
   maxEdge: number,
 ): Promise<LinearImage> {
   // A 16-bit PNG has to bypass the canvas, which would quantise it to 8 bits
-  // before we ever see it.
+  // before we ever see it, and TIFF has to bypass it because no Chromium build
+  // decodes TIFF at all.
   const bytes = new Uint8Array(buffer)
-  if (isDeepPng(bytes)) {
-    const png = await decodeDeepPng(bytes).catch(() => null)
-    if (png) return samplesToLinear(png, maxEdge, false)
-  }
-
-  // TIFF isn't a precision problem but an availability one: no Chromium build
-  // decodes it at all, so without this a .tif import simply fails.
-  if (isTiff(bytes)) {
-    const tif = await decodeTiff(bytes).catch(() => null)
-    if (tif) {
-      const image = samplesToLinear(tif, maxEdge, tif.linear)
-      return orientLinear(image, EXIF_TO_FLIP[tif.orientation - 1] ?? 0)
-    }
-  }
+  const deep = await decodeDeep(bytes, maxEdge)
+  if (deep) return deep
 
   let bmp: ImageBitmap
   try {
@@ -265,20 +376,38 @@ export function orientLinear(image: LinearImage, flip: number): LinearImage {
  * everywhere else in the pipeline.
  *
  * `alreadyLinear` covers float TIFFs, where scene-linear values are the
- * convention and running the sRGB curve over them would crush the shadows.
+ * convention and running any curve over them would crush the shadows. The
+ * profile's *matrix* still applies: a float file is linear, not sRGB-primaried.
+ *
+ * `profile` is the file's own colour space when it declared one. Without it the
+ * file is assumed to be sRGB, which is the safe guess for an untagged image but
+ * badly wrong for a ProPhoto export — including one of esque's own.
  *
  * Orientation is applied by the caller: PNG has none of its own, and TIFF's
  * lives in a tag the caller has already read.
  */
 function samplesToLinear(
-  src: { width: number; height: number; channels: number; data: Uint16Array },
+  src: { width: number; height: number; channels: number; data: Uint16Array | Float32Array },
   maxEdge: number,
   alreadyLinear: boolean,
+  profile: SourceProfile | null = null,
 ): LinearImage {
-  const lut = alreadyLinear ? null : getSrgb16LUT()
   const { width: sw, height: sh, channels, data } = src
   const grey = channels < 3
-  const value = (v: number) => (lut ? lut[v] : v / 65535)
+  const toWorking = profile ? mul3(XYZ_D50_TO_PROPHOTO, profile.toXyzD50) : SRGB_D65_TO_PROPHOTO_D50
+  // The curve is sampled into a table for the same reason sRGB is: a 16-bit
+  // image is millions of pixels and `Math.pow` per sample is not free.
+  const lut = alreadyLinear ? null : profile ? profileLUT(profile) : null
+  const srgb = alreadyLinear || profile ? null : getSrgb16LUT()
+  // Float samples are already the value; integer samples are a code that has to
+  // be normalised and run back through the transfer curve. Per channel, since
+  // a profile may give each one its own.
+  const rv = lut ? (v: number) => lut[0][v] : srgb ? (v: number) => srgb[v] : null
+  const gv = lut ? (v: number) => lut[1][v] : srgb ? (v: number) => srgb[v] : null
+  const bv = lut ? (v: number) => lut[2][v] : srgb ? (v: number) => srgb[v] : null
+  const raw =
+    data instanceof Float32Array ? (v: number) => v : (v: number) => v / 65535
+  const value = { r: rv ?? raw, g: gv ?? raw, b: bv ?? raw }
 
   const scale = Math.min(1, maxEdge / Math.max(sw, sh))
   const dw = Math.max(1, Math.round(sw * scale))
@@ -301,21 +430,23 @@ function samplesToLinear(
         let si = (sy * sw + x0) * channels
         for (let sx = x0; sx < x1; sx++) {
           if (grey) {
-            const v = value(data[si])
+            // One channel replicated, so it takes the red curve: a grey
+            // profile's 'kTRC' is what all three were built from anyway.
+            const v = value.r(data[si])
             r += v
             g += v
             b += v
           } else {
-            r += value(data[si])
-            g += value(data[si + 1])
-            b += value(data[si + 2])
+            r += value.r(data[si])
+            g += value.g(data[si + 1])
+            b += value.b(data[si + 2])
           }
           si += channels
           n++
         }
       }
       const o = (y * dw + x) * 4
-      writeWorkingHalf(out, o, r / n, g / n, b / n)
+      writeWorkingHalf(out, o, r / n, g / n, b / n, toWorking)
     }
   }
 

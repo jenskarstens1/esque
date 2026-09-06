@@ -10,7 +10,14 @@ import type { Photo } from '../core/types'
 import type { Proxy } from './proxy'
 
 const MAGIC = 0x45535150
-const VERSION = 1
+/**
+ * Bumped to 2 when the RAW decode moved to scene-linear. A v1 payload holds
+ * pixels on dcraw's 0.45/4.5 curve, which the renderer would now multiply as
+ * though it were radiance — so every one of them has to be re-decoded rather
+ * than reinterpreted. A mismatch here already deletes the entry and falls
+ * through to a fresh decode, so the bump is the whole invalidation.
+ */
+const VERSION = 2
 const HEADER_BYTES = 64
 
 const QUALITY_CODE = {

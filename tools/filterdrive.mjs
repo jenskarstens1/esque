@@ -196,7 +196,7 @@ async function pickFromMenu(button, rowText) {
   }, button)
   await settle(220)
   const picked = await page.evaluate((t) => {
-    const row = [...document.querySelectorAll('[role="menuitem"]')].find((r) =>
+    const row = [...document.querySelectorAll('[role^="menuitem"]')].find((r) =>
       r.textContent.includes(t),
     )
     if (!row) return false

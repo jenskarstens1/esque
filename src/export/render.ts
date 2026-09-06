@@ -21,7 +21,9 @@ import { Renderer } from '../gpu/renderer'
 import type { SourceImage } from '../core/workingImage'
 import { geometryOutputSize, isIdentityFraming, splitAtGeometry } from '../gpu/geometry'
 import type { OutputSpace } from '../gpu/colorspace'
-import type { Edits } from '../core/types'
+import { isAiGeometry, type Edits } from '../core/types'
+import { loadAlpha } from '../ai/alpha'
+import { isNeutralMask } from '../develop/masks'
 import type { Plane } from './pixels'
 
 /**
@@ -72,6 +74,18 @@ export async function renderFull(
   image: FullRenderInput,
   opts: FullRenderOptions,
 ): Promise<Plane> {
+  check(opts.signal)
+  for (const mask of opts.edits.masks) {
+    if (!mask.visible || mask.opacity === 0 || isNeutralMask(mask)) continue
+    for (const { geometry } of mask.components) {
+      if (!isAiGeometry(geometry)) continue
+      check(opts.signal)
+      if (!geometry.cacheKey || !(await loadAlpha(geometry.cacheKey))) {
+        throw new Error(`"${mask.name}" needs detection. Open Masking and run detection again before exporting.`)
+      }
+    }
+  }
+  check(opts.signal)
   const { width, height, depth } = { ...image, depth: opts.depth }
   const total = width * height
   /** Assembly buffer for the tiled path; a 60 MP one is 480 MB, so it waits. */

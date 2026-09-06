@@ -1,14 +1,17 @@
-import { useState, type ReactNode } from 'react'
+import { useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { cn } from '../lib/cn'
 import { useMenu } from './useMenu'
 import type { MenuItem } from './Menu'
 
 interface PanelSectionProps {
+  id?: string
   title: string
   children: ReactNode
   defaultOpen?: boolean
   open?: boolean
   onOpenChange?: (open: boolean) => void
+  /** Temporarily reveals an uncontrolled section when its tool changes. */
+  revealKey?: string | null
   /** Rendered on the right of the header — reset buttons, toggles, amount readouts. */
   actions?: ReactNode
   /**
@@ -36,11 +39,13 @@ interface PanelSectionProps {
 }
 
 export function PanelSection({
+  id,
   title,
   children,
   defaultOpen = true,
   open: controlledOpen,
   onOpenChange,
+  revealKey,
   actions,
   revealActions = 'hover',
   modified,
@@ -51,9 +56,24 @@ export function PanelSection({
   className,
 }: PanelSectionProps) {
   const [uncontrolled, setUncontrolled] = useState(defaultOpen)
+  const beforeReveal = useRef<boolean | null>(null)
+  useLayoutEffect(() => {
+    if (controlledOpen !== undefined) return
+    if (revealKey) {
+      setUncontrolled((current) => {
+        if (beforeReveal.current === null) beforeReveal.current = current
+        return true
+      })
+    } else if (beforeReveal.current !== null) {
+      const previous = beforeReveal.current
+      beforeReveal.current = null
+      setUncontrolled(previous)
+    }
+  }, [revealKey, controlledOpen])
   const { menu, open: openMenu } = useMenu()
   const open = collapsible ? (controlledOpen ?? uncontrolled) : true
   const toggle = () => {
+    beforeReveal.current = null
     onOpenChange?.(!open)
     if (controlledOpen === undefined) setUncontrolled(!open)
   }
@@ -69,7 +89,7 @@ export function PanelSection({
   )
 
   return (
-    <section className={cn(hairline && 'hairline-b', fill && 'flex min-h-0 flex-1 flex-col', className)}>
+    <section id={id} className={cn(hairline && 'hairline-b', fill && 'flex min-h-0 flex-1 flex-col', className)}>
       <header
         className={cn(
           'group/head flex h-8 coarse:h-11 shrink-0 items-center gap-1.5 px-3 transition-colors duration-[--duration-fast]',
@@ -82,6 +102,7 @@ export function PanelSection({
             type="button"
             onClick={toggle}
             aria-expanded={open}
+            aria-controls={id ? `${id}-body` : undefined}
             className="flex h-full min-w-0 flex-1 items-center gap-1.5 text-left"
           >
             {label}
@@ -105,6 +126,8 @@ export function PanelSection({
         <div className="flex min-h-0 flex-1 flex-col px-3 pb-3">{children}</div>
       ) : (
         <div
+          id={id ? `${id}-body` : undefined}
+          inert={!open}
           className={cn(
             'grid transition-[grid-template-rows] duration-[--duration-base] ease-[--ease-out]',
             open ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]',

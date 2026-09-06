@@ -1,6 +1,9 @@
 import { forwardRef, useEffect, useRef, useState, type AnchorHTMLAttributes, type ButtonHTMLAttributes, type ReactNode } from 'react'
 import { cn } from '../lib/cn'
 
+const focusRing =
+  'focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-panel'
+
 // ---------------------------------------------------------------------------
 // Button
 // ---------------------------------------------------------------------------
@@ -46,7 +49,8 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
       className={cn(
         'inline-flex shrink-0 items-center justify-center font-medium whitespace-nowrap',
         'transition-[background-color,color,filter,scale] duration-[--duration-fast] ease-[--ease-out]',
-        'active:scale-[0.975] disabled:pointer-events-none disabled:opacity-35',
+        'active:scale-[0.96] disabled:pointer-events-none disabled:opacity-35',
+        focusRing,
         variants[variant],
         sizes[size],
         full && 'w-full',
@@ -76,7 +80,8 @@ const iconChrome = (size: 'sm' | 'md', active?: boolean) =>
   cn(
     'inline-flex shrink-0 items-center justify-center rounded-md',
     'transition-[background-color,color,scale] duration-[--duration-fast] ease-[--ease-out]',
-    'active:scale-90',
+    'active:scale-[0.96]',
+    focusRing,
     size === 'sm' ? 'size-6' : 'size-7',
     /*
      * 24 and 28px are right for a dense pro sidebar and far under the 44pt a
@@ -186,6 +191,7 @@ export function SegmentedControl<T extends string>({
             className={cn(
               'relative flex flex-1 items-center justify-center whitespace-nowrap rounded-[5px] font-medium',
               'transition-[color,background-color,box-shadow] duration-[--duration-fast] ease-[--ease-out]',
+              focusRing,
               size === 'sm'
                 ? 'h-[19px] coarse:h-8 esq-tap px-2 text-micro'
                 : 'h-6 coarse:h-11 px-2.5 text-mini',
@@ -248,6 +254,7 @@ export function Switch({
       className={cn(
         'esq-tap relative h-[15px] w-[26px] shrink-0 rounded-full transition-colors duration-[--duration-base] ease-[--ease-out]',
         'disabled:pointer-events-none disabled:opacity-35',
+        focusRing,
         checked ? 'bg-accent' : 'bg-control shadow-[inset_0_0.5px_1px_rgb(0_0_0/0.3)]',
         !showLabel && className,
       )}
@@ -346,10 +353,12 @@ export function Checkbox({
         type="button"
         role="checkbox"
         aria-checked={indeterminate ? 'mixed' : checked}
+        disabled={disabled}
         onClick={() => onChange(!checked)}
         className={cn(
           'esq-tap flex size-[14px] shrink-0 items-center justify-center rounded-xs',
           'transition-[background-color,box-shadow] duration-[--duration-fast] ease-[--ease-out]',
+          focusRing,
           checked || indeterminate
             ? 'bg-accent shadow-none'
             : 'bg-control shadow-[inset_0_0.5px_1px_rgb(0_0_0/0.3)]',
@@ -405,6 +414,7 @@ export function Select<T extends string>({
           'shadow-[0_1px_2px_rgb(0_0_0/0.25),inset_0_0.5px_0_rgb(255_255_255/0.07)]',
           'transition-colors duration-[--duration-fast] hover:bg-hover',
           'disabled:pointer-events-none disabled:opacity-35',
+          focusRing,
           size === 'sm' ? 'h-6 coarse:h-9 esq-tap text-mini' : 'h-7 coarse:h-11 text-ui',
         )}
       >

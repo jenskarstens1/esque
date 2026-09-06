@@ -1,17 +1,51 @@
-import type { MenuItem } from '../design/Menu'
+import type { ReactNode } from 'react'
+import { MENU_ICON, type MenuItem } from '../design/Menu'
 import {
-  CheckIcon,
+  AspectIcon,
+  BeforeAfterIcon,
+  ClearFilterIcon,
   CollectionIcon,
+  CompareIcon,
+  ContrastIcon,
+  CopyIcon,
+  CropIcon,
+  EmptyIcon,
+  ExportIcon,
+  ExposureIcon,
+  EyeIcon,
+  FilePlusIcon,
   FilterIcon,
+  FlipHorizontalIcon,
+  FlipVerticalIcon,
   FolderIcon,
   GridIcon,
+  HealIcon,
   ImportIcon,
+  ListIcon,
   LoupeIcon,
+  MaskIcon,
+  MinusIcon,
+  PasteIcon,
+  PencilIcon,
+  PlusIcon,
+  RedEyeIcon,
+  RedoIcon,
+  ResetIcon,
+  RotateLeftIcon,
+  RotateRightIcon,
+  SelectAllIcon,
+  SelectNoneIcon,
   SmartCollectionIcon,
+  SoloIcon,
   SortAscIcon,
+  StarIcon,
   SyncIcon,
   TileFillIcon,
+  TrashIcon,
+  UndoIcon,
+  WarningIcon,
   WaterfallIcon,
+  ZoomIcon,
 } from '../design/icons'
 import { filtersActive, useCatalog, type SortKey } from '../state/catalog'
 import { useUI, BEFORE_AFTER_LABELS, type BeforeAfter } from '../state/ui'
@@ -70,11 +104,13 @@ export function gridBackgroundMenuItems(): MenuItem[] {
   return [
     {
       label: 'Select All',
+      icon: <SelectAllIcon size={MENU_ICON} />,
       shortcut: '⌘A',
       onSelect: () => cat.selectAll(),
     },
     {
       label: 'Deselect All',
+      icon: <SelectNoneIcon size={MENU_ICON} />,
       shortcut: '⌘D',
       disabled: !cat.selected.length,
       onSelect: () => cat.clearSelection(),
@@ -82,7 +118,7 @@ export function gridBackgroundMenuItems(): MenuItem[] {
     { kind: 'separator' },
     {
       label: 'Sort By',
-      icon: <SortAscIcon size={12} />,
+      icon: <SortAscIcon size={MENU_ICON} />,
       submenu: [
         ...SORTS.map<MenuItem>((s) => ({
           label: s.label,
@@ -104,17 +140,17 @@ export function gridBackgroundMenuItems(): MenuItem[] {
     },
     {
       label: 'Grid Layout',
-      icon: <TileFillIcon size={12} />,
+      icon: <TileFillIcon size={MENU_ICON} />,
       submenu: [
         {
           label: 'Fill',
-          icon: <TileFillIcon size={12} />,
+          icon: <TileFillIcon size={MENU_ICON} />,
           checked: ui.gridLayout === 'fill',
           onSelect: () => ui.setGridLayout('fill'),
         },
         {
           label: 'Waterfall',
-          icon: <WaterfallIcon size={12} />,
+          icon: <WaterfallIcon size={MENU_ICON} />,
           checked: ui.gridLayout === 'waterfall',
           onSelect: () => ui.setGridLayout('waterfall'),
         },
@@ -122,7 +158,7 @@ export function gridBackgroundMenuItems(): MenuItem[] {
     },
     {
       label: 'Thumbnail Size',
-      icon: <GridIcon size={12} />,
+      icon: <GridIcon size={MENU_ICON} />,
       submenu: THUMB_SIZES.map<MenuItem>((n) => ({
         label: `${n} px`,
         checked: ui.thumbSize === n,
@@ -131,42 +167,45 @@ export function gridBackgroundMenuItems(): MenuItem[] {
     },
     {
       label: 'Show Badges and Ratings',
+      icon: <StarIcon size={MENU_ICON} />,
       checked: ui.showGridExtras,
       onSelect: () => ui.toggleGridExtras(),
     },
     { kind: 'separator' },
     {
       label: 'Loupe View',
-      icon: <LoupeIcon size={12} />,
+      icon: <LoupeIcon size={MENU_ICON} />,
       shortcut: 'E',
       onSelect: () => ui.setViewMode('loupe'),
     },
     {
       label: 'Filter Bar',
-      icon: <FilterIcon size={12} />,
+      icon: <FilterIcon size={MENU_ICON} />,
       shortcut: '\\',
       checked: ui.filterBarOpen,
       onSelect: () => ui.toggleFilterBar(),
     },
     {
       label: 'Clear Filters',
+      icon: <ClearFilterIcon size={MENU_ICON} />,
       disabled: !filtersActive(cat.filters),
       onSelect: () => cat.clearFilters(),
     },
     { kind: 'separator' },
     {
       label: 'Import Photos…',
-      icon: <ImportIcon size={12} />,
+      icon: <ImportIcon size={MENU_ICON} />,
       shortcut: '⇧⌘I',
       onSelect: () => void useImporter.getState().run(),
     },
     {
       label: 'Import Files…',
-      icon: <ImportIcon size={12} />,
+      icon: <FilePlusIcon size={MENU_ICON} />,
       onSelect: () => void useImporter.getState().runFiles(null, true),
     },
     {
       label: 'Export Selected…',
+      icon: <ExportIcon size={MENU_ICON} />,
       shortcut: '⇧⌘E',
       disabled: !cat.selected.length,
       onSelect: () => useExport.getState().openDialog(cat.selected),
@@ -220,13 +259,17 @@ export function cropMenuItems(): MenuItem[] {
 
   return [
     {
-      label: ui.developTool === 'crop' ? 'Close Crop' : 'Crop',
+      // The check mark is the state. Swapping the label to "Close Crop" as well
+      // says the same thing twice, in the one column that has to stay scannable.
+      label: 'Crop',
+      icon: <CropIcon size={MENU_ICON} />,
       shortcut: 'R',
       checked: ui.developTool === 'crop',
       onSelect: () => ui.setDevelopTool(ui.developTool === 'crop' ? 'none' : 'crop'),
     },
     {
       label: 'Aspect',
+      icon: <AspectIcon size={MENU_ICON} />,
       submenu: (Object.keys(ASPECT_LABELS) as CropAspect[]).map<MenuItem>((a) => ({
         label: ASPECT_LABELS[a],
         checked: crop.aspect === a,
@@ -234,10 +277,19 @@ export function cropMenuItems(): MenuItem[] {
       })),
     },
     { kind: 'separator' },
-    { label: 'Rotate Left', onSelect: () => turn(-1) },
-    { label: 'Rotate Right', onSelect: () => turn(1) },
+    {
+      label: 'Rotate Left',
+      icon: <RotateLeftIcon size={MENU_ICON} />,
+      onSelect: () => turn(-1),
+    },
+    {
+      label: 'Rotate Right',
+      icon: <RotateRightIcon size={MENU_ICON} />,
+      onSelect: () => turn(1),
+    },
     {
       label: 'Flip Horizontal',
+      icon: <FlipHorizontalIcon size={MENU_ICON} />,
       checked: crop.flipH,
       onSelect: () =>
         dev.update('crop.flipH', 'Flip Horizontal', (e) => {
@@ -246,6 +298,7 @@ export function cropMenuItems(): MenuItem[] {
     },
     {
       label: 'Flip Vertical',
+      icon: <FlipVerticalIcon size={MENU_ICON} />,
       checked: crop.flipV,
       onSelect: () =>
         dev.update('crop.flipV', 'Flip Vertical', (e) => {
@@ -255,6 +308,7 @@ export function cropMenuItems(): MenuItem[] {
     { kind: 'separator' },
     {
       label: 'Reset Crop',
+      icon: <ResetIcon size={MENU_ICON} />,
       disabled: isSectionModified(dev.edits, 'crop', dev.kind) === false,
       onSelect: () => dev.resetSection('crop'),
     },
@@ -265,11 +319,12 @@ export function cropMenuItems(): MenuItem[] {
 /**
  * The mask-kind menu, with the detected kinds gated on what the browser can do.
  *
- * A menu cannot carry a tooltip, so an unsupported kind states its reason in
- * the label instead of being hidden. Hiding it would be the tidier design and
- * the wrong one: "Subject" missing from a menu reads as a feature esque does
- * not have, rather than one this browser cannot run, and the user has no way
- * to tell those apart or to know that switching browsers would fix it.
+ * An unsupported kind states its reason rather than being hidden. Hiding it
+ * would be the tidier design and the wrong one: "Subject" missing from a menu
+ * reads as a feature esque does not have, rather than one this browser cannot
+ * run, and the user has no way to tell those apart or to know that switching
+ * browsers would fix it. The reason is a wrapped note under the group, not a
+ * suffix on every label — one sentence said once, at a width that can hold it.
  */
 export function maskKindItems(
   support: AiSupport | null,
@@ -285,16 +340,13 @@ export function maskKindItems(
   for (const kind of MASK_KINDS) {
     const detected = (DETECTED_KINDS as readonly MaskGeometryKind[]).includes(kind)
     if (detected && kind === DETECTED_KINDS[0]) items.push({ kind: 'separator' })
-    const off = detected && blocked
     items.push({
-      label:
-        off && support?.reason
-          ? `${MASK_KIND_LABELS[kind]} — ${support.reason}`
-          : MASK_KIND_LABELS[kind],
-      disabled: off,
+      label: MASK_KIND_LABELS[kind],
+      disabled: detected && blocked,
       onSelect: () => onSelect(kind),
     })
   }
+  if (blocked && support?.reason) items.push({ kind: 'note', label: support.reason })
   return items
 }
 
@@ -318,13 +370,15 @@ export function maskMenuItems(): MenuItem[] {
 
   const items: MenuItem[] = [
     {
-      label: ui.developTool === 'mask' ? 'Close Masking' : 'Masking',
+      label: 'Masking',
+      icon: <MaskIcon size={MENU_ICON} />,
       shortcut: 'M',
       checked: ui.developTool === 'mask',
-      onSelect: () => ui.setDevelopTool('mask'),
+      onSelect: () => ui.setDevelopTool(ui.developTool === 'mask' ? 'none' : 'mask'),
     },
     {
       label: 'Create Mask',
+      icon: <PlusIcon size={MENU_ICON} />,
       submenu: maskKindItems(aiSupportNow(), create),
     },
   ]
@@ -332,6 +386,7 @@ export function maskMenuItems(): MenuItem[] {
   if (masks.length) {
     items.push({
       label: 'Select Mask',
+      icon: <ListIcon size={MENU_ICON} />,
       submenu: masks.map((m) => ({
         label: m.name,
         checked: m.id === mk.selectedMaskId,
@@ -343,6 +398,7 @@ export function maskMenuItems(): MenuItem[] {
     })
     items.push({
       label: 'Show Overlay',
+      icon: <EyeIcon size={MENU_ICON} off={mk.overlay === 'off'} />,
       submenu: (['tint', 'coverage', 'off'] as const).map((o) => ({
         label: o === 'tint' ? 'Overlay' : o === 'coverage' ? 'Mask Only' : 'Off',
         shortcut: o === 'tint' ? 'O' : undefined,
@@ -356,6 +412,7 @@ export function maskMenuItems(): MenuItem[] {
     items.push({ kind: 'separator' })
     items.push({
       label: selected.inverted ? 'Un-invert Mask' : 'Invert Mask',
+      icon: <ContrastIcon size={MENU_ICON} />,
       checked: selected.inverted,
       onSelect: () =>
         dev.update('masks.invert', 'Invert Mask', (e) => {
@@ -365,6 +422,7 @@ export function maskMenuItems(): MenuItem[] {
     })
     items.push({
       label: selected.visible ? 'Hide Mask' : 'Show Mask',
+      icon: <EyeIcon size={MENU_ICON} off={selected.visible} />,
       checked: selected.visible,
       onSelect: () =>
         dev.update('masks.visible', 'Toggle Mask', (e) => {
@@ -374,6 +432,7 @@ export function maskMenuItems(): MenuItem[] {
     })
     items.push({
       label: 'Duplicate Mask',
+      icon: <CopyIcon size={MENU_ICON} />,
       onSelect: () => {
         const copy = duplicateMask(selected, dev.edits.masks)
         dev.update('masks.add', 'Duplicate Mask', (e) => {
@@ -384,6 +443,7 @@ export function maskMenuItems(): MenuItem[] {
     })
     items.push({
       label: 'Delete Mask',
+      icon: <TrashIcon size={MENU_ICON} />,
       danger: true,
       onSelect: () => {
         dev.update('masks.delete', 'Delete Mask', (e) => {
@@ -397,6 +457,7 @@ export function maskMenuItems(): MenuItem[] {
   if (masks.length) {
     items.push({
       label: 'Delete All Masks',
+      icon: <TrashIcon size={MENU_ICON} />,
       danger: true,
       onSelect: () => {
         dev.update('masks.clear', 'Delete All Masks', (e) => {
@@ -419,27 +480,37 @@ export function retouchMenuItems(): MenuItem[] {
 
   const items: MenuItem[] = [
     {
-      label: ui.developTool === 'heal' ? 'Close Spot Removal' : 'Spot Removal',
+      label: 'Spot Removal',
+      icon: <HealIcon size={MENU_ICON} />,
       shortcut: 'Q',
       checked: ui.developTool === 'heal',
-      onSelect: () => ui.setDevelopTool('heal'),
+      onSelect: () => ui.setDevelopTool(ui.developTool === 'heal' ? 'none' : 'heal'),
     },
     {
-      label: ui.developTool === 'redeye' ? 'Close Red Eye' : 'Red Eye',
+      label: 'Red Eye',
+      icon: <RedEyeIcon size={MENU_ICON} />,
       shortcut: '⇧Q',
       checked: ui.developTool === 'redeye',
-      onSelect: () => ui.setDevelopTool('redeye'),
+      onSelect: () => ui.setDevelopTool(ui.developTool === 'redeye' ? 'none' : 'redeye'),
     },
     { kind: 'separator' },
     {
-      label: 'New Spots Heal',
-      checked: rt.spotMode === 'heal',
-      onSelect: () => rt.setSpot({ spotMode: 'heal' }),
-    },
-    {
-      label: 'New Spots Clone',
-      checked: rt.spotMode === 'clone',
-      onSelect: () => rt.setSpot({ spotMode: 'clone' }),
+      // One row for a two-way choice, because both options never apply at once
+      // and a submenu for two words costs more than it saves.
+      label: 'New Spots',
+      icon: <HealIcon size={MENU_ICON} />,
+      submenu: [
+        {
+          label: 'Heal',
+          checked: rt.spotMode === 'heal',
+          onSelect: () => rt.setSpot({ spotMode: 'heal' }),
+        },
+        {
+          label: 'Clone',
+          checked: rt.spotMode === 'clone',
+          onSelect: () => rt.setSpot({ spotMode: 'clone' }),
+        },
+      ],
     },
   ]
 
@@ -447,11 +518,13 @@ export function retouchMenuItems(): MenuItem[] {
     items.push({ kind: 'separator' })
     items.push({
       label: rt.showSpots ? 'Hide Spot Outlines' : 'Show Spot Outlines',
+      icon: <EyeIcon size={MENU_ICON} off={rt.showSpots} />,
       checked: rt.showSpots,
       onSelect: () => rt.toggleSpots(),
     })
     items.push({
       label: 'Heal All Spots',
+      icon: <HealIcon size={MENU_ICON} />,
       onSelect: () =>
         dev.update('spot.mode', 'Heal All Spots', (e) => {
           for (const s of e.spots) s.mode = 'heal'
@@ -459,6 +532,7 @@ export function retouchMenuItems(): MenuItem[] {
     })
     items.push({
       label: `Delete ${spots.length} Spot${spots.length === 1 ? '' : 's'}`,
+      icon: <TrashIcon size={MENU_ICON} />,
       danger: true,
       onSelect: () => {
         dev.update('spot.delete', 'Delete Spots', (e) => {
@@ -472,6 +546,7 @@ export function retouchMenuItems(): MenuItem[] {
   if (redEye.length) {
     items.push({
       label: `Delete ${redEye.length} Red Eye Fix${redEye.length === 1 ? '' : 'es'}`,
+      icon: <TrashIcon size={MENU_ICON} />,
       danger: true,
       onSelect: () => {
         dev.update('eye.delete', 'Delete Red Eye', (e) => {
@@ -485,17 +560,66 @@ export function retouchMenuItems(): MenuItem[] {
   return items
 }
 
+/**
+ * Swapping and promoting the two sides of a comparison. Shared, so the overflow
+ * menu on the Before / After cluster and the develop canvas can never drift
+ * into offering different moves under the same names.
+ *
+ * `root` because the same list appears at both levels: on its own it is a menu
+ * and takes the icon column every root menu has, but under the canvas menu's
+ * "Compare Settings" it is a submenu, where the parent row's icon already
+ * stands for the whole group.
+ */
+export function compareMenuItems(root = false): MenuItem[] {
+  const dev = useDevelop.getState()
+  const icon = (node: ReactNode) => (root ? node : undefined)
+  return [
+    {
+      label: 'Swap Before and After',
+      icon: icon(<SyncIcon size={MENU_ICON} />),
+      onSelect: () => {
+        dev.swapBeforeAfter()
+        toast.show('Swapped before and after')
+      },
+    },
+    { kind: 'separator' },
+    {
+      label: 'Copy After to Before',
+      icon: icon(<CopyIcon size={MENU_ICON} />),
+      onSelect: () => {
+        dev.copyAfterToBefore()
+        toast.show('Before updated to the current edit')
+      },
+    },
+    {
+      label: 'Copy Before to After',
+      icon: icon(<CopyIcon size={MENU_ICON} />),
+      onSelect: () => dev.copyBeforeToAfter(),
+    },
+    { kind: 'separator' },
+    {
+      label: 'Reset Before to Import',
+      icon: icon(<ResetIcon size={MENU_ICON} />),
+      onSelect: () => {
+        dev.resetBefore()
+        toast.show('Before reset to the imported settings')
+      },
+    },
+  ]
+}
+
 export function viewportMenuItems(): MenuItem[] {
   const ui = useUI.getState()
   const dev = useDevelop.getState()
   const zoom = zoomCommands()
 
   return [
-    { label: 'Crop & Straighten', submenu: cropMenuItems() },
-    { label: 'Masking', submenu: maskMenuItems() },
-    { label: 'Retouch', submenu: retouchMenuItems() },
+    { label: 'Crop & Straighten', icon: <CropIcon size={MENU_ICON} />, submenu: cropMenuItems() },
+    { label: 'Masking', icon: <MaskIcon size={MENU_ICON} />, submenu: maskMenuItems() },
+    { label: 'Retouch', icon: <HealIcon size={MENU_ICON} />, submenu: retouchMenuItems() },
     {
       label: 'Zoom',
+      icon: <ZoomIcon size={MENU_ICON} />,
       submenu: [
         { label: 'Fit', shortcut: '⌘0', onSelect: () => zoom?.fit() },
         { label: '1:1', shortcut: '⌘1', onSelect: () => zoom?.actual() },
@@ -507,6 +631,7 @@ export function viewportMenuItems(): MenuItem[] {
     },
     {
       label: 'Before / After',
+      icon: <BeforeAfterIcon size={MENU_ICON} />,
       submenu: COMPARE_MODES.map<MenuItem>((m) => ({
         label: BEFORE_AFTER_LABELS[m],
         checked: ui.beforeAfter === m,
@@ -516,18 +641,14 @@ export function viewportMenuItems(): MenuItem[] {
     },
     {
       label: 'Compare Settings',
+      icon: <CompareIcon size={MENU_ICON} />,
       disabled: ui.beforeAfter === 'off',
-      submenu: [
-        { label: 'Swap Before and After', onSelect: () => dev.swapBeforeAfter() },
-        { label: "Copy After's Settings to Before", onSelect: () => dev.copyAfterToBefore() },
-        { label: "Copy Before's Settings to After", onSelect: () => dev.copyBeforeToAfter() },
-        { kind: 'separator' },
-        { label: 'Reset Before to Import', onSelect: () => dev.resetBefore() },
-      ],
+      submenu: compareMenuItems(),
     },
     { kind: 'separator' },
     {
       label: 'Show Clipping',
+      icon: <WarningIcon size={MENU_ICON} />,
       submenu: [
         {
           label: 'Shadows',
@@ -551,6 +672,7 @@ export function viewportMenuItems(): MenuItem[] {
     },
     {
       label: 'HDR Preview',
+      icon: <ExposureIcon size={MENU_ICON} />,
       shortcut: 'H',
       checked: ui.hdr,
       disabled: !hdrSupported(),
@@ -559,12 +681,14 @@ export function viewportMenuItems(): MenuItem[] {
     { kind: 'separator' },
     {
       label: 'Undo',
+      icon: <UndoIcon size={MENU_ICON} />,
       shortcut: '⌘Z',
       disabled: dev.historyIndex <= 0,
       onSelect: () => dev.undo(),
     },
     {
       label: 'Redo',
+      icon: <RedoIcon size={MENU_ICON} />,
       shortcut: '⇧⌘Z',
       disabled: dev.historyIndex >= dev.history.length - 1,
       onSelect: () => dev.redo(),
@@ -572,6 +696,7 @@ export function viewportMenuItems(): MenuItem[] {
     { kind: 'separator' },
     {
       label: 'Copy Settings',
+      icon: <CopyIcon size={MENU_ICON} />,
       shortcut: '⇧⌘C',
       onSelect: () => {
         dev.copySettings(ALL_SECTIONS)
@@ -580,6 +705,7 @@ export function viewportMenuItems(): MenuItem[] {
     },
     {
       label: 'Copy Settings From',
+      icon: <CopyIcon size={MENU_ICON} />,
       submenu: ALL_SECTIONS.map<MenuItem>((section) => ({
         label: SECTION_LABELS[section],
         onSelect: () => {
@@ -590,6 +716,7 @@ export function viewportMenuItems(): MenuItem[] {
     },
     {
       label: 'Paste Settings',
+      icon: <PasteIcon size={MENU_ICON} />,
       shortcut: '⇧⌘V',
       disabled: !dev.clipboard,
       onSelect: () => dev.pasteSettings(),
@@ -597,6 +724,7 @@ export function viewportMenuItems(): MenuItem[] {
     { kind: 'separator' },
     {
       label: 'Reset All Settings',
+      icon: <ResetIcon size={MENU_ICON} />,
       shortcut: '⌘R',
       danger: true,
       onSelect: () => dev.resetAll(),
@@ -615,13 +743,14 @@ export function panelMenuItems(section: EditSection): MenuItem[] {
   const sections: EditSection[] = section === 'basic' ? ['profile', 'basic'] : [section]
 
   return [
-    { kind: 'header', label },
     {
       label: `Reset ${label}`,
+      icon: <ResetIcon size={MENU_ICON} />,
       onSelect: () => dev.resetSection(section),
     },
     {
       label: `Copy ${label}`,
+      icon: <CopyIcon size={MENU_ICON} />,
       onSelect: () => {
         dev.copySettings(sections)
         toast.show(`${label} copied`)
@@ -629,18 +758,21 @@ export function panelMenuItems(section: EditSection): MenuItem[] {
     },
     {
       label: `Paste ${label}`,
+      icon: <PasteIcon size={MENU_ICON} />,
       disabled: !sections.every((value) => dev.clipboard?.sections.includes(value)),
       onSelect: () => dev.pasteSettings(sections),
     },
     { kind: 'separator' },
     {
       label: 'Solo Mode',
+      icon: <SoloIcon size={MENU_ICON} />,
       checked: ui.soloPanels,
       onSelect: () => ui.toggleSoloPanels(),
     },
     { kind: 'separator' },
     {
       label: 'Reset All Settings',
+      icon: <ResetIcon size={MENU_ICON} />,
       danger: true,
       onSelect: () => dev.resetAll(),
     },
@@ -650,33 +782,37 @@ export function panelMenuItems(section: EditSection): MenuItem[] {
 /**
  * Slider menu. Lightroom only offers double-click to reset; a menu can also
  * carry the value itself, which is the fastest way to move a number between two
- * photos or into a note.
+ * photos or into a note. Three rows, so no title and no dividers — the slider
+ * you right-clicked is the subject.
  */
 export function sliderMenuItems(opts: {
-  label: string
   value: number
   defaultValue: number
   onReset: () => void
   onSet?: (v: number) => void
 }): MenuItem[] {
-  const { label, value, defaultValue, onReset, onSet } = opts
+  const { value, defaultValue, onReset, onSet } = opts
   const rounded = Math.round(value * 100) / 100
   return [
-    { kind: 'header', label },
     {
       label: 'Reset to Default',
-      icon: <CheckIcon size={12} />,
+      icon: <ResetIcon size={MENU_ICON} />,
       disabled: value === defaultValue,
       onSelect: onReset,
     },
     ...(onSet
       ? ([
-          { label: 'Set to Zero', disabled: value === 0, onSelect: () => onSet(0) },
+          {
+            label: 'Set to Zero',
+            icon: <MinusIcon size={MENU_ICON} />,
+            disabled: value === 0,
+            onSelect: () => onSet(0),
+          },
         ] as MenuItem[])
       : []),
-    { kind: 'separator' },
     {
       label: `Copy Value (${rounded})`,
+      icon: <CopyIcon size={MENU_ICON} />,
       onSelect: () => {
         void navigator.clipboard?.writeText(String(rounded))
         toast.show(`Copied ${rounded}`)
@@ -698,31 +834,30 @@ export function sourceMenuItems(
   if (target.kind === 'folder') {
     const { folder } = target
     return [
-      { kind: 'header', label: folder.name },
       {
         label: 'Show in Library',
-        icon: <FolderIcon size={12} />,
+        icon: <FolderIcon size={MENU_ICON} />,
         onSelect: () => cat.setSource({ kind: 'folder', id: folder.id }),
       },
       ...(folder.handle
         ? [
             {
               label: 'Synchronize Folder…',
-              icon: <SyncIcon size={12} />,
+              icon: <SyncIcon size={MENU_ICON} />,
               onSelect: () => void useImporter.getState().sync(folder),
             } as MenuItem,
           ]
         : [
             {
               label: 'Import Files…',
-              icon: <ImportIcon size={12} />,
+              icon: <FilePlusIcon size={MENU_ICON} />,
               onSelect: () => void useImporter.getState().runFiles(),
             } as MenuItem,
           ]),
       { kind: 'separator' },
       {
         label: 'Create Collection from Folder…',
-        icon: <CollectionIcon size={12} />,
+        icon: <CollectionIcon size={MENU_ICON} />,
         onSelect: async () => {
           const name = await promptText({
             title: 'Create Collection',
@@ -743,6 +878,7 @@ export function sourceMenuItems(
       { kind: 'separator' },
       {
         label: 'Remove Folder…',
+        icon: <TrashIcon size={MENU_ICON} />,
         danger: true,
         onSelect: async () => {
           const ok = await confirmAction({
@@ -765,10 +901,9 @@ export function sourceMenuItems(
   const { collection } = target
   const selection = cat.selected
   return [
-    { kind: 'header', label: collection.name },
     {
       label: 'Show in Library',
-      icon: <CollectionIcon size={12} />,
+      icon: <CollectionIcon size={MENU_ICON} />,
       onSelect: () => cat.setSource({ kind: 'collection', id: collection.id }),
     },
     ...(collection.smart || selection.length === 0
@@ -779,6 +914,7 @@ export function sourceMenuItems(
               selection.length === 1
                 ? 'Add Selected Photo'
                 : `Add ${selection.length} Selected Photos`,
+            icon: <PlusIcon size={MENU_ICON} />,
             onSelect: async () => {
               await addToCollection(collection.id, selection)
               toast.show(`Added to “${collection.name}”`)
@@ -790,13 +926,14 @@ export function sourceMenuItems(
       ? ([
           {
             label: 'Edit Rules…',
-            icon: <SmartCollectionIcon size={12} />,
+            icon: <SmartCollectionIcon size={MENU_ICON} />,
             onSelect: () => editSmartCollection(collection),
           },
         ] as MenuItem[])
       : []),
     {
       label: 'Rename…',
+      icon: <PencilIcon size={MENU_ICON} />,
       onSelect: async () => {
         const name = await promptText({
           title: 'Rename Collection',
@@ -809,6 +946,7 @@ export function sourceMenuItems(
     },
     {
       label: 'Duplicate',
+      icon: <CopyIcon size={MENU_ICON} />,
       onSelect: async () => {
         const id = collection.smart
           ? await createCollection(`${collection.name} Copy`, [], {
@@ -824,6 +962,7 @@ export function sourceMenuItems(
       : ([
           {
             label: 'Empty Collection',
+            icon: <EmptyIcon size={MENU_ICON} />,
             disabled: collection.photoIds.length === 0,
             onSelect: async () => {
               await db.collections.update(collection.id, { photoIds: [] })
@@ -834,6 +973,7 @@ export function sourceMenuItems(
     { kind: 'separator' },
     {
       label: 'Delete Collection…',
+      icon: <TrashIcon size={MENU_ICON} />,
       danger: true,
       onSelect: async () => {
         const ok = await confirmAction({
@@ -871,49 +1011,37 @@ export function histogramMenuItems(): MenuItem[] {
   })
 
   return [
-    { kind: 'header', label: 'Histogram' },
     {
       label: 'Show Shadow Clipping',
+      icon: <WarningIcon size={MENU_ICON} />,
       shortcut: 'J',
       checked: clip.shadows,
       onSelect: () => ui.toggleClipping('shadows'),
     },
     {
       label: 'Show Highlight Clipping',
+      icon: <WarningIcon size={MENU_ICON} />,
       shortcut: '⇧J',
       checked: clip.highlights,
       onSelect: () => ui.toggleClipping('highlights'),
     },
-    {
-      label: 'Show Both',
-      disabled: clip.shadows && clip.highlights,
-      onSelect: () => {
-        if (!clip.shadows) ui.toggleClipping('shadows')
-        if (!clip.highlights) ui.toggleClipping('highlights')
-      },
-    },
-    {
-      label: 'Hide All Warnings',
-      disabled: !clip.shadows && !clip.highlights,
-      onSelect: () => {
-        if (clip.shadows) ui.toggleClipping('shadows')
-        if (clip.highlights) ui.toggleClipping('highlights')
-      },
-    },
     { kind: 'separator' },
     {
       label: 'Nudge Exposure',
+      icon: <ExposureIcon size={MENU_ICON} />,
       disabled: !has,
       submenu: [nudge('exposure', 0.33), nudge('exposure', -0.33)],
     },
     {
       label: 'Nudge Endpoints',
+      icon: <ContrastIcon size={MENU_ICON} />,
       disabled: !has,
       submenu: [nudge('whites', 5), nudge('whites', -5), nudge('blacks', 5), nudge('blacks', -5)],
     },
     { kind: 'separator' },
     {
       label: 'Reset Tone',
+      icon: <ResetIcon size={MENU_ICON} />,
       disabled: !has,
       onSelect: () =>
         dev.update('basic.tone', 'Reset Tone', (e) => {

@@ -15,10 +15,10 @@
  * failure: JPEG-in-TIFF (compression 6/7), palette colour, CMYK and BigTIFF.
  * Those return null and the caller falls back to the browser.
  *
- * Colour: samples are assumed to be sRGB-encoded, matching how every other
- * rendered file enters this pipeline. An embedded ICC profile for a wider space
- * is not honoured — that limitation is shared with the PNG path and is a colour
- * management question rather than a precision one.
+ * Colour: an embedded ICC profile is handed back for the caller to honour, so
+ * a ProPhoto or Adobe RGB file — including esque's own 16-bit exports — comes
+ * back the way it was written. Files with no profile are assumed to be sRGB,
+ * matching how every other rendered file enters this pipeline.
  */
 
 export interface TiffImage {
@@ -27,13 +27,15 @@ export interface TiffImage {
   /** 1 (grey) or 3 (RGB). Alpha and other extra samples are dropped. */
   channels: number
   /** Interleaved samples normalised to 16-bit unsigned, native endian. */
-  data: Uint16Array
+  data: Uint16Array | Float32Array
   /** EXIF-style orientation, 1..8. */
   orientation: number
   /** True when samples are already linear, which is the convention for float. */
   linear: boolean
   /** Bits per sample as stored, so callers can tell 8-bit files from deep ones. */
   depth: number
+  /** The embedded ICC profile, if the writer left one. */
+  icc: Uint8Array | null
 }
 
 const TAG = {
@@ -55,6 +57,7 @@ const TAG = {
   tileOffsets: 324,
   tileByteCounts: 325,
   sampleFormat: 339,
+  icc: 34675,
 } as const
 
 const COMPRESSION = { none: 1, lzw: 5, deflate: 8, packbits: 32773, deflateAlt: 32946 }
@@ -88,6 +91,24 @@ function readIfd(view: DataView, le: boolean, offset: number): Ifd | null {
     entries.set(view.getUint16(at, le), at)
   }
   return { entries, next: view.getUint32(end, le) }
+}
+
+/** An entry's raw bytes, for tags whose value is an opaque blob. */
+function rawBytes(
+  bytes: Uint8Array,
+  view: DataView,
+  le: boolean,
+  entry: number | undefined,
+): Uint8Array | null {
+  if (entry === undefined) return null
+  const count = view.getUint32(entry + 4, le)
+  if (!count || count > 1 << 24) return null
+  let at = entry + 8
+  if (count > 4) {
+    at = view.getUint32(entry + 8, le)
+    if (at + count > view.byteLength) return null
+  }
+  return bytes.subarray(at, at + count)
 }
 
 /** Reads an IFD entry's values, following the offset when they don't fit inline. */
@@ -326,14 +347,13 @@ function unpredictFloat(
   le: boolean,
 ): void {
   const n = samples * bytes
-  // Differencing restarts at each byte plane. Letting it run across the plane
-  // boundary adds the tail of one significance byte to the head of the next.
-  for (let plane = 0; plane < bytes; plane++) {
-    const start = plane * samples
-    const end = start + samples
-    for (let i = start + stride; i < end; i++) {
-      row[i] = (row[i] + row[i - stride]) & 0xff
-    }
+  // Differencing runs continuously over the whole shuffled row, straight
+  // through the byte-plane boundaries. That reads like an off-by-one waiting to
+  // happen, but it is what Technical Note 3 specifies and what libtiff's fpAcc
+  // does, so restarting per plane silently corrupts every file but the first
+  // plane's worth of samples.
+  for (let i = stride; i < n; i++) {
+    row[i] = (row[i] + row[i - stride]) & 0xff
   }
 
   const tmp = row.slice(0, n)
@@ -398,6 +418,7 @@ export async function decodeTiff(bytes: Uint8Array): Promise<TiffImage | null> {
   const tileWidth = num(TAG.tileWidth, 0)
   const tileHeight = num(TAG.tileLength, 0)
   const tiled = tileWidth > 0 && tileHeight > 0
+  const icc = rawBytes(bytes, view, le, ifd.entries.get(TAG.icc))
 
   const offsets = values(view, le, ifd.entries.get(tiled ? TAG.tileOffsets : TAG.stripOffsets))
   const counts = values(
@@ -421,7 +442,12 @@ export async function decodeTiff(bytes: Uint8Array): Promise<TiffImage | null> {
   const bytesPer = depth >> 3
   const samplesPerRow = chunkCols * (planar ? 1 : spp)
   const rowBytes = samplesPerRow * bytesPer
-  const out = new Uint16Array(width * height * channels)
+  // A float TIFF is scene-linear and may carry values above 1. Quantising it
+  // into 16-bit integers would clip exactly the highlights it was written to
+  // preserve, so the float path keeps its own buffer.
+  const out = isFloat
+    ? new Float32Array(width * height * channels)
+    : new Uint16Array(width * height * channels)
 
   for (let c = 0; c < perPlane * planes; c++) {
     const plane = planar ? Math.floor(c / perPlane) : 0
@@ -484,7 +510,10 @@ export async function decodeTiff(bytes: Uint8Array): Promise<TiffImage | null> {
           const s = planar ? x : x * spp + ch
           let v: number
           if (isFloat) {
-            v = Math.max(0, Math.min(1, rv.getFloat32(s * 4, le))) * 65535
+            v = rv.getFloat32(s * 4, le)
+            // NaN and negatives are what a compositing app leaves behind in
+            // untouched regions; they poison every average downstream.
+            if (!(v > 0)) v = 0
           } else if (depth === 8) {
             // 257 maps 255 to exactly 65535 rather than leaving a dark gap.
             v = (isSigned ? rv.getInt8(s) + 128 : row[s]) * 257
@@ -497,12 +526,12 @@ export async function decodeTiff(bytes: Uint8Array): Promise<TiffImage | null> {
             v = code / 65537
           }
           // WhiteIsZero stores an inverted image, as scanners and fax do.
-          if (photometric === 0) v = 65535 - v
+          if (photometric === 0) v = isFloat ? 1 - v : 65535 - v
           out[o + ch] = v
         }
       }
     }
   }
 
-  return { width, height, channels, data: out, orientation, linear: isFloat, depth }
+  return { width, height, channels, data: out, orientation, linear: isFloat, depth, icc }
 }

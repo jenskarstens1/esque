@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { clamp } from './math'
 import { useDevicePixelRatio } from './useDevicePixelRatio'
+import { keyboardOverlayOpen } from './keyboardScope'
 
 /** The zoom ladder, in image pixels per device pixel. `1` is a true 1:1 view. */
 export const ZOOM_STOPS = [0.06, 0.11, 0.16, 0.25, 0.33, 0.5, 0.66, 1, 1.5, 2, 3, 4, 8, 11, 16]
@@ -741,6 +742,7 @@ export function useZoomPan(
   useEffect(() => {
     if (!active) return
     const down = (e: KeyboardEvent) => {
+      if (e.defaultPrevented || keyboardOverlayOpen()) return
       if (e.code === 'Space' && !e.repeat && !isFormField(e.target)) setSpaceDown(true)
     }
     const up = (e: KeyboardEvent) => {

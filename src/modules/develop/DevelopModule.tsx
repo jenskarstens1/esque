@@ -4,8 +4,10 @@ import { useCatalog } from '../../state/catalog'
 import { useDevelop } from '../../develop/session'
 import { usePhoto, usePhotos } from '../../catalog/hooks'
 import { loadProxy, peekProxy } from '../../develop/proxy'
+import { useToolInspector } from './useToolInspector'
 
 export function DevelopModule() {
+  useToolInspector()
   const primaryId = useCatalog((s) => s.primaryId)
   const photo = usePhoto(primaryId)
   const load = useDevelop((s) => s.load)

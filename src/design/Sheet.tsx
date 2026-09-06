@@ -15,32 +15,11 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { cn } from '../lib/cn'
+import { ModalFocusContext, useModalFocus } from './focusScope'
 
 /** Past this fraction of the surface, or this speed, a drag becomes a dismissal. */
 const DISMISS_FRACTION = 0.35
 const DISMISS_VELOCITY = 0.55 // px per ms
-
-/** Escape and the browser Back button both close the topmost overlay. */
-const stack: object[] = []
-
-function useDismissable(open: boolean, onClose: () => void) {
-  useEffect(() => {
-    if (!open) return
-    const id = {}
-    stack.push(id)
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && stack[stack.length - 1] === id) {
-        e.stopPropagation()
-        onClose()
-      }
-    }
-    window.addEventListener('keydown', onKey, true)
-    return () => {
-      stack.splice(stack.indexOf(id), 1)
-      window.removeEventListener('keydown', onKey, true)
-    }
-  }, [open, onClose])
-}
 
 /**
  * Tracks a drag along one axis and reports how far the surface has been pulled
@@ -154,7 +133,7 @@ export function Sheet({
   actions,
   className,
 }: SheetProps) {
-  useDismissable(open, onClose)
+  const { ref, scope } = useModalFocus(open, onClose)
   const { offset, dragging, handleProps } = useThrow('y', 1, onClose)
   const [mounted, setMounted] = useState(false)
 
@@ -169,43 +148,45 @@ export function Sheet({
   if (!open) return null
 
   return createPortal(
-    <div className="fixed inset-0 z-[1100] flex flex-col justify-end" role="dialog" aria-modal="true" aria-label={title}>
-      <Scrim show={mounted} onClick={onClose} />
-      <div
-        data-overlay-surface
-        style={{
-          height: `${Math.round(height * 100)}dvh`,
-          translate: mounted ? `0 ${offset}px` : '0 100%',
-        }}
-        className={cn(
-          'material-thick esq-safe-b relative flex flex-col overflow-hidden',
-          'rounded-t-2xl shadow-[0_-8px_40px_rgb(0_0_0/0.5)]',
-          // Not while dragging: a transition there would lag the finger.
-          !dragging && 'transition-[translate] duration-[--duration-base] ease-[--ease-out]',
-          className,
-        )}
-      >
-        {/*
-         * The grab area is the handle *and* the header. A 4px pill is honest
-         * about what it affords but far too small to catch, so the whole strip
-         * above the content is draggable.
-         */}
-        <div {...handleProps} className="shrink-0 cursor-grab active:cursor-grabbing">
-          <div className="flex justify-center pt-2 pb-1">
-            <span className="h-1 w-9 rounded-full bg-label-quaternary" />
-          </div>
-          {(title || actions) && (
-            <div className="hairline-b flex h-11 items-center gap-2 px-4">
-              <h2 className="min-w-0 flex-1 truncate text-title text-label">{title}</h2>
-              {actions}
-            </div>
+    <ModalFocusContext.Provider value={scope}>
+      <div ref={ref} tabIndex={-1} className="fixed inset-0 z-[1100] flex flex-col justify-end" role="dialog" aria-modal="true" aria-label={title}>
+        <Scrim show={mounted} onClick={onClose} />
+        <div
+          data-overlay-surface
+          style={{
+            height: `${Math.round(height * 100)}dvh`,
+            translate: mounted ? `0 ${offset}px` : '0 100%',
+          }}
+          className={cn(
+            'material-solid esq-safe-b relative flex flex-col overflow-hidden',
+            'rounded-t-2xl shadow-[0_-8px_40px_rgb(0_0_0/0.5)]',
+            // Not while dragging: a transition there would lag the finger.
+            !dragging && 'transition-[translate] duration-[--duration-base] ease-[--ease-out]',
+            className,
           )}
-        </div>
-        <div className="esq-scroll min-h-0 flex-1 overflow-y-auto overscroll-contain">
-          {children}
+        >
+          {/*
+           * The grab area is the handle *and* the header. A 4px pill is honest
+           * about what it affords but far too small to catch, so the whole strip
+           * above the content is draggable.
+           */}
+          <div {...handleProps} className="shrink-0 cursor-grab active:cursor-grabbing">
+            <div className="flex justify-center pt-2 pb-1">
+              <span className="h-1 w-9 rounded-full bg-label-quaternary" />
+            </div>
+            {(title || actions) && (
+              <div className="hairline-b flex h-11 items-center gap-2 px-4">
+                <h2 className="min-w-0 flex-1 truncate text-title text-label">{title}</h2>
+                {actions}
+              </div>
+            )}
+          </div>
+          <div className="esq-scroll min-h-0 flex-1 overflow-y-auto overscroll-contain">
+            {children}
+          </div>
         </div>
       </div>
-    </div>,
+    </ModalFocusContext.Provider>,
     document.body,
   )
 }
@@ -241,7 +222,7 @@ export function Drawer({
   label,
   className,
 }: DrawerProps) {
-  useDismissable(open, onClose)
+  const { ref, scope } = useModalFocus(open, onClose)
   const { offset, dragging, handleProps } = useThrow('x', side === 'left' ? -1 : 1, onClose)
   const [mounted, setMounted] = useState(false)
 
@@ -267,43 +248,47 @@ export function Drawer({
   const hidden = side === 'left' ? '-100%' : '100%'
 
   return createPortal(
-    <div
-      className={cn('fixed inset-0 z-[1100] flex', side === 'right' && 'justify-end')}
-      role="dialog"
-      aria-modal="true"
-      aria-label={label}
-    >
-      <Scrim show={mounted} onClick={onClose} />
+    <ModalFocusContext.Provider value={scope}>
       <div
-        data-overlay-surface
-        style={{
-          width: max,
-          translate: mounted ? `${offset * sign}px 0` : `${hidden} 0`,
-        }}
-        className={cn(
-          'material-thick esq-safe-b relative flex flex-col overflow-hidden',
-          side === 'left' ? 'hairline-r' : 'hairline-l',
-          'shadow-[0_0_40px_rgb(0_0_0/0.5)]',
-          !dragging && 'transition-[translate] duration-[--duration-base] ease-[--ease-out]',
-          className,
-        )}
+        ref={ref}
+        tabIndex={-1}
+        className={cn('fixed inset-0 z-[1100] flex', side === 'right' && 'justify-end')}
+        role="dialog"
+        aria-modal="true"
+        aria-label={label}
       >
-        <div className="esq-safe-t min-h-0 flex-1 overflow-hidden">{children}</div>
-        {/*
-         * A swipe strip along the inner edge rather than a draggable body: the
-         * drawer holds scrollable lists and sliders, and a body-wide drag would
-         * fight every one of them for the same gesture.
-         */}
+        <Scrim show={mounted} onClick={onClose} />
         <div
-          {...handleProps}
-          aria-hidden
+          data-overlay-surface
+          style={{
+            width: max,
+            translate: mounted ? `${offset * sign}px 0` : `${hidden} 0`,
+          }}
           className={cn(
-            'absolute inset-y-0 w-5',
-            side === 'left' ? 'right-0' : 'left-0',
+            'material-solid esq-safe-b relative flex flex-col overflow-hidden',
+            side === 'left' ? 'hairline-r' : 'hairline-l',
+            'shadow-[0_0_40px_rgb(0_0_0/0.5)]',
+            !dragging && 'transition-[translate] duration-[--duration-base] ease-[--ease-out]',
+            className,
           )}
-        />
+        >
+          <div className="esq-safe-t min-h-0 flex-1 overflow-hidden">{children}</div>
+          {/*
+           * A swipe strip along the inner edge rather than a draggable body: the
+           * drawer holds scrollable lists and sliders, and a body-wide drag would
+           * fight every one of them for the same gesture.
+           */}
+          <div
+            {...handleProps}
+            aria-hidden
+            className={cn(
+              'absolute inset-y-0 w-5',
+              side === 'left' ? 'right-0' : 'left-0',
+            )}
+          />
+        </div>
       </div>
-    </div>,
+    </ModalFocusContext.Provider>,
     document.body,
   )
 }
