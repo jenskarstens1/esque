@@ -7,7 +7,13 @@ import {
   scanFolder,
   type ScannedFile,
 } from "./fs";
-import { rawPool, rawFailure, failureReason, RAW_POOL_SIZE } from "../raw/pool";
+import {
+  rawPool,
+  rawFailure,
+  failureReason,
+  RAW_POOL_SIZE,
+  type DecodedMeta,
+} from "../raw/pool";
 import { nextId } from "../lib/math";
 import { detectHdrContent } from "../core/hdrContent";
 import { applySidecarText } from "./sidecar";
@@ -129,6 +135,53 @@ async function bitmapSize(
   }
 }
 
+function assignDecodedMetadata(meta: PhotoMetadata, decoded: DecodedMeta | null) {
+  if (!decoded) return { width: 0, height: 0 };
+  Object.assign(meta, {
+    cameraMake: decoded.cameraMake,
+    cameraModel: decoded.cameraModel,
+    lens: decoded.lens,
+    iso: decoded.iso,
+    shutter: decoded.shutter,
+    aperture: decoded.aperture,
+    focalLength: decoded.focalLength,
+    captureTime: decoded.captureTime,
+    artist: decoded.artist,
+    gps: decoded.gps,
+    flip: decoded.flip,
+    camMul: decoded.camMul,
+    preMul: decoded.preMul,
+    camXyz: decoded.camXyz,
+    black: decoded.black,
+    maximum: decoded.maximum,
+    rawCrop: decoded.rawCrop,
+    embeddedWidth: decoded.thumbWidth,
+    embeddedHeight: decoded.thumbHeight,
+  });
+  return { width: decoded.width, height: decoded.height };
+}
+
+async function assignRenderedMetadata(file: File, meta: PhotoMetadata) {
+  const exif = await readExif(file);
+  Object.assign(meta, exif);
+  let width = exif.width ?? 0;
+  let height = exif.height ?? 0;
+  if (!width || !height) {
+    const bitmap = await bitmapSize(file);
+    width = bitmap.width;
+    height = bitmap.height;
+  }
+  return { width, height };
+}
+
+async function readImportSidecar(scanned: ScannedFile) {
+  if (!scanned.sidecar || !useUI.getState().importSidecars) return null;
+  return scanned.sidecar
+    .getFile()
+    .then((file) => file.text())
+    .catch(() => null);
+}
+
 /** Reads one file into a catalog record and caches its thumbnail. */
 async function ingest(
   folderId: string,
@@ -141,8 +194,6 @@ async function ingest(
   const isRaw = isRawFile(scanned.name);
   const id = nextId();
   const meta = emptyMeta();
-  let width = 0;
-  let height = 0;
   let failure: string | null = null;
 
   // Read before the decoder gets the file: `ingest` detaches the buffer it is
@@ -160,48 +211,10 @@ async function ingest(
       return null;
     });
 
-  const m = result?.meta ?? null;
-  if (m) {
-    // LibRaw metadata and memory images both expose the oriented dimensions.
-    // Swapping these again for a portrait flag made the catalog landscape while
-    // the decoded pixels were portrait.
-    width = m.width;
-    height = m.height;
-    Object.assign(meta, {
-      cameraMake: m.cameraMake,
-      cameraModel: m.cameraModel,
-      lens: m.lens,
-      iso: m.iso,
-      shutter: m.shutter,
-      aperture: m.aperture,
-      focalLength: m.focalLength,
-      captureTime: m.captureTime,
-      artist: m.artist,
-      gps: m.gps,
-      flip: m.flip,
-      camMul: m.camMul,
-      preMul: m.preMul,
-      camXyz: m.camXyz,
-      black: m.black,
-      maximum: m.maximum,
-      rawCrop: m.rawCrop,
-      embeddedWidth: m.thumbWidth,
-      embeddedHeight: m.thumbHeight,
-    });
-  }
+  let { width, height } = assignDecodedMetadata(meta, result?.meta ?? null);
 
   if (!isRaw) {
-    // LibRaw isn't involved for rendered files, so EXIF comes from the file
-    // itself. This re-reads it, but a JPEG's header is a few kilobytes.
-    const e = await readExif(file);
-    Object.assign(meta, e);
-    width = e.width ?? 0;
-    height = e.height ?? 0;
-    if (!width || !height) {
-      const s = await bitmapSize(file);
-      width = s.width;
-      height = s.height;
-    }
+    ({ width, height } = await assignRenderedMetadata(file, meta));
   }
 
   // A file whose metadata failed usually still has a readable embedded preview,
@@ -221,13 +234,7 @@ async function ingest(
   // develop settings it already carries. Reading it at import is what makes a
   // Lightroom library arrive here looking like itself rather than like a folder
   // of untouched originals.
-  const sidecarXml =
-    scanned.sidecar && useUI.getState().importSidecars
-      ? await scanned.sidecar
-          .getFile()
-          .then((f) => f.text())
-          .catch(() => null)
-      : null;
+  const sidecarXml = await readImportSidecar(scanned);
   const fromSidecar = sidecarXml ? applySidecarText(sidecarXml) : null;
 
   return {

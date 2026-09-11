@@ -147,28 +147,47 @@ export const useCatalog = create<CatalogState>((set, get) => ({
 // Filtering & sorting, applied client-side over the Dexie result set.
 // ---------------------------------------------------------------------------
 
+function matchesRating(photo: Photo, filters: Filters) {
+  if (filters.rating <= 0) return true
+  if (filters.ratingOp === 'gte') return photo.rating >= filters.rating
+  if (filters.ratingOp === 'lte') return photo.rating <= filters.rating
+  return photo.rating === filters.rating
+}
+
+function matchesClassification(photo: Photo, filters: Filters) {
+  if (filters.flags.length && !filters.flags.includes(photo.flag)) return false
+  if (filters.labels.length && !filters.labels.includes(photo.label)) return false
+  if (filters.fileType === 'raw' && !photo.isRaw) return false
+  if (filters.fileType === 'rendered' && photo.isRaw) return false
+  if (filters.edited === 'edited' && !photo.edits) return false
+  if (filters.edited === 'unedited' && photo.edits) return false
+  return true
+}
+
+function matchesMetadata(photo: Photo, filters: Filters) {
+  if (filters.cameras.length && !filters.cameras.includes(photo.meta.cameraModel)) return false
+  if (filters.lenses.length && !filters.lenses.includes(photo.meta.lens)) return false
+  if (filters.keywords.length && !filters.keywords.every((keyword) => photo.keywords.includes(keyword))) {
+    return false
+  }
+  return true
+}
+
+function matchesText(photo: Photo, text: string) {
+  if (!text) return true
+  const haystack =
+    `${photo.filename} ${photo.title} ${photo.caption} ${photo.keywords.join(' ')} ${photo.meta.cameraModel} ${photo.meta.lens}`
+      .toLowerCase()
+  return haystack.includes(text)
+}
+
 export function applyFilters(photos: Photo[], f: Filters): Photo[] {
   const text = f.text.trim().toLowerCase()
   return photos.filter((p) => {
-    if (f.rating > 0) {
-      if (f.ratingOp === 'gte' && p.rating < f.rating) return false
-      if (f.ratingOp === 'lte' && p.rating > f.rating) return false
-      if (f.ratingOp === 'eq' && p.rating !== f.rating) return false
-    }
-    if (f.flags.length && !f.flags.includes(p.flag)) return false
-    if (f.labels.length && !f.labels.includes(p.label)) return false
-    if (f.fileType === 'raw' && !p.isRaw) return false
-    if (f.fileType === 'rendered' && p.isRaw) return false
-    if (f.edited === 'edited' && !p.edits) return false
-    if (f.edited === 'unedited' && p.edits) return false
-    if (f.cameras.length && !f.cameras.includes(p.meta.cameraModel)) return false
-    if (f.lenses.length && !f.lenses.includes(p.meta.lens)) return false
-    if (f.keywords.length && !f.keywords.every((k) => p.keywords.includes(k))) return false
-    if (text) {
-      const hay = `${p.filename} ${p.title} ${p.caption} ${p.keywords.join(' ')} ${p.meta.cameraModel} ${p.meta.lens}`.toLowerCase()
-      if (!hay.includes(text)) return false
-    }
-    return true
+    if (!matchesRating(p, f)) return false
+    if (!matchesClassification(p, f)) return false
+    if (!matchesMetadata(p, f)) return false
+    return matchesText(p, text)
   })
 }
 

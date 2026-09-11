@@ -19,6 +19,11 @@ import {
 import { formatBytes } from '../lib/math'
 import type { CatalogFolder, Photo } from '../core/types'
 
+interface BackupPreview {
+  name: string
+  archive: CatalogArchive
+}
+
 const LABELS = {
   photos: 'Photos (including copies)', folders: 'Folders', collections: 'Collections',
   presets: 'User Develop presets', snapshots: 'Snapshots',
@@ -48,6 +53,189 @@ async function pickOrCancel<T>(picker: () => Promise<T>): Promise<T | null> {
   }
 }
 
+function BackupStatus({
+  working,
+  error,
+  notice,
+}: {
+  working: string | null
+  error: string | null
+  notice: string | null
+}) {
+  return (
+    <>
+      {working && <p role="status" className="my-2 text-ui text-label-secondary">{working}</p>}
+      {error && <p role="alert" className="my-2 break-words text-ui text-red">{error}</p>}
+      {notice && <p role="status" className="my-2 break-words text-ui text-label-secondary">{notice}</p>}
+    </>
+  )
+}
+
+function MaskRecovery({ sources }: { sources: MissingSources | null }) {
+  if (!sources || sources.detectedMasks <= 0) return null
+  return (
+    <p role="status" className="my-3 text-ui leading-relaxed text-label-secondary">
+      <strong className="font-medium text-label">{sources.detectedMasks.toLocaleString()} detected-mask
+        {' '}components have no loaded coverage.</strong>{' '}
+      Open the reconnected photo in Develop: available referenced coverage loads automatically,
+      without model downloads. For coverage still missing, select the component in Masking and use
+      Detect (or Detect People) with its recorded model tier. Portable backups omit coverage and
+      cache references. Until coverage is available, the look is incomplete. Re-detection can vary.
+    </p>
+  )
+}
+
+function RestorePreviewDialog({
+  preview,
+  working,
+  disabled,
+  onClose,
+  onRestore,
+  status,
+}: {
+  preview: BackupPreview | null
+  working: string | null
+  disabled: boolean
+  onClose: () => void
+  onRestore: () => void
+  status: React.ReactNode
+}) {
+  return (
+    <Dialog
+      open={!!preview}
+      onClose={onClose}
+      dismissable={!working}
+      title="Restore catalog backup"
+      width={520}
+      footer={<>
+        <Button disabled={!!working} onClick={onClose}>Cancel</Button>
+        <Button variant="primary" disabled={disabled} onClick={onRestore}>Merge into catalog</Button>
+      </>}
+    >
+      {preview && <>
+        <p className="break-words text-ui text-label">{preview.name}</p>
+        <p className="mt-1 text-mini text-label-secondary">
+          Version {preview.archive.version} · {new Date(preview.archive.createdAt).toLocaleString()}
+        </p>
+        <dl className="my-4 grid grid-cols-[1fr_auto] gap-x-3 gap-y-1 text-ui tabular-nums">
+          {MERGE_TABLES.map((table) => <Row key={table} label={LABELS[table]} count={preview.archive[table].length} />)}
+          <Row label="Collection set IDs" count={preview.archive.collectionSetIds.length} />
+        </dl>
+        <p className="text-ui leading-relaxed text-label-secondary">
+          Existing records always win. Conflicts are skipped and reported; collections with
+          unresolved members are skipped whole. No photos, edits or source connections are replaced.
+          Restore the original photo files separately, then reconnect them here.
+        </p>
+        {!!archiveDetectionCount(preview.archive) && (
+          <p className="mt-2 text-ui text-label-secondary">
+            {archiveDetectionCount(preview.archive).toLocaleString()} detected-mask settings need coverage recovery after reconnection.
+            {' '}Their coverage pixels are not included: the restored look will be incomplete until
+            coverage is available. Existing referenced coverage loads automatically in Develop,
+            but this portable file omits those cache references. Use Detect in Develop → Masking
+            for restored components still missing coverage, keeping the recorded model tier.
+            Re-detection can vary. Restored snapshots and presets need the same step when applied.
+          </p>
+        )}
+        {status}
+      </>}
+    </Dialog>
+  )
+}
+
+function ReconnectDialog({
+  open,
+  working,
+  disabled,
+  connection,
+  canConnect,
+  result,
+  sources,
+  error,
+  sourceSupported,
+  folderSupported,
+  onClose,
+  onBack,
+  onConnect,
+  onFolder,
+  onFile,
+  status,
+}: {
+  open: boolean
+  working: string | null
+  disabled: boolean
+  connection: Reconnection | null
+  canConnect: boolean | null
+  result: MergeResult | null
+  sources: MissingSources | null
+  error: string | null
+  sourceSupported: boolean
+  folderSupported: boolean
+  onClose: () => void
+  onBack: () => void
+  onConnect: () => void
+  onFolder: (folder: CatalogFolder) => void
+  onFile: (photo: Photo) => void
+  status: React.ReactNode
+}) {
+  const footer = connection ? (
+    <>
+      <Button disabled={!!working} onClick={onBack}>Back</Button>
+      <Button variant="primary" disabled={disabled || !canConnect} onClick={onConnect}>
+        {connection.kind === 'folder' ? 'Connect this folder' : 'Connect this original'}
+      </Button>
+    </>
+  ) : (
+    <Button variant="primary" disabled={!!working} onClick={onClose}>Done</Button>
+  )
+
+  return (
+    <Dialog
+      open={open}
+      title="Reconnect originals"
+      width={580}
+      onClose={onClose}
+      dismissable={!working}
+      footer={footer}
+    >
+      {connection ? <ConnectionReview connection={connection} /> : <>
+        {result && <p role="status" className="mb-3 text-ui tabular-nums text-label">
+          Catalog records: {MERGE_TABLES.reduce((sum, table) => sum + result.counts[table].added, 0).toLocaleString()} added,{' '}
+          {MERGE_TABLES.reduce((sum, table) => sum + result.counts[table].skipped, 0).toLocaleString()} skipped
+          {' '}({result.conflicts.length.toLocaleString()} conflicts). Existing edits were kept.
+        </p>}
+        <p className="mb-3 text-ui leading-relaxed text-label-secondary">
+          Choose the original folder root, or select one original file. We check exact relative paths,
+          filenames, byte sizes and modification dates, then ask you to confirm.
+          We never search by basename or replace an existing connection.
+        </p>
+        {!sourceSupported && <p role="alert" className="mb-3 text-ui text-label-secondary">
+          Use Chrome or Edge to reconnect originals. This browser cannot keep file access handles.
+        </p>}
+        {sources ? sources.originals.length ? (
+          <SourceBrowser
+            sources={sources}
+            disabled={disabled}
+            fileSupported={sourceSupported}
+            folderSupported={folderSupported}
+            onFolder={onFolder}
+            onFile={onFile}
+          />
+        ) : <p className="text-ui text-label">No originals are missing a source connection.</p>
+          : <p role={error ? undefined : 'status'} className="text-ui text-label-secondary">
+            {error ? 'The source list is unavailable. Reopen this guide to retry.' : 'Reading source connections…'}
+          </p>}
+        <p className="mt-3 text-mini leading-relaxed text-label-secondary">
+          Keep the backed-up originals unchanged. A partial folder cannot be connected as a whole;
+          reconnect available files individually instead. Existing connections that need renewed
+          permission are handled by Reconnect in the Library folder menu.
+        </p>
+      </>}
+      <MaskRecovery sources={sources} />
+      {status}
+    </Dialog>
+  )
+}
+
 export function CatalogBackup({ onBusyChange }: { onBusyChange: (busy: boolean) => void }) {
   const importing = useImporter((state) => state.active)
   const exporting = useExport((state) => state.running)
@@ -58,7 +246,7 @@ export function CatalogBackup({ onBusyChange }: { onBusyChange: (busy: boolean) 
   const workingRef = useRef(false)
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
-  const [preview, setPreview] = useState<{ name: string; archive: CatalogArchive } | null>(null)
+  const [preview, setPreview] = useState<BackupPreview | null>(null)
   const [result, setResult] = useState<MergeResult | null>(null)
   const [sources, setSources] = useState<MissingSources | null>(null)
   const [reconnecting, setReconnecting] = useState(false)
@@ -203,23 +391,7 @@ export function CatalogBackup({ onBusyChange }: { onBusyChange: (busy: boolean) 
 
   const canConnect = connection && (connection.kind === 'file' ||
     connection.entries.every((entry) => entry.status === 'matches'))
-  const maskRecovery = sources && sources.detectedMasks > 0 ? (
-    <p role="status" className="my-3 text-ui leading-relaxed text-label-secondary">
-      <strong className="font-medium text-label">{sources.detectedMasks.toLocaleString()} detected-mask
-        {' '}components have no loaded coverage.</strong>{' '}
-      Open the reconnected photo in Develop: available referenced coverage loads automatically,
-      without model downloads. For coverage still missing, select the component in Masking and use
-      Detect (or Detect People) with its recorded model tier. Portable backups omit coverage and
-      cache references. Until coverage is available, the look is incomplete. Re-detection can vary.
-    </p>
-  ) : null
-  const status = (
-    <>
-      {working && <p role="status" className="my-2 text-ui text-label-secondary">{working}</p>}
-      {error && <p role="alert" className="my-2 break-words text-ui text-red">{error}</p>}
-      {notice && <p role="status" className="my-2 break-words text-ui text-label-secondary">{notice}</p>}
-    </>
-  )
+  const status = <BackupStatus working={working} error={error} notice={notice} />
 
   return (
     <section aria-labelledby="catalog-backup-heading" className="mt-4 border-t border-hairline pt-4 pb-1">
@@ -248,7 +420,7 @@ export function CatalogBackup({ onBusyChange }: { onBusyChange: (busy: boolean) 
         Restore only merges: existing photos, edits and conflicting records are never overwritten.
         XMP sidecars are not a full catalog backup.
       </p>
-      {!reconnecting && maskRecovery}
+      {!reconnecting && <MaskRecovery sources={sources} />}
       <details className="mt-2 text-mini text-label-secondary">
         <summary className="cursor-pointer py-1 text-label focus-visible:outline-accent">Coverage and limits</summary>
         <p className="mt-1 leading-relaxed">
@@ -288,94 +460,39 @@ export function CatalogBackup({ onBusyChange }: { onBusyChange: (busy: boolean) 
         )}
       </div>
 
-      <Dialog
-        open={!!preview}
-        onClose={() => { if (!working) setPreview(null) }}
-        dismissable={!working}
-        title="Restore catalog backup"
-        width={520}
-        footer={<>
-          <Button disabled={!!working} onClick={() => setPreview(null)}>Cancel</Button>
-          <Button variant="primary" disabled={disabled} onClick={restore}>Merge into catalog</Button>
-        </>}
-      >
-        {preview && <>
-          <p className="break-words text-ui text-label">{preview.name}</p>
-          <p className="mt-1 text-mini text-label-secondary">
-            Version {preview.archive.version} · {new Date(preview.archive.createdAt).toLocaleString()}
-          </p>
-          <dl className="my-4 grid grid-cols-[1fr_auto] gap-x-3 gap-y-1 text-ui tabular-nums">
-            {MERGE_TABLES.map((table) => <Row key={table} label={LABELS[table]} count={preview.archive[table].length} />)}
-            <Row label="Collection set IDs" count={preview.archive.collectionSetIds.length} />
-          </dl>
-          <p className="text-ui leading-relaxed text-label-secondary">
-            Existing records always win. Conflicts are skipped and reported; collections with
-            unresolved members are skipped whole. No photos, edits or source connections are replaced.
-            Restore the original photo files separately, then reconnect them here.
-          </p>
-          {!!archiveDetectionCount(preview.archive) && (
-            <p className="mt-2 text-ui text-label-secondary">
-              {archiveDetectionCount(preview.archive).toLocaleString()} detected-mask settings need coverage recovery after reconnection.
-              {' '}Their coverage pixels are not included: the restored look will be incomplete until
-              coverage is available. Existing referenced coverage loads automatically in Develop,
-              but this portable file omits those cache references. Use Detect in Develop → Masking
-              for restored components still missing coverage, keeping the recorded model tier.
-              Re-detection can vary. Restored snapshots and presets need the same step when applied.
-            </p>
-          )}
-          {status}
-        </>}
-      </Dialog>
-
-      <Dialog
+      <RestorePreviewDialog
+        preview={preview}
+        working={working}
+        disabled={disabled}
+        onClose={() => {
+          if (!working) setPreview(null)
+        }}
+        onRestore={restore}
+        status={status}
+      />
+      <ReconnectDialog
         open={reconnecting}
-        title="Reconnect originals"
-        width={580}
-        onClose={() => { if (!working) setReconnecting(false) }}
-        dismissable={!working}
-        footer={connection ? <>
-          <Button disabled={!!working} onClick={() => { setConnection(null); setError(null) }}>Back</Button>
-          <Button variant="primary" disabled={disabled || !canConnect} onClick={connect}>
-            {connection.kind === 'folder' ? 'Connect this folder' : 'Connect this original'}
-          </Button>
-        </> : <Button variant="primary" disabled={!!working} onClick={() => setReconnecting(false)}>Done</Button>}
-      >
-        {connection ? <ConnectionReview connection={connection} /> : <>
-          {result && <p role="status" className="mb-3 text-ui tabular-nums text-label">
-            Catalog records: {MERGE_TABLES.reduce((sum, table) => sum + result.counts[table].added, 0).toLocaleString()} added,{' '}
-            {MERGE_TABLES.reduce((sum, table) => sum + result.counts[table].skipped, 0).toLocaleString()} skipped
-            {' '}({result.conflicts.length.toLocaleString()} conflicts). Existing edits were kept.
-          </p>}
-          <p className="mb-3 text-ui leading-relaxed text-label-secondary">
-            Choose the original folder root, or select one original file. We check exact relative paths,
-            filenames, byte sizes and modification dates, then ask you to confirm.
-            We never search by basename or replace an existing connection.
-          </p>
-          {!sourceSupported && <p role="alert" className="mb-3 text-ui text-label-secondary">
-            Use Chrome or Edge to reconnect originals. This browser cannot keep file access handles.
-          </p>}
-          {sources ? sources.originals.length ? (
-            <SourceBrowser
-              sources={sources}
-              disabled={disabled}
-              fileSupported={sourceSupported}
-              folderSupported={folderSupported}
-              onFolder={chooseFolder}
-              onFile={chooseFile}
-            />
-          ) : <p className="text-ui text-label">No originals are missing a source connection.</p>
-            : <p role={error ? undefined : 'status'} className="text-ui text-label-secondary">
-              {error ? 'The source list is unavailable. Reopen this guide to retry.' : 'Reading source connections…'}
-            </p>}
-          <p className="mt-3 text-mini leading-relaxed text-label-secondary">
-            Keep the backed-up originals unchanged. A partial folder cannot be connected as a whole;
-            reconnect available files individually instead. Existing connections that need renewed
-            permission are handled by Reconnect in the Library folder menu.
-          </p>
-        </>}
-        {maskRecovery}
-        {status}
-      </Dialog>
+        working={working}
+        disabled={disabled}
+        connection={connection}
+        canConnect={canConnect}
+        result={result}
+        sources={sources}
+        error={error}
+        sourceSupported={sourceSupported}
+        folderSupported={folderSupported}
+        onClose={() => {
+          if (!working) setReconnecting(false)
+        }}
+        onBack={() => {
+          setConnection(null)
+          setError(null)
+        }}
+        onConnect={connect}
+        onFolder={chooseFolder}
+        onFile={chooseFile}
+        status={status}
+      />
     </section>
   )
 }

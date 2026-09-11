@@ -114,6 +114,47 @@ const sidecarKeys = (name: string) => {
   return [`${base}.xmp`, `${name}.xmp`]
 }
 
+async function directoryEntries(
+  directory: FileSystemDirectoryHandle,
+  signal?: AbortSignal,
+) {
+  const entries: [string, FileSystemHandle][] = []
+  for await (const entry of directory.entries()) {
+    if (signal?.aborted) break
+    entries.push(entry)
+  }
+  return entries
+}
+
+function sidecarMap(entries: [string, FileSystemHandle][]) {
+  const sidecars = new Map<string, FileSystemFileHandle>()
+  for (const [name, handle] of entries) {
+    if (handle.kind === 'file' && name.toLowerCase().endsWith('.xmp')) {
+      sidecars.set(name.toLowerCase(), handle as FileSystemFileHandle)
+    }
+  }
+  return sidecars
+}
+
+async function scannedFile(
+  handle: FileSystemFileHandle,
+  relPath: string,
+  name: string,
+  sidecars: Map<string, FileSystemFileHandle>,
+): Promise<ScannedFile> {
+  const file = await handle.getFile()
+  return {
+    handle,
+    relPath,
+    name,
+    size: file.size,
+    modifiedAt: file.lastModified,
+    sidecar: sidecarKeys(name)
+      .map((key) => sidecars.get(key.toLowerCase()))
+      .find(Boolean),
+  }
+}
+
 /** Depth-first scan for supported images, skipping hidden and sidecar dirs. */
 export async function scanFolder(
   dir: FileSystemDirectoryHandle,
@@ -132,18 +173,8 @@ export async function scanFolder(
     // The listing is taken in one pass so photos and their sidecars can be
     // paired, which means holding one directory's entries at a time — the same
     // order of memory the recursion already costs.
-    const entries: [string, FileSystemHandle][] = []
-    for await (const entry of d.entries()) {
-      if (signal?.aborted) return
-      entries.push(entry)
-    }
-
-    const sidecars = new Map<string, FileSystemFileHandle>()
-    for (const [name, handle] of entries) {
-      if (handle.kind === 'file' && name.toLowerCase().endsWith('.xmp')) {
-        sidecars.set(name.toLowerCase(), handle as FileSystemFileHandle)
-      }
-    }
+    const entries = await directoryEntries(d, signal)
+    const sidecars = sidecarMap(entries)
 
     for (const [name, handle] of entries) {
       if (signal?.aborted) return
@@ -155,17 +186,7 @@ export async function scanFolder(
         await visit(handle as FileSystemDirectoryHandle, rel)
       } else if (isSupported(name)) {
         const fh = handle as FileSystemFileHandle
-        const file = await fh.getFile()
-        out.push({
-          handle: fh,
-          relPath: rel,
-          name,
-          size: file.size,
-          modifiedAt: file.lastModified,
-          sidecar: sidecarKeys(name)
-            .map((k) => sidecars.get(k.toLowerCase()))
-            .find(Boolean),
-        })
+        out.push(await scannedFile(fh, rel, name, sidecars))
         if (out.length % 25 === 0) onProgress?.(out.length, rel)
       }
     }

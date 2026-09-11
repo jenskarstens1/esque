@@ -18,6 +18,66 @@ interface ImporterState {
   cancel: () => void
 }
 
+interface ImportResult {
+  folder: CatalogFolder
+  added: number
+  skipped: number
+  failed: number
+}
+
+function plural(count: number, singular: string, pluralForm = `${singular}s`) {
+  return count === 1 ? singular : pluralForm
+}
+
+function showImportResult(
+  result: ImportResult,
+  cancelled: boolean,
+  source: 'folder' | 'files',
+) {
+  const { folder, added, skipped, failed } = result
+  if (cancelled) {
+    toast.show('Import cancelled', {
+      detail: `${added} ${plural(added, 'photo')} added before stopping`,
+    })
+    return
+  }
+  if (added > 0) {
+    const notes = [
+      skipped ? `${skipped} already in the catalog` : '',
+      failed ? `${failed} could not be read` : '',
+    ].filter(Boolean)
+    toast.show(`Imported ${added} ${plural(added, 'photo')}`, {
+      detail: notes.join(' · ') || folder.name,
+    })
+    return
+  }
+  if (failed > 0) {
+    const title = source === 'folder' ? 'No photos could be imported' : 'Nothing could be imported'
+    toast.error(title, `${failed} ${plural(failed, 'file')} could not be read.`)
+    return
+  }
+  if (skipped > 0) {
+    const title = source === 'folder' ? 'Already up to date' : 'Already in the catalog'
+    const detail = source === 'folder'
+      ? `${skipped} ${plural(skipped, 'photo')} already in the catalog`
+      : `${skipped} ${plural(skipped, 'file')} skipped`
+    toast.show(title, { detail })
+    return
+  }
+  const detail = source === 'folder'
+    ? 'No supported photos were found in that folder.'
+    : 'No supported photos were selected.'
+  toast.show('Nothing to import', { detail })
+}
+
+function showImportError(error: unknown, cancelled: boolean) {
+  if (cancelled) {
+    toast.show('Import cancelled')
+    return
+  }
+  toast.error('Import failed', error instanceof Error ? error.message : String(error))
+}
+
 export const useImporter = create<ImporterState>((set, get) => ({
   active: false,
   cancelling: false,
@@ -42,44 +102,16 @@ export const useImporter = create<ImporterState>((set, get) => ({
     })
 
     try {
-      const { folder, added, skipped, failed } = await importFolder(handle, {
+      const result = await importFolder(handle, {
         signal: controller.signal,
         onProgress: (progress) => set({ progress }),
       })
+      const { folder } = result
       useCatalog.getState().setSource({ kind: 'folder', id: folder.id })
       scheduleEvict(true)
-      if (controller.signal.aborted) {
-        toast.show('Import cancelled', {
-          detail: `${added} photo${added === 1 ? '' : 's'} added before stopping`,
-        })
-      } else if (added === 0 && failed > 0) {
-        toast.error(
-          'No photos could be imported',
-          `${failed} file${failed === 1 ? '' : 's'} could not be read.`,
-        )
-      } else if (added === 0 && skipped > 0) {
-        toast.show('Already up to date', {
-          detail: `${skipped} photo${skipped === 1 ? '' : 's'} already in the catalog`,
-        })
-      } else if (added === 0) {
-        toast.show('Nothing to import', {
-          detail: 'No supported photos were found in that folder.',
-        })
-      } else {
-        const notes = [
-          skipped ? `${skipped} already in the catalog` : '',
-          failed ? `${failed} could not be read` : '',
-        ].filter(Boolean)
-        toast.show(`Imported ${added} photo${added === 1 ? '' : 's'}`, {
-          detail: notes.join(' · ') || folder.name,
-        })
-      }
+      showImportResult(result, controller.signal.aborted, 'folder')
     } catch (err) {
-      if (controller.signal.aborted) {
-        toast.show('Import cancelled')
-      } else {
-        toast.error('Import failed', err instanceof Error ? err.message : String(err))
-      }
+      showImportError(err, controller.signal.aborted)
     } finally {
       set({ active: false, cancelling: false, controller: null, progress: null })
     }
@@ -103,42 +135,16 @@ export const useImporter = create<ImporterState>((set, get) => ({
     })
 
     try {
-      const { folder, added, skipped, failed } = await importFiles(handles, {
+      const result = await importFiles(handles, {
         signal: controller.signal,
         onProgress: (progress) => set({ progress }),
       })
+      const { folder } = result
       useCatalog.getState().setSource({ kind: 'folder', id: folder.id })
       scheduleEvict(true)
-      if (controller.signal.aborted) {
-        toast.show('Import cancelled', {
-          detail: `${added} photo${added === 1 ? '' : 's'} added before stopping`,
-        })
-      } else if (added === 0 && failed > 0) {
-        toast.error(
-          'Nothing could be imported',
-          `${failed} file${failed === 1 ? '' : 's'} could not be read.`,
-        )
-      } else if (added === 0 && skipped > 0) {
-        toast.show('Already in the catalog', {
-          detail: `${skipped} file${skipped === 1 ? '' : 's'} skipped`,
-        })
-      } else if (added === 0) {
-        toast.show('Nothing to import', { detail: 'No supported photos were selected.' })
-      } else {
-        const notes = [
-          skipped ? `${skipped} already in the catalog` : '',
-          failed ? `${failed} could not be read` : '',
-        ].filter(Boolean)
-        toast.show(`Imported ${added} photo${added === 1 ? '' : 's'}`, {
-          detail: notes.join(' \u00b7 ') || folder.name,
-        })
-      }
+      showImportResult(result, controller.signal.aborted, 'files')
     } catch (err) {
-      if (controller.signal.aborted) {
-        toast.show('Import cancelled')
-      } else {
-        toast.error('Import failed', err instanceof Error ? err.message : String(err))
-      }
+      showImportError(err, controller.signal.aborted)
     } finally {
       set({ active: false, cancelling: false, controller: null, progress: null })
     }

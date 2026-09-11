@@ -499,19 +499,11 @@ const archiveParser = object<CatalogArchive>({
   })),
 })
 
-/** Validates and rebuilds the entire graph before any DB access is allowed. */
-export function validateCatalogArchive(value: unknown): CatalogArchive {
-  if (isRecord(value) && value.format === 'esque.catalog' && value.version !== CATALOG_ARCHIVE_VERSION) {
-    invalid('Backup version', `unsupported version (this build reads version ${CATALOG_ARCHIVE_VERSION})`)
-  }
-  const archive = archiveParser(value, 'Backup')
-  for (const table of ['photos', 'folders', 'collections', 'presets', 'snapshots'] as const) {
-    unique<{ id: string }>(archive[table], (entry) => entry.id, `Backup.${table}`)
-  }
-  const folders = new Map(archive.folders.map((folder) => [folder.id, folder]))
-  const photos = new Map(archive.photos.map((photo) => [photo.id, photo]))
-  const sets = new Set(archive.collectionSetIds)
-  const usedSets = new Set<string>()
+function validatePhotos(
+  archive: CatalogArchive,
+  folders: Map<string, PortableFolder>,
+  photos: Map<string, PortablePhoto>,
+) {
   const sources = new Set<string>()
   for (const photo of archive.photos) {
     if (!folders.has(photo.folderId)) invalid(`Photo ${photo.id}`, 'folder reference is missing')
@@ -531,12 +523,20 @@ export function validateCatalogArchive(value: unknown): CatalogArchive {
       if (!master || master.masterId !== null || !sameOriginal(photo, master)) {
         invalid(`Photo ${photo.id}`, 'virtual copy must reference its original with the same file identity')
       }
-    } else {
-      const source = JSON.stringify([photo.folderId, photo.relPath])
-      if (sources.has(source)) invalid(`Photo ${photo.id}`, 'duplicate original folder/path identity')
-      sources.add(source)
+      continue
     }
+    const source = JSON.stringify([photo.folderId, photo.relPath])
+    if (sources.has(source)) invalid(`Photo ${photo.id}`, 'duplicate original folder/path identity')
+    sources.add(source)
   }
+}
+
+function validateCollections(
+  archive: CatalogArchive,
+  photos: Map<string, PortablePhoto>,
+  sets: Set<string>,
+) {
+  const usedSets = new Set<string>()
   for (const collection of archive.collections) {
     if (collection.setId !== null && !sets.has(collection.setId)) {
       invalid(`Collection ${collection.id}`, 'collection set reference is missing')
@@ -549,14 +549,41 @@ export function validateCatalogArchive(value: unknown): CatalogArchive {
     }
     if (collection.setId) usedSets.add(collection.setId)
   }
+  return usedSets
+}
+
+function validateCollectionSets(sets: Set<string>, usedSets: Set<string>) {
   for (const setId of sets) {
     if (!usedSets.has(setId)) {
       invalid(`Collection set ${setId}`, 'no collection carries this set identity')
     }
   }
+}
+
+function validateSnapshots(archive: CatalogArchive, photos: Map<string, PortablePhoto>) {
   for (const snapshot of archive.snapshots) {
-    if (!photos.has(snapshot.photoId)) invalid(`Snapshot ${snapshot.id}`, 'photo reference is missing')
+    if (!photos.has(snapshot.photoId)) {
+      invalid(`Snapshot ${snapshot.id}`, 'photo reference is missing')
+    }
   }
+}
+
+/** Validates and rebuilds the entire graph before any DB access is allowed. */
+export function validateCatalogArchive(value: unknown): CatalogArchive {
+  if (isRecord(value) && value.format === 'esque.catalog' && value.version !== CATALOG_ARCHIVE_VERSION) {
+    invalid('Backup version', `unsupported version (this build reads version ${CATALOG_ARCHIVE_VERSION})`)
+  }
+  const archive = archiveParser(value, 'Backup')
+  for (const table of ['photos', 'folders', 'collections', 'presets', 'snapshots'] as const) {
+    unique<{ id: string }>(archive[table], (entry) => entry.id, `Backup.${table}`)
+  }
+  const folders = new Map(archive.folders.map((folder) => [folder.id, folder]))
+  const photos = new Map(archive.photos.map((photo) => [photo.id, photo]))
+  const sets = new Set(archive.collectionSetIds)
+  validatePhotos(archive, folders, photos)
+  const usedSets = validateCollections(archive, photos, sets)
+  validateCollectionSets(sets, usedSets)
+  validateSnapshots(archive, photos)
   return archive
 }
 

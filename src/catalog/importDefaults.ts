@@ -32,6 +32,58 @@ export function hasImportDefaults(): boolean {
   return importDevelop !== "none" || previewOnImport;
 }
 
+type DevelopMode = "none" | "auto" | "tone" | "preset";
+
+function resolvedDevelopMode(
+  configured: ReturnType<typeof useUI.getState>["importDevelop"],
+  preset: Preset | null,
+): DevelopMode {
+  if (configured === "auto" || configured === "tone") return configured;
+  return preset ? "preset" : "none";
+}
+
+async function applyAutomaticDefaults(
+  ids: string[],
+  mode: "auto" | "tone",
+  onProgress?: (progress: DefaultsProgress) => void,
+) {
+  const { autoDevelopPhotos } = await import("../develop/autoApply");
+  onProgress?.({ done: 0, total: ids.length, current: "" });
+  await autoDevelopPhotos(ids, mode === "tone" ? "tone" : "all").catch(() => 0);
+}
+
+async function applyPresetDefaults(
+  ids: string[],
+  preset: Preset,
+  opts: { signal?: AbortSignal; onProgress?: (progress: DefaultsProgress) => void },
+) {
+  const { applyPreset } = await import("../develop/presets");
+  let done = 0;
+  for (const id of ids) {
+    if (opts.signal?.aborted) return;
+    const photo = await db.photos.get(id);
+    if (!photo) continue;
+    try {
+      await saveEdits(id, applyPreset(baseEdits(photo), preset));
+    } catch {
+      /* one photo that won't take the look shouldn't stop the rest */
+    }
+    opts.onProgress?.({ done: ++done, total: ids.length, current: photo.filename });
+  }
+}
+
+async function generatePreviews(
+  ids: string[],
+  opts: { signal?: AbortSignal; onProgress?: (progress: DefaultsProgress) => void },
+) {
+  let done = 0;
+  for (const id of ids) {
+    if (opts.signal?.aborted) return;
+    await ensurePreview(id).catch(() => false);
+    opts.onProgress?.({ done: ++done, total: ids.length, current: "" });
+  }
+}
+
 /**
  * Runs the configured post-import work over freshly added photographs.
  *
@@ -52,52 +104,17 @@ export async function applyImportDefaults(
     importDevelop === "preset" && importPresetId
       ? await findPreset(importPresetId)
       : null;
-  const develop =
-    importDevelop === "auto" || importDevelop === "tone"
-      ? importDevelop
-      : preset
-        ? "preset"
-        : "none";
+  const develop = resolvedDevelopMode(importDevelop, preset);
 
   if (develop === "none" && !previewOnImport) return;
 
   if (develop === "auto" || develop === "tone") {
-    // The maths already knows how to walk a list, decode what it needs and put
-    // the answer somewhere that undoes, so this is one call rather than a loop.
-    const { autoDevelopPhotos } = await import("../develop/autoApply");
-    opts.onProgress?.({ done: 0, total: ids.length, current: "" });
-    await autoDevelopPhotos(ids, develop === "tone" ? "tone" : "all").catch(
-      () => 0,
-    );
+    await applyAutomaticDefaults(ids, develop, opts.onProgress);
   } else if (preset) {
-    const { applyPreset } = await import("../develop/presets");
-    let done = 0;
-    for (const id of ids) {
-      if (opts.signal?.aborted) return;
-      const photo = await db.photos.get(id);
-      if (photo) {
-        try {
-          await saveEdits(id, applyPreset(baseEdits(photo), preset));
-        } catch {
-          /* one photo that won't take the look shouldn't stop the rest */
-        }
-        opts.onProgress?.({
-          done: ++done,
-          total: ids.length,
-          current: photo.filename,
-        });
-      }
-    }
+    await applyPresetDefaults(ids, preset, opts);
   }
 
-  if (previewOnImport) {
-    let done = 0;
-    for (const id of ids) {
-      if (opts.signal?.aborted) return;
-      await ensurePreview(id).catch(() => false);
-      opts.onProgress?.({ done: ++done, total: ids.length, current: "" });
-    }
-  }
+  if (previewOnImport) await generatePreviews(ids, opts);
 }
 
 /** A photograph's settings, or the baseline its kind and ISO imply. */
