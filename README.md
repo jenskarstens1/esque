@@ -84,6 +84,50 @@ small rectangular corners, optional icons and divided metadata instead of pill
 shapes or dot separators. Image markers keep a dark surface for contrast;
 overlay and inline badges follow the app's appearance.
 
+## Built-in photo presets
+
+The 16 photo looks are adapted from actual, publicly available Lightroom
+presets, with original curves and reduced tone, colour and grain intensities
+for esque's renderer. They are starting points, **not measured film
+simulations or Lightroom-equivalent renderings**. Camera profiles such as
+Standard and Neutral are separate and remain unchanged.
+
+Choosing a look replaces its creative settings: basic tone/presence, colour
+or B&W treatment, all tone curves, colour mixing/grading, grain and vignette.
+This makes switching from one look to another predictable instead of mixing
+leftover settings. **Exposure, white balance, camera profile/calibration,
+highlight recovery, sharpening, noise reduction, crop, lens corrections and
+local edits are preserved.** The sparse **Tools** presets still stack; apply
+grain or vignette tools after choosing a look. Saved edits are not rewritten;
+the new recipes take effect when you apply them.
+
+### Sources and tuning
+
+All references below are pinned to the inspected revisions and published
+under MIT. Copyright and permission notices ship in
+[`public/preset-licenses.txt`](public/preset-licenses.txt), also available at
+`/preset-licenses.txt` in the built app.
+
+| esque looks | Public reference | Main adaptation |
+| --- | --- | --- |
+| Soft Portrait, Portrait Rich | [Questtion: Preset 10](https://github.com/Questtion/Lightroom-Presets/blob/10e36149ab94e41a702946075ae30195c23af77e/Presets/Preset%2010.xmp) | Retain quiet oranges and a small blue-shadow lift; replace strong scene corrections with separate soft/rich curves and fine grain. |
+| Pastel Daylight, Cross Process | [9bic: mecabify](https://github.com/9bic/lrpresets/blob/4151c0b69ba3325b055cb6926d24a40711f3855f/mecabify.xmp) | Replace extreme contrast compression and orange saturation with a restrained cool pastel look; Cross Process is an original rose/cyan channel-curve variation. |
+| Golden Print, Golden Hour | [Questtion: Golden_Days](https://github.com/Questtion/Lightroom-Presets/blob/10e36149ab94e41a702946075ae30195c23af77e/Presets/Golden_Days.xmp) | Keep the blue-shadow reduction and gold highlight direction, soften the curves, remove fixed WB and competing black/contrast adjustments. Print adds grain; Hour stays clean. |
+| Fine Colour, Landscape | [9bic: 9bichrome](https://github.com/9bic/lrpresets/blob/4151c0b69ba3325b055cb6926d24a40711f3855f/9bichrome.xmp) | Reduce orange saturation and replace extreme parametric corrections with original point curves. Landscape omits toning/grain and adds modest texture. |
+| Teal & Orange | [Questtion: Basketball OR/CY](https://github.com/Questtion/Lightroom-Presets/blob/10e36149ab94e41a702946075ae30195c23af77e/Presets/Basketball%201%20%2B1.00%20OR_CY.xmp) | Cyan-shadow/orange-midtone split, with grading reduced from 41/40 to 9/4, no gym-light WB or exposure correction, and a gentler original curve. |
+| Night Lights | [karaage: NightFactory](https://github.com/karaage0703/lightroom-presets/blob/33985312c6d5e46cdcb686d5dc21b56e5139f531/NightFactory.lrtemplate) | Retain selective green/aqua suppression; reduce clarity from 40 to 3 and omit fixed 3900 K WB, tint and the camera-profile dependency. |
+| Olive Cinema | [Questtion: Preset 4](https://github.com/Questtion/Lightroom-Presets/blob/10e36149ab94e41a702946075ae30195c23af77e/Presets/Preset%204.xmp) | Reduce cyan/gold grading and yellow hue rotation, shift foliage toward olive, and keep highlights bright. |
+| Reportage, Silver Print, Soft Monochrome | [Questtion: BW 3](https://github.com/Questtion/Lightroom-Presets/blob/10e36149ab94e41a702946075ae30195c23af77e/Presets/BW%203%20%2B0.00.xmp) | Three original print curves using the real B&W treatment and channel mixer. Silver/Soft retain lighter blues; Reportage reverses the blue bias for darker skies. Grain and paper toning are original additions. |
+| Editorial Clean | [Questtion: Preset 8](https://github.com/Questtion/Lightroom-Presets/blob/10e36149ab94e41a702946075ae30195c23af77e/Presets/Preset%208.xmp) | Keep a mild open-shadow curve, ease white compression and remove scene-specific corrections. No colour grading or grain. |
+| Portrait | [Questtion: Preset 1](https://github.com/Questtion/Lightroom-Presets/blob/10e36149ab94e41a702946075ae30195c23af77e/Presets/Preset%201.xmp) | Retain restrained warm colours and low microcontrast, without the source's dark midtones or strongly lowered white endpoint. |
+
+With the dev server running, `node tools/headless.mjs /checks/presetcheck.html`
+covers field preservation, all look-to-look switches and XMP round-trips.
+`node tools/headless.mjs /checks/presetlookcheck.html` needs WebGPU and renders
+RAW/rendered grey ramps, colour patches and a portrait contact sheet, checking
+tonal ordering, brightness, clipping, B&W mixing and look separation. Pass
+`?fixture=/raw-fixtures/fuji-xt5.raf` for a real RAW contact sheet.
+
 ## Catalog backup and restore
 
 Open **Settings → Files → Catalog backup**. **Save backup…** first waits for

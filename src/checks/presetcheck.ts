@@ -57,9 +57,11 @@ function editedRaw(): Edits {
  * to another.
  */
 const FRAME_ONLY = [
+  'profile',
   'basic.wbMode',
   'basic.temp',
   'basic.tint',
+  'basic.exposure',
   'crop.left',
   'crop.right',
   'transform.rotate',
@@ -87,6 +89,7 @@ for (const preset of BUILTIN_PRESETS) {
 
   ok(!!preset.paths?.length, `${label}: declares no paths`)
   if (!preset.paths?.length) continue
+  ok(new Set(preset.paths).size === preset.paths.length, `${label}: duplicate paths`)
 
   const before = editedRaw()
   const after = applyPreset(before, preset)
@@ -112,19 +115,68 @@ for (const preset of BUILTIN_PRESETS) {
     )
   }
 
-  // Exposure is the one frame-level field a look may carry, and only as the
-  // small rating bias a negative stock is printed at.
-  if (declared.has('basic.exposure')) {
-    const bias = after.basic.exposure
-    ok(
-      preset.group === 'Colour Negative' || preset.group === 'Cinematic',
-      `${label}: carries exposure but isn't a film stock`,
-    )
-    ok(Math.abs(bias) <= 0.75, `${label}: exposure bias of ${bias} is a guess, not a stock rating`)
-  }
-
   for (const section of preset.sections) {
     ok(section in SECTION_LABELS, `${label}: unknown section “${section}”`)
+  }
+}
+
+// --- Choosing another look replaces the look, not the photo corrections ----
+
+const looks = BUILTIN_PRESETS.filter((p) => p.group !== 'Tools')
+ok(new Set(BUILTIN_PRESETS.map((p) => p.id)).size === BUILTIN_PRESETS.length, 'duplicate preset IDs')
+
+for (const kind of ['raw', 'rendered'] as const) {
+  const before = defaultEdits(kind)
+  before.basic.exposure = 1.35
+  before.basic.wbMode = 'custom'
+  before.basic.temp = 3150
+  before.basic.tint = 14
+  before.curve.parametric.lights = 25
+  before.curve.red = [{ x: 0, y: 0.06 }, { x: 1, y: 0.96 }]
+  before.colorGrading.global = { hue: 290, saturation: 30, luminance: 4 }
+  before.colorMixer.bw.orange = 60
+  before.effects.vignetteAmount = -40
+  before.calibration.redHue = 8
+  before.tone.recovery = 'blend'
+
+  for (const next of looks) {
+    const direct = applyPreset(before, next)
+    ok(direct.basic.treatment === (next.group === 'Black & White' ? 'bw' : 'color'),
+      `${kind}/${next.id}: wrong treatment`)
+    ok(direct.basic.saturation > -100, `${next.id}: destroys hue before the B&W channel mixer`)
+    ok(direct.curve.parametric.lights === 0, `${next.id}: left an old parametric curve active`)
+    ok(direct.colorGrading.global.saturation === 0, `${next.id}: left an old global grade active`)
+    ok(direct.tone.recovery === 'blend', `${next.id}: reset highlight recovery`)
+    ok(direct.calibration.redHue === 8, `${next.id}: reset camera calibration`)
+    for (const previous of looks) {
+      const switched = applyPreset(applyPreset(before, previous), next)
+      ok(JSON.stringify(switched) === JSON.stringify(direct),
+        `${kind}/${previous.id} -> ${next.id}: inherited part of the previous look`)
+    }
+    ok(JSON.stringify(applyPreset(direct, next)) === JSON.stringify(direct),
+      `${kind}/${next.id}: applying a look twice changes it`)
+  }
+}
+
+for (const preset of looks) {
+  const e = applyPreset(defaultEdits(), preset)
+  for (const channel of ['rgb', 'red', 'green', 'blue'] as const) {
+    const points = e.curve[channel]
+    ok(points[0].x === 0 && points.at(-1)?.x === 1, `${preset.id}/${channel}: curve misses an endpoint`)
+    for (let i = 0; i < points.length; i++) {
+      const p = points[i]
+      ok(Number.isFinite(p.x) && Number.isFinite(p.y) && p.y >= 0 && p.y <= 1,
+        `${preset.id}/${channel}: invalid curve point`)
+      if (i) ok(p.x > points[i - 1].x && p.y >= points[i - 1].y,
+        `${preset.id}/${channel}: curve reverses tones`)
+    }
+  }
+  ok(!(e.curve.rgb[0].y > 0 && e.basic.blacks > 0), `${preset.id}: lifts blacks twice`)
+  ok(e.effects.grainAmount <= 30, `${preset.id}: grain overwhelms the look`)
+  if (preset.group === 'Black & White') {
+    ok(Object.values(e.colorMixer.bw).some((v) => v !== 0), `${preset.id}: no B&W channel separation`)
+    ok(Object.values(e.colorMixer.luminance).every((v) => v === 0),
+      `${preset.id}: writes the bypassed colour luminance mixer`)
   }
 }
 
@@ -211,9 +263,8 @@ else
 
 // --- Presets survive export and re-import as field-level ------------------
 
-for (const id of ['grain-35mm', 'teal-orange', 'nr-high-iso']) {
-  const preset = BUILTIN_PRESETS.find((p) => p.id === id)
-  if (!preset) continue
+for (const preset of BUILTIN_PRESETS) {
+  const { id } = preset
   const full = { ...defaultEdits('raw'), ...preset.edits } as Edits
   const reread = parsePresetFile(`${id}.xmp`, presetToXmp(preset, full))
   if (!reread) {
@@ -227,6 +278,14 @@ for (const id of ['grain-35mm', 'teal-orange', 'nr-high-iso']) {
     JSON.stringify(direct) === JSON.stringify(viaXmp),
     `${id}: round trip changed ${JSON.stringify(viaXmp)} instead of ${JSON.stringify(direct)}`,
   )
+  const applied = applyPreset(before, preset)
+  const imported = applyPreset(before, reread)
+  for (const path of preset.paths ?? []) {
+    const want = getPath(applied, path)
+    const got = getPath(imported, path)
+    ok(JSON.stringify(want) === JSON.stringify(got),
+      `${id}: ${path} changed value during XMP round trip`)
+  }
 }
 
 // --- The camera profile is carried, not dropped ---------------------------

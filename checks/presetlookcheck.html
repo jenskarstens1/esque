@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>esque — preset rendering check</title>
+    <style>
+      body { margin: 24px; background: #181818; color: #ddd; font: 13px system-ui; }
+      main { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 20px; }
+      figure { margin: 0; }
+      canvas { display: block; width: 100%; height: auto; }
+      figcaption { padding: 8px 0; }
+    </style>
+  </head>
+  <body>
+    <h1>Preset rendering check</h1>
+    <p>Unedited reference followed by each built-in look. All use the same source and exposure.</p>
+    <main></main>
+    <script type="module" src="/src/checks/presetlookcheck.ts"></script>
+  </body>
+</html>

@@ -6,43 +6,10 @@ import type { CurvePoint, EditSection, Edits, Preset } from '../core/types'
 /**
  * The esque preset library.
  *
- * Built from published, verifiable recipes rather than invented numbers. The
- * analogue looks follow the parameter sets documented in the open-source
- * `peva3/Lightroom-Presets` corpus (MIT) and its STYLEGUIDE, which derives them
- * from measured emulsion response; the genre and utility presets follow the
- * same house rules that corpus sets out.
- *
- * Names describe the *look*, never the emulsion that inspired it. Film stock
- * names are live trademarks that their owners licence commercially, so shipping
- * "Portra" or "Tri-X" as a product feature would be trademark use in commerce,
- * not fair comment. Adobe ships "Modern 04" and "Vintage 09" for exactly this
- * reason. The descriptive name also travels better — it tells you what the
- * preset does even if you've never shot film.
- *
- * Rules every look in here obeys — these are the ones amateur packs break:
- *
- *  - **Never touch exposure or white balance.** A preset cannot know how bright
- *    your frame is or what light it was shot in. (The one exception is the
- *    film group's small positive exposure bias, which is part of how a negative
- *    stock is rated — it is documented per preset.)
- *  - **Contrast comes from the tone curve, not Clarity.** Clarity is capped at
- *    ±10 for film looks; the crunchy "HDR" failure mode starts around +30.
- *  - **Never double-fade.** A lifted point curve (y > 0 at x = 0) and a positive
- *    Blacks both raise the black point; using both turns shadows to mud. Each
- *    preset does one or the other.
- *  - **A look never writes Detail.** Grain and sharpening do fight, and the old
- *    house rule was to drop sharpening to 10 on any preset carrying grain. But
- *    on a RAW, capture sharpening and colour noise reduction are calibrated to
- *    the sensor, the lens and the ISO — a look that overwrites them is undoing
- *    a per-file correction it knows nothing about. The `Sharpen — …` and
- *    `High ISO Rescue` presets exist to be stacked on top for exactly this.
- *  - **Vibrance and Saturation stay within ~5 of each other**, and HSL
- *    saturation stays inside ±60 outside the deliberately creative group.
- *  - Only the *fields* a look actually changes are declared, so presets layer
- *    over your own white balance, crop, lens corrections and noise reduction.
- *    That last point is the one that matters on a RAW: capture sharpening and
- *    colour NR are per-file corrections, and a look that quietly reset them
- *    would be undoing work the preset knows nothing about.
+ * Public recipe references are credited in README.md. These are adaptations
+ * for esque's tone curves and colour pipeline, not measured film simulations.
+ * Looks replace creative settings as a unit; Tools remain sparse, stackable
+ * patches. Neither guesses the photo's exposure or white balance.
  */
 
 const base = defaultEdits()
@@ -81,7 +48,7 @@ function record(build: (e: Edits) => void): { edits: Edits; paths: string[] } {
 
   // Assigning a whole object — `e.colorGrading.shadows = { hue, saturation,
   // luminance }` — means all of its leaves.
-  const paths = [...written].flatMap((path) => leafPaths(getPath(edits, path), path))
+  const paths = [...new Set([...written].flatMap((path) => leafPaths(getPath(edits, path), path)))]
   return { edits, paths }
 }
 
@@ -132,201 +99,159 @@ function make(
 const curve = (...pts: Array<[number, number]>): CurvePoint[] =>
   pts.map(([x, y]) => ({ x: x / 255, y: y / 255 }))
 
-/**
- * The "Hollywood matte" curve that runs through the whole cinematic family:
- * black point lifted to 20/255, the shadow quarter-tone pulled down, a neutral
- * midpoint, a small upper-midtone lift and a rolled-off white.
- */
-const MATTE = curve([0, 20], [64, 55], [128, 128], [192, 196], [255, 235])
-
-/** A restrained S that adds structure without lifting the black point. */
-const GENTLE_S = curve([0, 0], [85, 83], [128, 130], [192, 197], [255, 255])
+function look(
+  id: string,
+  group: string,
+  name: string,
+  note: string,
+  build: (e: Edits) => void,
+): Preset & { note: string } {
+  return make(id, group, name, note, ['basic', 'curve', 'colorMixer', 'colorGrading', 'effects'], (e) => {
+    // Explicit defaults prevent a previous look's B&W treatment, channel
+    // curves, toning or grain from leaking into the next selection.
+    e.basic.contrast = 0
+    e.basic.highlights = 0
+    e.basic.shadows = 0
+    e.basic.whites = 0
+    e.basic.blacks = 0
+    e.basic.texture = 0
+    e.basic.clarity = 0
+    e.basic.dehaze = 0
+    e.basic.vibrance = 0
+    e.basic.saturation = 0
+    e.basic.treatment = 'color'
+    e.curve = structuredClone(base.curve)
+    e.curve.mode = 'point'
+    e.colorMixer = structuredClone(base.colorMixer)
+    e.colorGrading = structuredClone(base.colorGrading)
+    e.effects = structuredClone(base.effects)
+    build(e)
+  })
+}
 
 // ---------------------------------------------------------------------------
-// Colour negative film
+// Colour negative-inspired looks. References and modifications: README.md.
 // ---------------------------------------------------------------------------
 
 const FILM = [
-  make(
+  look(
     'soft-portrait-400',
     'Colour Negative',
-    'Soft Portrait 400',
-    'The professional portrait negative: soft highlight roll-off, open shadows, luminous skin.',
-    ['basic', 'colorMixer', 'colorGrading', 'effects'],
+    'Soft Portrait',
+    'Soft whites, quiet warm colours and a fine grain. A gentle portrait starting point.',
     (e) => {
-      // A negative is rated a little hot and printed down; +1/2 stop is part
-      // of the stock's character rather than a guess about your exposure.
-      e.basic.exposure = 0.5
-      e.basic.contrast = -8
-      e.basic.highlights = -55
-      e.basic.shadows = 32
-      e.basic.whites = -2
-      e.basic.blacks = 12
-
-      e.colorMixer.hue.orange = -3
-      e.colorMixer.saturation.orange = -5
-      e.colorMixer.luminance.orange = 15 // lifting orange is the whole skin move
-      e.colorMixer.hue.yellow = -8
-      e.colorMixer.hue.green = 15
-      e.colorMixer.saturation.green = -23
-      e.colorMixer.saturation.aqua = -10
-      e.colorMixer.hue.blue = -5
-      e.colorMixer.saturation.blue = -15
-      e.colorMixer.luminance.blue = -10
-
-      e.colorGrading.shadows = { hue: 210, saturation: 8, luminance: 0 }
-      e.colorGrading.highlights = { hue: 45, saturation: 12, luminance: 0 }
-
-      e.effects.grainAmount = 28
-      e.effects.grainSize = 25
-      e.effects.grainRoughness = 50
+      // Questtion Preset 10: soften its shoulder and reduce scene corrections.
+      e.basic.highlights = -14
+      e.basic.shadows = 10
+      e.basic.clarity = -4
+      e.basic.saturation = -5
+      e.curve.rgb = curve([0, 6], [32, 31], [128, 133], [224, 229], [255, 249])
+      e.curve.blue = curve([0, 1], [56, 58], [192, 192], [255, 255])
+      e.colorMixer.saturation.orange = -8
+      e.colorMixer.luminance.orange = 4
+      e.colorMixer.saturation.yellow = -8
+      e.colorGrading.highlights = { hue: 48, saturation: 5, luminance: 0 }
+      e.effects.grainAmount = 10
+      e.effects.grainSize = 20
+      e.effects.grainRoughness = 42
     },
   ),
-  make(
+  look(
     'soft-portrait-400-push',
     'Colour Negative',
-    'Soft Portrait 400 +1',
-    'The same emulsion push-processed a stop: more contrast, deeper shadows, coarser grain.',
-    ['basic', 'colorMixer', 'colorGrading', 'effects'],
+    'Portrait Rich',
+    'Deeper midtones and more texture than Soft Portrait, without an exposure boost.',
     (e) => {
-      e.basic.exposure = 0.35
-      e.basic.contrast = 14
-      e.basic.highlights = -58
-      e.basic.shadows = 43
-      e.basic.whites = 4
-      e.basic.blacks = -18
-
-      e.colorMixer.hue.orange = -3
+      // A firmer original variant of the same Preset 10 reference.
+      e.basic.highlights = -10
+      e.basic.shadows = 4
+      e.basic.saturation = -2
+      e.curve.rgb = curve([0, 2], [32, 25], [96, 88], [160, 165], [224, 232], [255, 253])
+      e.curve.blue = curve([0, 2], [56, 59], [192, 191], [255, 254])
       e.colorMixer.saturation.orange = -6
-      e.colorMixer.luminance.orange = 14
-      e.colorMixer.hue.green = 12
-      e.colorMixer.saturation.green = -25
-      e.colorMixer.saturation.blue = -15
-      e.colorMixer.luminance.blue = -12
-
-      e.colorGrading.shadows = { hue: 240, saturation: 10, luminance: 0 }
-      e.colorGrading.highlights = { hue: 50, saturation: 7, luminance: 0 }
-      e.colorGrading.balance = 50
-
-      e.effects.grainAmount = 38
-      e.effects.grainSize = 40
-      e.effects.grainRoughness = 53
+      e.colorMixer.luminance.orange = 3
+      e.colorMixer.saturation.yellow = -10
+      e.colorMixer.saturation.green = -12
+      e.colorGrading.highlights = { hue: 44, saturation: 4, luminance: 0 }
+      e.effects.grainAmount = 18
+      e.effects.grainSize = 26
+      e.effects.grainRoughness = 48
     },
   ),
-  make(
+  look(
     'airy-pastel-400',
     'Colour Negative',
-    'Airy Pastel 400',
-    'The wedding look: flat, bright, mint-green shadows and very pale skin.',
-    ['basic', 'colorMixer', 'colorGrading', 'effects'],
+    'Pastel Daylight',
+    'Cool soft whites and pastel colour, with enough shadow depth to keep the image clear.',
     (e) => {
-      // Half a stop, like the other 400 stocks: the "airy" comes from the flat
-      // curve and the lifted blacks below, not from over-exposing your frame.
-      e.basic.exposure = 0.5
-      e.basic.contrast = -25
-      e.basic.highlights = -50
-      e.basic.shadows = 40
-      e.basic.blacks = 15
-      e.basic.vibrance = -10
-      e.basic.saturation = -15
-
-      e.colorMixer.hue.red = -3
-      e.colorMixer.saturation.red = -10
-      e.colorMixer.saturation.orange = -10
-      e.colorMixer.luminance.orange = 10
-      e.colorMixer.saturation.yellow = -10
-      e.colorMixer.hue.green = -5
-      e.colorMixer.saturation.green = -25
-      e.colorMixer.saturation.aqua = -12
-      e.colorMixer.hue.blue = -5
-      e.colorMixer.saturation.blue = -15
-      e.colorMixer.luminance.blue = -8
-      e.colorMixer.saturation.magenta = -8
-
-      // A green-teal shadow instead of the usual blue — that inversion is
-      // what separates this family from the warmer portrait negatives.
-      e.colorGrading.shadows = { hue: 160, saturation: 10, luminance: 0 }
-      e.colorGrading.highlights = { hue: 40, saturation: 4, luminance: 0 }
-
-      e.effects.grainAmount = 18
+      // mecabify: retain cool compression, not +90 orange or +52 blue toning.
+      e.basic.contrast = -5
+      e.basic.highlights = -12
+      e.basic.shadows = 12
+      e.basic.clarity = -3
+      e.basic.vibrance = 3
+      e.basic.saturation = -9
+      e.curve.rgb = curve([0, 6], [48, 49], [128, 136], [208, 213], [255, 249])
+      e.colorMixer.saturation.orange = 3
+      e.colorMixer.luminance.orange = 5
+      e.colorMixer.saturation.yellow = -7
+      e.colorMixer.saturation.green = -14
+      e.colorMixer.saturation.blue = -6
+      e.colorGrading.shadows = { hue: 206, saturation: 2, luminance: 0 }
+      e.colorGrading.highlights = { hue: 222, saturation: 4, luminance: 0 }
+      e.effects.grainAmount = 6
       e.effects.grainSize = 18
       e.effects.grainRoughness = 38
     },
   ),
-  make(
+  look(
     'golden-snapshot-200',
     'Colour Negative',
-    'Golden Snapshot 200',
-    'Drugstore colour: golden highlights, punchy yellows, blue-leaning shade.',
-    ['basic', 'colorMixer', 'colorGrading', 'effects'],
+    'Golden Print',
+    'Warm print colour, honeyed highlights and a little grain. Best in daylight.',
     (e) => {
-      e.basic.exposure = 0.15
-      e.basic.contrast = -13
-      e.basic.highlights = -50
-      e.basic.shadows = 28
-      e.basic.whites = -20
-      e.basic.blacks = 20
-
-      e.colorMixer.hue.red = 8
-      e.colorMixer.saturation.red = 10
-      e.colorMixer.hue.orange = -3
-      e.colorMixer.saturation.orange = 15
-      e.colorMixer.luminance.orange = 15
-      e.colorMixer.hue.yellow = -13
-      e.colorMixer.saturation.yellow = 20
-      e.colorMixer.luminance.yellow = 10
-      e.colorMixer.hue.green = 23
-      e.colorMixer.saturation.green = -15
-      e.colorMixer.luminance.green = -8
-      e.colorMixer.hue.aqua = -13
-      e.colorMixer.saturation.aqua = -5
-      e.colorMixer.hue.blue = -10
-      e.colorMixer.saturation.blue = -15
-      e.colorMixer.luminance.blue = -10
-      e.colorMixer.hue.purple = -15
-      e.colorMixer.saturation.purple = -23
-      e.colorMixer.hue.magenta = -15
-      e.colorMixer.saturation.magenta = -23
-
-      // A stronger blue-shadow push than the portrait stocks, biased into the
-      // shadows so the highlights stay unambiguously gold.
-      e.colorGrading.shadows = { hue: 208, saturation: 18, luminance: 0 }
-      e.colorGrading.highlights = { hue: 50, saturation: 15, luminance: 0 }
-      e.colorGrading.balance = -30
-
-      e.effects.grainAmount = 35
-      e.effects.grainSize = 28
-      e.effects.grainRoughness = 50
+      // Golden_Days: original gentler blue curve, no fixed WB or black lift.
+      e.basic.highlights = -12
+      e.basic.shadows = 6
+      e.basic.clarity = -3
+      e.basic.saturation = -2
+      e.curve.rgb = curve([0, 4], [48, 43], [128, 130], [208, 215], [255, 252])
+      e.curve.blue = curve([0, 0], [60, 55], [188, 187], [255, 255])
+      e.colorMixer.saturation.orange = -4
+      e.colorMixer.hue.yellow = -6
+      e.colorMixer.saturation.yellow = 5
+      e.colorMixer.saturation.green = -10
+      e.colorGrading.highlights = { hue: 52, saturation: 6, luminance: 0 }
+      e.colorGrading.midtones = { hue: 358, saturation: 2, luminance: 0 }
+      e.effects.grainAmount = 15
+      e.effects.grainSize = 24
+      e.effects.grainRoughness = 46
     },
   ),
-  make(
+  look(
     'fine-grain-100',
     'Colour Negative',
-    'Fine Grain 100',
-    'The finest-grained colour negative there is. Saturated, clean, almost slide-like.',
-    ['basic', 'colorMixer', 'colorGrading', 'effects'],
+    'Fine Colour',
+    'Clear colour separation, a cool finish and barely visible grain.',
     (e) => {
-      e.basic.contrast = 12
-      e.basic.highlights = -35
-      e.basic.shadows = 18
-      e.basic.whites = 5
-      e.basic.blacks = -6
-      e.basic.vibrance = 12
-      e.basic.saturation = 8
-
-      e.colorMixer.saturation.orange = -6
-      e.colorMixer.luminance.orange = 8
-      e.colorMixer.hue.green = 10
-      e.colorMixer.saturation.green = -10
-      e.colorMixer.saturation.aqua = 8
-      e.colorMixer.luminance.blue = -12
-
-      e.colorGrading.shadows = { hue: 210, saturation: 9, luminance: 0 }
-      e.colorGrading.highlights = { hue: 45, saturation: 5, luminance: 0 }
-
-      e.effects.grainAmount = 5
-      e.effects.grainSize = 10
-      e.effects.grainRoughness = 50
+      // 9bichrome: moderate HSL separation; replace extreme parametric tone.
+      e.basic.highlights = -16
+      e.basic.shadows = 8
+      e.basic.vibrance = 6
+      e.basic.saturation = 2
+      e.curve.rgb = curve([0, 1], [48, 44], [128, 129], [208, 215], [255, 254])
+      e.colorMixer.hue.orange = -4
+      e.colorMixer.saturation.red = -10
+      e.colorMixer.luminance.red = 6
+      e.colorMixer.saturation.orange = 4
+      e.colorMixer.saturation.yellow = -8
+      e.colorMixer.saturation.aqua = 4
+      e.colorMixer.saturation.blue = 5
+      e.colorGrading.shadows = { hue: 266, saturation: 2, luminance: 0 }
+      e.colorGrading.highlights = { hue: 223, saturation: 2, luminance: 0 }
+      e.effects.grainAmount = 4
+      e.effects.grainSize = 16
+      e.effects.grainRoughness = 40
     },
   ),
 ]
@@ -336,237 +261,180 @@ const FILM = [
 // ---------------------------------------------------------------------------
 
 const CINEMATIC = [
-  make(
+  look(
     'teal-orange',
     'Cinematic',
     'Teal & Orange',
-    'The colour-grading-suite standard: skin stays warm, everything else cools.',
-    ['basic', 'curve', 'colorMixer', 'colorGrading', 'effects'],
+    'Cyan shadows against warm midtones. A restrained colour contrast for people and city scenes.',
     (e) => {
-      e.basic.contrast = 24
-      e.basic.highlights = -40
-      e.basic.shadows = 30
-      e.basic.whites = 15
-
-      e.curve.mode = 'point'
-      e.curve.rgb = MATTE
-
-      // Pushing green hard toward teal is what separates skin from foliage.
-      e.colorMixer.hue.green = -60
-      e.colorMixer.saturation.green = -40
-      e.colorMixer.saturation.blue = -20
-      e.colorMixer.luminance.orange = 10
-
-      e.colorGrading.shadows = { hue: 209, saturation: 20, luminance: 0 }
-      e.colorGrading.midtones = { hue: 35, saturation: 8, luminance: 0 }
-      e.colorGrading.highlights = { hue: 36, saturation: 15, luminance: 0 }
-      e.colorGrading.blending = 75
-      e.colorGrading.balance = -30
-
-      e.effects.grainAmount = 15
-      e.effects.grainSize = 25
-      e.effects.grainRoughness = 50
-      e.effects.vignetteAmount = -10
+      // Basketball OR/CY: keep the opposing hues, not its gym-light correction.
+      e.basic.highlights = -14
+      e.basic.shadows = 6
+      e.basic.saturation = -4
+      e.curve.rgb = curve([0, 5], [48, 40], [128, 128], [208, 216], [255, 251])
+      e.colorMixer.hue.green = 24
+      e.colorMixer.saturation.green = -18
+      e.colorMixer.hue.blue = -8
+      e.colorMixer.saturation.blue = -8
+      e.colorMixer.saturation.orange = -5
+      e.colorGrading.shadows = { hue: 197, saturation: 9, luminance: 0 }
+      e.colorGrading.midtones = { hue: 40, saturation: 4, luminance: 0 }
+      e.colorGrading.highlights = { hue: 48, saturation: 3, luminance: 0 }
+      e.colorGrading.blending = 45
+      e.colorGrading.balance = 10
+      e.effects.grainAmount = 8
+      e.effects.grainSize = 22
     },
   ),
-  make(
+  look(
     'tungsten-night-800',
     'Cinematic',
-    'Tungsten Night 800',
-    'Motion-picture stock shot after dark: cool blue night, haloed highlights, soft bloom.',
-    ['basic', 'curve', 'colorGrading', 'effects'],
+    'Night Lights',
+    'Quiet green and aqua tones let warm lights stand out. Balance mixed lighting first.',
     (e) => {
-      e.basic.exposure = 0.75
-      e.basic.contrast = 15
-      e.basic.highlights = -70
-      e.basic.shadows = 50
-      e.basic.whites = -30
-      e.basic.clarity = -8 // the bloom
-      e.basic.dehaze = -8 // the atmosphere
-
-      e.curve.mode = 'point'
-      e.curve.rgb = MATTE
-
-      e.colorGrading.shadows = { hue: 210, saturation: 25, luminance: 0 }
-      e.colorGrading.highlights = { hue: 50, saturation: 13, luminance: 0 }
-      e.colorGrading.blending = 75
-
-      e.effects.grainAmount = 40
-      e.effects.grainSize = 23
-      e.effects.grainRoughness = 50
-      e.effects.vignetteAmount = -8
+      // NightFactory: omit 3900 K / +58 tint and reduce clarity from +40.
+      e.basic.highlights = -22
+      e.basic.shadows = 10
+      e.basic.clarity = 3
+      e.basic.vibrance = 4
+      e.curve.rgb = curve([0, 3], [48, 39], [128, 126], [208, 211], [255, 251])
+      e.colorMixer.hue.red = -8
+      e.colorMixer.hue.orange = -10
+      e.colorMixer.hue.yellow = 12
+      e.colorMixer.saturation.green = -32
+      e.colorMixer.saturation.aqua = -20
+      e.colorMixer.saturation.blue = -10
+      e.colorMixer.saturation.purple = -18
+      e.curve.blue = curve([0, 3], [64, 67], [192, 192], [255, 254])
+      e.effects.grainAmount = 12
+      e.effects.grainSize = 24
+      e.effects.grainRoughness = 46
     },
   ),
-  make(
+  look(
     'moody-pastoral',
     'Cinematic',
-    'Moody Pastoral',
-    'Overcast and earthy. Greens go olive, shadows go cool, skin still glows.',
-    ['basic', 'curve', 'colorMixer', 'colorGrading', 'effects'],
+    'Olive Cinema',
+    'Muted olive foliage, cool shade and a gold midtone bias. For overcast outdoor scenes.',
     (e) => {
-      e.basic.contrast = 35
-      e.basic.highlights = -65
-      e.basic.shadows = 60
-      e.basic.whites = 15
-      e.basic.blacks = -15
-
-      e.curve.mode = 'point'
-      e.curve.rgb = MATTE
-
-      e.colorMixer.hue.green = 45
-      e.colorMixer.saturation.green = -55
-      e.colorMixer.saturation.yellow = -30
-      e.colorMixer.luminance.orange = 55
-
-      e.colorGrading.shadows = { hue: 255, saturation: 10, luminance: 0 }
-      e.colorGrading.highlights = { hue: 155, saturation: 8, luminance: 0 }
-      e.colorGrading.blending = 75
-
-      e.effects.grainAmount = 30
-      e.effects.grainSize = 32
-      e.effects.grainRoughness = 55
-      e.effects.vignetteAmount = -25
-      e.effects.vignetteMidpoint = 40
-      e.effects.vignetteFeather = 75
+      // Preset 4: reduce gold/cyan toning and keep the white endpoint bright.
+      e.basic.highlights = -16
+      e.basic.shadows = 5
+      e.basic.saturation = -5
+      e.curve.rgb = curve([0, 4], [48, 39], [128, 124], [208, 211], [255, 250])
+      e.curve.blue = curve([0, 2], [64, 65], [164, 161], [255, 255])
+      e.colorMixer.hue.yellow = 10
+      e.colorMixer.hue.green = -22
+      e.colorMixer.saturation.green = -25
+      e.colorMixer.luminance.green = -6
+      e.colorMixer.saturation.yellow = -14
+      e.colorMixer.saturation.orange = -4
+      e.colorGrading.shadows = { hue: 169, saturation: 5, luminance: 0 }
+      e.colorGrading.midtones = { hue: 53, saturation: 4, luminance: 0 }
+      e.colorGrading.balance = 15
+      e.effects.grainAmount = 10
+      e.effects.grainSize = 24
     },
   ),
-  make(
+  look(
     'cross-processed',
     'Cinematic',
     'Cross Process',
-    'Slide film run through negative chemistry: cyan shadows, magenta highlights, wild hues.',
-    ['basic', 'curve', 'colorMixer', 'colorGrading', 'effects'],
+    'Cool shadows and rose-tinted whites. Deliberately stylised, without crushed blacks.',
     (e) => {
-      e.basic.contrast = 50
-      e.basic.highlights = -60
-      e.basic.shadows = 30
-      e.basic.whites = 20
-      e.basic.clarity = 18
-      e.basic.dehaze = 15
-      e.basic.saturation = 10
-
-      e.curve.mode = 'point'
-      e.curve.rgb = MATTE
-
-      e.colorMixer.hue.red = 15
-      e.colorMixer.saturation.red = -30
-      e.colorMixer.luminance.red = -15
-      e.colorMixer.saturation.orange = -15
-      e.colorMixer.hue.yellow = -30
-      e.colorMixer.saturation.yellow = -40
-      e.colorMixer.hue.green = 30
-      e.colorMixer.saturation.green = 30
-      e.colorMixer.luminance.green = -15
-      e.colorMixer.hue.aqua = 15
-      e.colorMixer.saturation.aqua = 22
-      e.colorMixer.hue.blue = -15
-      e.colorMixer.saturation.blue = -15
-      e.colorMixer.hue.purple = 30
-      e.colorMixer.hue.magenta = 40
-      e.colorMixer.saturation.magenta = -10
-
-      e.colorGrading.shadows = { hue: 160, saturation: 22, luminance: 0 }
-      e.colorGrading.highlights = { hue: 305, saturation: 18, luminance: 0 }
-      e.colorGrading.blending = 75
-      e.colorGrading.balance = -40
-
-      e.effects.grainAmount = 25
-      e.effects.grainSize = 25
-      e.effects.grainRoughness = 50
+      // mecabify's compressed colour, reinterpreted with original channel curves.
+      e.basic.highlights = -10
+      e.basic.shadows = 4
+      e.basic.saturation = -5
+      e.curve.rgb = curve([0, 7], [48, 42], [128, 127], [208, 218], [255, 249])
+      e.curve.red = curve([0, 0], [64, 59], [192, 195], [255, 255])
+      e.curve.green = curve([0, 2], [64, 65], [192, 189], [255, 251])
+      e.curve.blue = curve([0, 5], [64, 70], [192, 195], [255, 255])
+      e.colorMixer.saturation.orange = -8
+      e.colorMixer.saturation.yellow = -12
+      e.colorMixer.hue.green = 16
+      e.colorGrading.shadows = { hue: 190, saturation: 4, luminance: 0 }
+      e.colorGrading.highlights = { hue: 320, saturation: 5, luminance: 0 }
+      e.effects.grainAmount = 12
+      e.effects.grainSize = 22
     },
   ),
 ]
 
 // ---------------------------------------------------------------------------
-// Black & white — saturation to -100, then the mixer's luminance row is the
-// grayscale channel mixer, exactly as Lightroom's Gray Mixer works.
+// Questtion BW 3: three original print contrasts and eight-band B&W mixes.
 // ---------------------------------------------------------------------------
 
 const mono = (e: Edits) => {
-  e.basic.saturation = -100
-  e.basic.vibrance = 0
+  e.basic.treatment = 'bw'
 }
 
 const MONOCHROME = [
-  make(
+  look(
     'reportage-400',
     'Black & White',
-    'Reportage 400',
-    'Press black and white: hard blacks, dark skies, unmistakable grain.',
-    ['basic', 'colorMixer', 'effects'],
+    'Reportage',
+    'A firm black-and-white print, with darker blues and visible but restrained grain.',
     (e) => {
       mono(e)
-      e.basic.contrast = 35
-      e.basic.highlights = -14
-      e.basic.shadows = 25
-      e.basic.whites = 15
-      e.basic.blacks = -30
-
-      e.colorMixer.luminance.red = 30
-      e.colorMixer.luminance.orange = 20
-      e.colorMixer.luminance.yellow = -5
-      e.colorMixer.luminance.green = -25
-      e.colorMixer.luminance.blue = -40 // the dramatic sky, and the whole point
-      e.colorMixer.luminance.magenta = -5
-
-      e.effects.grainAmount = 55
-      e.effects.grainSize = 35
-      e.effects.grainRoughness = 65
+      e.basic.highlights = -10
+      e.basic.shadows = 6
+      e.curve.rgb = curve([0, 2], [60, 48], [128, 128], [187, 200], [255, 253])
+      e.colorMixer.bw.red = 8
+      e.colorMixer.bw.orange = 10
+      e.colorMixer.bw.yellow = -4
+      e.colorMixer.bw.green = -14
+      e.colorMixer.bw.aqua = -12
+      e.colorMixer.bw.blue = -24
+      e.colorMixer.bw.purple = -8
+      e.colorMixer.bw.magenta = 2
+      e.effects.grainAmount = 24
+      e.effects.grainSize = 28
+      e.effects.grainRoughness = 55
     },
   ),
-  make(
+  look(
     'fibre-print-400',
     'Black & White',
-    'Fibre Print 400',
-    'A workhorse 400 stock printed on warm fibre paper. Cool shadows, warm whites.',
-    ['basic', 'colorMixer', 'colorGrading', 'effects'],
+    'Silver Print',
+    'Deep warm colours in grey, lighter blues and a subtle warm-paper finish.',
     (e) => {
       mono(e)
-      e.basic.contrast = 8
-      e.basic.highlights = -24
-      e.basic.shadows = 16
-      e.basic.whites = 5
-      e.basic.blacks = -11
-
-      e.colorMixer.luminance.red = 15
-      e.colorMixer.luminance.orange = 10
-      e.colorMixer.luminance.yellow = 5
-      e.colorMixer.luminance.green = -5
-      e.colorMixer.luminance.aqua = -10
-      e.colorMixer.luminance.blue = -19
-
-      e.colorGrading.shadows = { hue: 230, saturation: 8, luminance: 0 }
-      e.colorGrading.highlights = { hue: 50, saturation: 5, luminance: 0 }
-      e.colorGrading.balance = -20
-
-      e.effects.grainAmount = 36
-      e.effects.grainSize = 28
-      e.effects.grainRoughness = 50
+      e.basic.highlights = -8
+      e.basic.shadows = 8
+      e.curve.rgb = curve([0, 3], [60, 54], [128, 130], [187, 197], [255, 251])
+      e.colorMixer.bw.red = -4
+      e.colorMixer.bw.orange = -8
+      e.colorMixer.bw.yellow = -12
+      e.colorMixer.bw.green = -16
+      e.colorMixer.bw.aqua = -8
+      e.colorMixer.bw.blue = 12
+      e.colorMixer.bw.purple = 8
+      e.colorMixer.bw.magenta = 2
+      e.colorGrading.highlights = { hue: 48, saturation: 2, luminance: 0 }
+      e.effects.grainAmount = 14
+      e.effects.grainSize = 23
+      e.effects.grainRoughness = 45
     },
   ),
-  make(
+  look(
     'long-scale-100',
     'Black & White',
-    'Long Scale 100',
-    'A slow, tabular-grain stock. Nearly grainless, gentle sky, everything separated.',
-    ['basic', 'colorMixer', 'effects'],
+    'Soft Monochrome',
+    'Open, neutral greys with a soft shoulder. No grain or colour toning.',
     (e) => {
       mono(e)
-      e.basic.contrast = 15
-      e.basic.highlights = -30
-      e.basic.shadows = 20
-      e.basic.whites = 5
-      e.basic.blacks = -15
-
-      e.colorMixer.luminance.red = 10
-      e.colorMixer.luminance.orange = 10
-      e.colorMixer.luminance.yellow = 5
-      e.colorMixer.luminance.aqua = -5
-      e.colorMixer.luminance.blue = -15
-
-      e.effects.grainAmount = 15
-      e.effects.grainSize = 20
-      e.effects.grainRoughness = 48
+      e.basic.highlights = -12
+      e.basic.shadows = 12
+      e.curve.rgb = curve([0, 5], [60, 61], [128, 134], [200, 205], [255, 250])
+      e.colorMixer.bw.red = -2
+      e.colorMixer.bw.orange = -3
+      e.colorMixer.bw.yellow = -6
+      e.colorMixer.bw.green = -8
+      e.colorMixer.bw.aqua = -4
+      e.colorMixer.bw.blue = 10
+      e.colorMixer.bw.purple = 4
+      e.colorMixer.bw.magenta = 1
     },
   ),
 ]
@@ -576,135 +444,75 @@ const MONOCHROME = [
 // ---------------------------------------------------------------------------
 
 const GENRE = [
-  make(
+  look(
     'editorial-clean',
     'Genre',
     'Editorial Clean',
-    'Neutral, crisp and quiet. No toning, no grain, nothing to date it.',
-    ['basic', 'curve', 'colorMixer', 'colorGrading', 'effects'],
+    'A light tonal tidy-up with neutral colour. No toning, grain or vignette.',
     (e) => {
-      e.basic.contrast = 12
-      e.basic.highlights = -25
-      e.basic.shadows = 10
-      e.basic.blacks = -5
-
-      e.curve.mode = 'point'
-      e.curve.rgb = GENTLE_S
-
-      e.colorMixer.hue.green = 8
-      e.colorMixer.saturation.green = -8
-      e.colorMixer.saturation.aqua = -5
-
-      e.colorGrading.shadows = { hue: 215, saturation: 3, luminance: 0 }
-      e.colorGrading.highlights = { hue: 40, saturation: 3, luminance: 0 }
-
-      e.effects.vignetteAmount = -5
-      e.effects.vignetteFeather = 80
+      // Preset 8's simple open-shadow curve, with less white compression.
+      e.basic.highlights = -6
+      e.basic.shadows = 5
+      e.curve.rgb = curve([0, 0], [32, 34], [72, 75], [160, 163], [255, 253])
     },
   ),
-  make(
+  look(
     'portrait-skin',
     'Genre',
     'Portrait',
-    'Skin-safe: orange lifted and calmed, contrast held back, everything soft.',
-    ['basic', 'curve', 'colorMixer', 'colorGrading', 'effects'],
+    'Quiet red and orange tones with gentle microcontrast. No grain or colour cast.',
     (e) => {
-      e.basic.contrast = -5
-      e.basic.highlights = -30
-      e.basic.shadows = 22
-      e.basic.whites = 5
-      e.basic.blacks = 8
-
-      e.curve.mode = 'point'
-      e.curve.rgb = curve([0, 0], [85, 84], [128, 130], [195, 198], [255, 255])
-
-      e.colorMixer.saturation.red = -8
-      e.colorMixer.saturation.orange = -10
-      e.colorMixer.luminance.orange = 12
-      e.colorMixer.saturation.yellow = -5
-
-      e.colorGrading.shadows = { hue: 210, saturation: 6, luminance: 0 }
-      e.colorGrading.highlights = { hue: 45, saturation: 6, luminance: 0 }
-
-      e.effects.grainAmount = 20
-      e.effects.grainSize = 22
-      e.effects.grainRoughness = 40
-      e.effects.vignetteAmount = -8
-      e.effects.vignetteMidpoint = 60
-      e.effects.vignetteFeather = 85
+      // Preset 1, without its dark midtones or strongly lowered white endpoint.
+      e.basic.highlights = -10
+      e.basic.shadows = 8
+      e.basic.clarity = -5
+      e.curve.rgb = curve([0, 1], [48, 47], [128, 131], [211, 214], [255, 253])
+      e.colorMixer.saturation.red = -4
+      e.colorMixer.saturation.orange = -7
+      e.colorMixer.luminance.orange = 3
+      e.colorMixer.saturation.yellow = -10
     },
   ),
-  make(
+  look(
     'landscape',
     'Genre',
     'Landscape',
-    'Foliage naturalised, sky deepened, haze cut. Structure without crunch.',
-    ['basic', 'curve', 'colorMixer', 'colorGrading', 'effects'],
+    'Clear blues, controlled yellows and a little structure. No added grain or colour toning.',
     (e) => {
-      e.basic.contrast = 28
-      e.basic.highlights = -55
-      e.basic.shadows = 28
-      e.basic.whites = 10
-      e.basic.blacks = -10
-      e.basic.texture = 12
-      e.basic.dehaze = 15
-
-      e.curve.mode = 'point'
-      e.curve.rgb = curve([0, 0], [75, 68], [128, 130], [195, 205], [255, 255])
-
-      e.colorMixer.hue.yellow = -10
-      e.colorMixer.saturation.yellow = -8
-      e.colorMixer.luminance.yellow = -5
-      e.colorMixer.hue.green = 25
-      e.colorMixer.saturation.green = -15
-      e.colorMixer.luminance.green = -10
-      e.colorMixer.hue.aqua = 5
+      // 9bichrome's colour separation, rebuilt as a clean landscape variant.
+      e.basic.highlights = -18
+      e.basic.shadows = 10
+      e.basic.texture = 5
+      e.basic.dehaze = 3
+      e.basic.vibrance = 7
+      e.curve.rgb = curve([0, 1], [48, 44], [128, 129], [208, 214], [255, 254])
+      e.colorMixer.saturation.red = -6
+      e.colorMixer.hue.yellow = -4
+      e.colorMixer.saturation.yellow = -10
+      e.colorMixer.saturation.green = 2
+      e.colorMixer.luminance.green = -3
+      e.colorMixer.hue.aqua = 3
       e.colorMixer.saturation.aqua = 5
-      e.colorMixer.luminance.aqua = -10
-      e.colorMixer.saturation.blue = -8
-      e.colorMixer.luminance.blue = -20
-
-      e.colorGrading.shadows = { hue: 220, saturation: 10, luminance: 0 }
-      e.colorGrading.highlights = { hue: 150, saturation: 8, luminance: 0 }
-      e.colorGrading.blending = 70
-
-      e.effects.grainAmount = 15
-      e.effects.grainSize = 20
-      e.effects.grainRoughness = 40
-      e.effects.vignetteAmount = -12
-      e.effects.vignetteFeather = 80
+      e.colorMixer.saturation.blue = 8
+      e.colorMixer.luminance.blue = -8
     },
   ),
-  make(
+  look(
     'golden-hour',
     'Genre',
     'Golden Hour',
-    'Warms the light without turning the whole frame orange.',
-    ['basic', 'curve', 'colorMixer', 'colorGrading', 'effects'],
+    'A gentle gold highlight bias and warm shadows. Keeps the photo’s white balance intact.',
     (e) => {
-      e.basic.contrast = 12
-      e.basic.highlights = -25
-      e.basic.shadows = 18
-      e.basic.whites = 8
-
-      e.curve.mode = 'point'
-      e.curve.rgb = curve([0, 5], [85, 85], [128, 130], [195, 200], [255, 252])
-
-      e.colorMixer.saturation.orange = 18
-      e.colorMixer.luminance.orange = 15
-      e.colorMixer.hue.yellow = -12
-      e.colorMixer.saturation.yellow = 12
-      e.colorMixer.luminance.yellow = 8
-
-      e.colorGrading.shadows = { hue: 38, saturation: 8, luminance: 0 }
-      e.colorGrading.midtones = { hue: 42, saturation: 5, luminance: 0 }
-      e.colorGrading.highlights = { hue: 48, saturation: 15, luminance: 0 }
-      e.colorGrading.blending = 70
-      e.colorGrading.balance = 20
-
-      e.effects.grainAmount = 22
-      e.effects.grainSize = 25
-      e.effects.grainRoughness = 45
+      // Golden_Days, with a lighter curve and no grain for a clean alternative.
+      e.basic.highlights = -10
+      e.basic.shadows = 8
+      e.curve.rgb = curve([0, 1], [64, 65], [128, 133], [208, 214], [255, 253])
+      e.curve.blue = curve([0, 0], [60, 57], [189, 188], [255, 255])
+      e.colorMixer.saturation.orange = -3
+      e.colorMixer.hue.yellow = -4
+      e.colorMixer.saturation.yellow = 3
+      e.colorGrading.highlights = { hue: 52, saturation: 5, luminance: 0 }
+      e.colorGrading.balance = 8
     },
   ),
 ]
