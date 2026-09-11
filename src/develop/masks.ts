@@ -7,7 +7,7 @@ import type {
   Edits,
 } from '../core/types'
 import { defaultMaskAdjustments } from '../core/defaults'
-import { defaultModelFor } from '../ai/models'
+import { defaultModelFor, defaultRefineFor } from '../ai/models'
 
 /**
  * Mask bookkeeping: factories, naming and the mutations the UI performs.
@@ -84,12 +84,14 @@ export function newGeometry(kind: MaskGeometry['kind'], at: Point2 = { x: 0.5, y
       return { kind, samples: [], refine: 50 }
     case 'luminanceRange':
       return { kind, range: [0, 0.15, 0.85, 1], smoothness: 50 }
-    default:
+    default: {
       // Detected kinds start with no coverage and no key: the model has not
       // run, and until the user asks for it the mask is a declared intention
       // rather than a shape. The tier is recorded now so the panel opens on
       // the one that will actually be used.
-      return { kind, cacheKey: null, model: modelForKind(kind), refine: 50 }
+      const model = modelForKind(kind)
+      return { kind, cacheKey: null, model, refine: defaultRefineFor(model) }
+    }
   }
 }
 

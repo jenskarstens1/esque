@@ -25,6 +25,7 @@ import {
   InterfaceIcon,
   KeyboardIcon,
   Logo,
+  MaskIcon,
 } from "../design/icons";
 import { cacheClear, cacheStats, type CacheStats } from "../catalog/opfs";
 import { formatBytes } from "../lib/math";
@@ -63,6 +64,7 @@ import type { PreviewQuality, ImportDevelop } from "../state/ui";
 import type { Preset } from "../core/types";
 import type { OutputSpace } from "../gpu/colorspace";
 import { CatalogBackup } from "./CatalogBackup";
+import { AiModelsPane } from "./AiModelsPane";
 
 const PANES = [
   { id: "display", label: "Display", icon: DisplayIcon },
@@ -70,6 +72,7 @@ const PANES = [
   { id: "files", label: "Files", icon: FolderIcon },
   { id: "keyboard", label: "Keyboard", icon: KeyboardIcon },
   { id: "cache", label: "Cache", icon: CacheIcon },
+  { id: "ai", label: "AI models", icon: MaskIcon },
   { id: "about", label: "About", icon: InfoIcon },
 ] as const;
 
@@ -93,6 +96,24 @@ export function SettingsDialog({
   // Held above `open` on purpose: the dialog reopens on the pane you left it on.
   const [pane, setPane] = useState<PaneId>("display");
   const [backupBusy, setBackupBusy] = useState(false);
+
+  useEffect(() => {
+    const select = (event: Event) => {
+      if (!backupBusy && event instanceof CustomEvent && event.detail?.pane === "ai") setPane("ai");
+    };
+    window.addEventListener("esque:settings", select);
+    return () => window.removeEventListener("esque:settings", select);
+  }, [backupBusy]);
+
+  useEffect(() => {
+    if (!open || pane !== "ai") return;
+    const frame = requestAnimationFrame(() => {
+      const tab = document.getElementById("settings-tab-ai");
+      tab?.focus({ preventScroll: true });
+      tab?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [open, pane]);
 
   return (
     <Dialog
@@ -127,6 +148,7 @@ export function SettingsDialog({
         {pane === "files" && <FilesPane onBackupBusyChange={setBackupBusy} />}
         {pane === "keyboard" && <KeyboardPane />}
         {pane === "cache" && <CachePane />}
+        {pane === "ai" && <AiModelsPane />}
         {pane === "about" && <AboutPane />}
       </Scroller>
     </Dialog>

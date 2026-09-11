@@ -6,32 +6,31 @@
  * drawn. Doing that on the main thread would freeze the viewport mid-edit, so
  * it lives out here and the result crosses back as a transferred buffer.
  *
- * Sessions are cached by model id. Building one costs the weights being parsed
+ * The most recently used session is cached. Building one costs the weights being parsed
  * and the graph compiled — a large chunk of the total for the small model — and
  * a user masking a shoot will run the same network on photo after photo, so
  * paying it once is most of what makes the second mask feel instant.
  *
  * Input and output names are read off the session rather than hardcoded. The
- * two families name their tensors quite differently (`input.1` and a numbered
- * output on U²-Net, generated names on the converted BiRefNet), and a registry
+ * families name their tensors quite differently (`input.1` and a numbered
+ * output on U²-Net, `input`/`output` on MODNet), and a registry
  * that had to carry them would break the moment someone pointed it at a model
- * that was re-exported. Both graphs take one input and their first output is
+ * that was re-exported. These graphs take one input and their first output is
  * the one that matters, which is a far more stable thing to rely on.
  */
 import * as Comlink from 'comlink'
 import * as ort from 'onnxruntime-web/webgpu'
 import wasmUrl from 'onnxruntime-web/ort-wasm-simd-threaded.asyncify.wasm?url'
-import { prepareInput, normalizeAlpha, type PrepareSource } from './prepare'
+import { prepareModelInput, predictionAlpha, squareAlpha, type PrepareSource } from './prepare'
+import { SEGMENT_MODELS, type SegmentModelId } from './models'
 
 export interface SegmentRequest {
-  modelId: string
-  /** The network's square edge. */
-  size: number
-  divideByMax: boolean
-  /** The weights. Passed in because the worker has no OPFS bookkeeping. */
-  weights: ArrayBuffer
+  modelId: SegmentModelId
+  /** Omitted when the caller has established that this model is resident. */
+  weights?: ArrayBuffer
   width: number
   height: number
+  isRaw?: boolean
   /** RGBA half-float, scene-linear ProPhoto. */
   pixels: Uint16Array
 }
@@ -52,6 +51,23 @@ interface Cached {
 
 const sessions = new Map<string, Promise<Cached>>()
 
+// Comlink calls can overlap. Serialize GPU work and model release, retaining
+// only one compiled model rather than accumulating hundreds of MB per tier.
+let queue: Promise<void> = Promise.resolve()
+function serial<T>(run: () => Promise<T>): Promise<T> {
+  const task = queue.then(run)
+  queue = task.then(() => {}, () => {})
+  return task
+}
+
+async function releaseSession(modelId: string): Promise<void> {
+  const cached = sessions.get(modelId)
+  if (!cached) return
+  const { session } = await cached
+  await session.release()
+  sessions.delete(modelId)
+}
+
 /**
  * ORT's WASM binary, resolved through the bundler.
  *
@@ -66,7 +82,8 @@ const sessions = new Map<string, Promise<Cached>>()
  * default entry point, which additionally drags in WebNN.
  */
 ort.env.wasm.wasmPaths = { wasm: wasmUrl }
-ort.env.wasm.numThreads = Math.max(1, Math.min(4, navigator.hardwareConcurrency ?? 2))
+ort.env.wasm.numThreads = globalThis.crossOriginIsolated
+  ? Math.max(1, Math.min(4, navigator.hardwareConcurrency ?? 2)) : 1
 ort.env.logLevel = 'error'
 
 async function build(weights: ArrayBuffer): Promise<Cached> {
@@ -92,64 +109,72 @@ async function build(weights: ArrayBuffer): Promise<Cached> {
 }
 
 const api = {
-  async segment(req: SegmentRequest): Promise<SegmentResult> {
-    const started = performance.now()
+  ready(modelId: SegmentModelId): Promise<boolean> {
+    return serial(async () => sessions.has(modelId))
+  },
 
-    let cached = sessions.get(req.modelId)
-    if (!cached) {
-      cached = build(req.weights)
-      sessions.set(req.modelId, cached)
-    }
-    let resolved: Cached
-    try {
-      resolved = await cached
-    } catch (err) {
-      // A failed build must not be cached, or every later attempt reuses the
-      // rejected promise and the user can never retry.
-      sessions.delete(req.modelId)
-      throw err
-    }
-    const { session, gpu } = resolved
+  segment(req: SegmentRequest): Promise<SegmentResult> {
+    return serial(async () => {
+      const started = performance.now()
 
-    const source: PrepareSource = {
-      width: req.width,
-      height: req.height,
-      data: req.pixels,
-    }
-    const tensor = prepareInput(source, req.size, req.divideByMax)
+      let cached = sessions.get(req.modelId)
+      if (!cached) {
+        if (!req.weights?.byteLength) throw new Error('The model is not loaded. Retry detection with its weights.')
+        for (const id of sessions.keys()) await releaseSession(id)
+        cached = build(req.weights)
+        sessions.set(req.modelId, cached)
+      }
+      let resolved: Cached
+      try {
+        resolved = await cached
+      } catch (err) {
+        // Failed builds must not prevent a later retry.
+        sessions.delete(req.modelId)
+        throw err
+      }
+      const { session, gpu } = resolved
 
-    const inputName = session.inputNames[0]
-    const feeds: Record<string, ort.Tensor> = {
-      [inputName]: new ort.Tensor('float32', tensor, [1, 3, req.size, req.size]),
-    }
+      const source: PrepareSource = {
+        width: req.width,
+        height: req.height,
+        data: req.pixels,
+        isRaw: req.isRaw,
+      }
+      const model = SEGMENT_MODELS[req.modelId]
+      const tensor = prepareModelInput(source, model)
 
-    const outputs = await session.run(feeds)
-    const first = outputs[session.outputNames[0]]
-    const data = first.data as Float32Array
-
-    // The graph emits 1×1×S×S; anything beyond the first plane is a
-    // side-supervision head, which is only useful during training.
-    const plane = req.size * req.size
-    const pred = data.length > plane ? data.subarray(0, plane) : data
-    const alpha = normalizeAlpha(pred as Float32Array)
-
-    return Comlink.transfer(
-      { alpha, size: req.size, gpu, ms: performance.now() - started },
-      [alpha.buffer],
-    )
+      const inputName = session.inputNames[0]
+      const input = new ort.Tensor('float32', tensor.data, [1, 3, tensor.height, tensor.width])
+      let outputs: ort.InferenceSession.ReturnType | undefined
+      try {
+        // U²-Net's auxiliary heads are separate outputs, not extra alpha planes.
+        outputs = await session.run({ [inputName]: input }, [session.outputNames[0]])
+        const first = outputs[session.outputNames[0]]
+        if (first.dims.length !== 4 || first.dims[0] !== 1 || first.dims[1] !== 1 ||
+            first.dims[2] !== tensor.height || first.dims[3] !== tensor.width) {
+          throw new Error('The model returned an unsupported mask shape.')
+        }
+        const data = first.data
+        if (!(first.type === 'float32' && data instanceof Float32Array) &&
+            !(first.type === 'float16' && data instanceof Uint16Array)) {
+          throw new Error(`Unsupported mask tensor type: ${first.type}.`)
+        }
+        const prediction = predictionAlpha(data, tensor.width, model.output, tensor.height)
+        const { data: alpha, size } = squareAlpha(prediction, tensor.width, tensor.height)
+        return Comlink.transfer(
+          { alpha, size, gpu, ms: performance.now() - started },
+          [alpha.buffer],
+        )
+      } finally {
+        input.dispose()
+        if (outputs) for (const output of Object.values(outputs)) output.dispose()
+      }
+    })
   },
 
   /** Frees a session's GPU memory when the user switches tiers. */
-  async release(modelId: string): Promise<void> {
-    const cached = sessions.get(modelId)
-    sessions.delete(modelId)
-    if (!cached) return
-    try {
-      const { session } = await cached
-      await session.release()
-    } catch {
-      /* already gone */
-    }
+  release(modelId: string): Promise<void> {
+    return serial(() => releaseSession(modelId))
   },
 }
 

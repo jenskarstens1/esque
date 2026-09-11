@@ -16,6 +16,7 @@ import * as Comlink from 'comlink'
 import { create } from 'zustand'
 import { alphaKey, loadAlpha, putAlpha, saveAlpha } from './alpha'
 import { loadModelWeights } from './modelCache'
+import { createInference } from './inference'
 import {
   SEGMENT_MODELS,
   aiSupport,
@@ -26,7 +27,10 @@ import type { SegmentWorkerApi } from './segmentWorker'
 import { peekProxy } from '../develop/proxy'
 import { cacheHas } from '../catalog/opfs'
 
-export type DetectPhase = 'idle' | 'downloading' | 'running' | 'ready' | 'error'
+export type DetectPhase = 'idle' | 'queued' | 'downloading' | 'running' | 'ready' | 'error'
+
+export const isDetectionBusy = (phase: DetectPhase) =>
+  phase === 'queued' || phase === 'downloading' || phase === 'running'
 
 export interface DetectStatus {
   phase: DetectPhase
@@ -63,22 +67,28 @@ export function detectStatus(key: string | null): DetectStatus {
 // The worker
 // ---------------------------------------------------------------------------
 
-let worker: Worker | null = null
-let remote: Comlink.Remote<SegmentWorkerApi> | null = null
-
-function api(): Comlink.Remote<SegmentWorkerApi> {
-  if (!remote) {
-    worker = new Worker(new URL('./segmentWorker.ts', import.meta.url), { type: 'module' })
-    remote = Comlink.wrap<SegmentWorkerApi>(worker)
-  }
-  return remote
-}
+const inference = createInference({
+  loadWeights: loadModelWeights,
+  createBackend: () => {
+    const worker = new Worker(new URL('./segmentWorker.ts', import.meta.url), { type: 'module' })
+    const remote = Comlink.wrap<SegmentWorkerApi>(worker)
+    return {
+      ready: (id) => remote.ready(id),
+      segment: (request) => remote.segment(request),
+      release: (id) => remote.release(id),
+      dispose: () => worker.terminate(),
+    }
+  },
+})
 
 /** Drops the worker entirely, which is the only reliable way to free the session. */
 export function shutdownDetect(): void {
-  worker?.terminate()
-  worker = null
-  remote = null
+  inference.shutdown()
+}
+
+/** Release a deleted model after any inference already using it finishes. */
+export async function releaseDetectionModel(modelId: SegmentModelId): Promise<void> {
+  await inference.release(modelId)
 }
 
 // ---------------------------------------------------------------------------
@@ -91,10 +101,14 @@ export interface DetectRequest {
   photoId: string
   kind: AiMaskKind
   modelId: SegmentModelId
+  /** Explicit re-detection must not just return the previous coverage. */
+  force?: boolean
 }
 
 export function detectKey(req: DetectRequest): string {
-  return alphaKey(req.photoId, req.kind, req.modelId)
+  const key = alphaKey(req.photoId, req.kind, req.modelId)
+  const version = SEGMENT_MODELS[req.modelId].coverageVersion
+  return version > 1 ? `${key}.v${version}` : key
 }
 
 /** Restores saved coverage without downloading a model or changing any edits. */
@@ -148,7 +162,7 @@ async function run(req: DetectRequest, key: string): Promise<boolean> {
   try {
     // A cached result skips the model entirely — no download, no session, no
     // inference. This is the path a reopened photo takes.
-    const cached = await loadAlpha(key)
+    const cached = req.force ? null : await loadAlpha(key)
     if (cached) {
       // A previous write may have failed while the live coverage stayed in RAM.
       if (detectStatus(key).phase === 'error' || !(await cacheHas(key))) {
@@ -179,36 +193,17 @@ async function run(req: DetectRequest, key: string): Promise<boolean> {
       return false
     }
 
-    setStatus(key, { phase: 'downloading', progress: 0, message: null, gpu: support.gpu })
-    const weights = await loadModelWeights(model, ({ loaded, total }) => {
-      setStatus(key, { phase: 'downloading', progress: total > 0 ? loaded / total : 0 })
-    })
-
-    setStatus(key, { phase: 'running', progress: null })
-
-    // The proxy's buffer is copied rather than transferred: it is the live
-    // texture source for the viewport, and handing it to the worker would
-    // detach it out from under the next render.
-    const pixels = proxy.data.slice()
-    const result = await api().segment(
-      Comlink.transfer(
-        {
-          modelId: model.id,
-          size: model.size,
-          divideByMax: model.divideByMax,
-          weights,
-          width: proxy.width,
-          height: proxy.height,
-          pixels,
-        },
-        [pixels.buffer],
-      ),
+    setStatus(key, { phase: 'queued', progress: null, message: null, gpu: support.gpu })
+    const result = await inference.segment(
+      model, proxy,
+      (stage) => setStatus(key, { phase: stage === 'loading' ? 'downloading' : 'running', progress: null }),
+      ({ loaded, total }) => setStatus(key, { progress: total > 0 ? loaded / total : 0 }),
     )
 
     const alpha = { size: result.size, data: result.alpha }
+    await saveAlpha(key, alpha)
     putAlpha(key, alpha)
     useDetect.setState((s) => ({ revision: s.revision + 1 }))
-    await saveAlpha(key, alpha)
 
     setStatus(key, {
       phase: 'ready',

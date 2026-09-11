@@ -1,5 +1,6 @@
 import { defaultEdits, getPath, leafPaths } from '../core/defaults'
 import { migrateEdits, migratePartialEdits } from '../develop/migrate'
+import { SEGMENT_MODEL_IDS } from '../ai/models'
 import { RAW_EXTENSIONS, RENDERED_EXTENSIONS } from './fs'
 import {
   EDITS_VERSION,
@@ -231,7 +232,7 @@ const geometry: Parser<PortableGeometry> = (value, path) => {
     default:
       return object<Omit<AiMaskGeometry, 'cacheKey'>>({
         kind: oneOf('aiSubject', 'aiBackground', 'aiPerson'),
-        model: optional(oneOf('u2netp', 'u2net-human', 'birefnet-lite')),
+        model: optional(oneOf(...SEGMENT_MODEL_IDS)),
         hint: optional(object({ x: unit, y: unit, w: unit, h: unit })),
         refine: percent,
       })(value, path)

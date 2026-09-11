@@ -27,7 +27,8 @@
  * model rather than a bad transform. So the last stage renders a real mask
  * through the real renderer and checks the coverage landed where the disc is.
  *
- * Run with `node tools/headless.mjs http://localhost:PORT/checks/segcheck.html`.
+ * Run with `node tools/headless.mjs 'http://localhost:PORT/checks/segcheck.html?download'`.
+ * `?download` explicitly permits this diagnostic to install the Fast model.
  * Unlike most of the GPU checks this one does work under puppeteer, which
  * reports a WebGPU adapter here; `tools/browsercheck.mjs` drives it in a real
  * browser if that ever stops being true.
@@ -37,9 +38,13 @@ import { defaultEdits } from '../core/defaults'
 import { RENDERED_WHITE_POINT, type SourceImage } from '../core/workingImage'
 import { floatToHalf } from '../core/half'
 import { prepareInput, normalizeAlpha } from '../ai/prepare'
+import { bitmapToLinear } from '../raw/rendered'
 import { loadModelWeights } from '../ai/modelCache'
-import { SEGMENT_MODELS, aiSupport, MODEL_MEAN } from '../ai/models'
-import { putAlpha, alphaKey } from '../ai/alpha'
+import { createInference } from '../ai/inference'
+import { modelDownloadAllowed, setModelConsent } from '../ai/preferences'
+import { SEGMENT_MODELS, aiSupport, MODEL_MEAN, type SegmentModel } from '../ai/models'
+import { putAlpha, alphaKey, dropAlphasFor, loadAlpha, saveAlpha } from '../ai/alpha'
+import { cacheDelete } from '../catalog/opfs'
 import { newMask } from '../develop/masks'
 import { runCheck } from './checkreport'
 import type { Edits } from '../core/types'
@@ -173,7 +178,7 @@ function checkPrepare() {
 async function checkSegment(): Promise<Float32Array> {
   const model = SEGMENT_MODELS.u2netp
   const started = performance.now()
-  const weights = await loadModelWeights(model)
+  const weights = await diagnosticWeights(model)
   out.weights = { bytes: weights.byteLength, ms: Math.round(performance.now() - started) }
   ok(weights.byteLength > 1_000_000, `weights are only ${weights.byteLength} bytes`)
 
@@ -185,8 +190,6 @@ async function checkSegment(): Promise<Float32Array> {
 
   const res = await api.segment({
     modelId: model.id,
-    size: model.size,
-    divideByMax: model.divideByMax,
     weights,
     width: W,
     height: H,
@@ -215,6 +218,125 @@ async function checkSegment(): Promise<Float32Array> {
 
   worker.terminate()
   return a
+}
+
+async function diagnosticWeights(model: SegmentModel): Promise<ArrayBuffer> {
+  // This diagnostic's explicit opt-in is separate from normal detection.
+  const temporaryConsent = !modelDownloadAllowed(model) && new URLSearchParams(location.search).has('download')
+  if (temporaryConsent) setModelConsent(model, true)
+  try {
+    return await loadModelWeights(model)
+  } finally {
+    if (temporaryConsent) setModelConsent(model, false)
+  }
+}
+
+/** NASA's public-domain astronaut portrait; fixture acquisition is documented in README. */
+async function checkPortrait(model: SegmentModel) {
+  const response = await fetch('/raw-fixtures/ai-astronaut.png')
+  if (!response.ok || !response.headers.get('content-type')?.startsWith('image/')) {
+    throw new Error('Install the NASA portrait fixture described in README before running this check.')
+  }
+  const blob = await response.blob()
+  const weights = await diagnosticWeights(model)
+  ok(weights.byteLength === model.bytes, 'Replacement artifact has the pinned byte count')
+  // Consent was restored above. An installed replacement must work offline.
+  const fetcher = window.fetch
+  try {
+    window.fetch = async () => { throw new Error('Unexpected network request for cached model') }
+    const cached = await loadModelWeights(model)
+    ok(cached.byteLength === weights.byteLength, 'Replacement weights reload offline')
+  } finally {
+    window.fetch = fetcher
+  }
+  const worker = new Worker(new URL('../ai/segmentWorker.ts', import.meta.url), {
+    type: 'module',
+  })
+  const api = Comlink.wrap<SegmentWorkerApi>(worker)
+  let weightLoads = 0
+  const inference = createInference({
+    loadWeights: async () => { weightLoads++; return weights },
+    createBackend: () => ({
+      ready: (id) => api.ready(id),
+      segment: (request) => api.segment(request),
+      release: (id) => api.release(id),
+      dispose: () => worker.terminate(),
+    }),
+  })
+  const runs = []
+  try {
+    for (const [left, width, height] of [[0, 512, 512], [64, 384, 512], [0, 512, 384]]) {
+      const source = bitmapToLinear(await createImageBitmap(blob, left, 0, width, height), 1024, false)
+      const result = await inference.segment(model, { ...source, isRaw: false }, () => {})
+      ok(source.data.byteLength === width * height * 8, 'Inference transfers do not detach the source photo')
+      const { alpha, size } = result
+      const face = patch(alpha, size, (0.43 * 512 - left) / width, 0.23 * 512 / height, 0.025)
+      const background = patch(alpha, size, 0.96, 0.04, 0.02)
+      const soft = alpha.filter((value) => value > 0.05 && value < 0.95).length
+      ok(alpha.length === size * size && alpha.every((value) => Number.isFinite(value) && value >= 0 && value <= 1),
+        `${model.id} ${width}x${height}: finite normalized square coverage`)
+      ok(face > 0.8 && background < 0.2, `${model.id} ${width}x${height}: face/background ${face}/${background}`)
+      ok(soft > 100, `${model.id} ${width}x${height}: soft edge coverage survives`)
+      runs.push({ width, height, size, face, background, soft, gpu: result.gpu, ms: Math.round(result.ms) })
+      if (width === 384) {
+        await checkPortraitRender({
+          width, height, data: source.data, isRaw: false, asShot: RENDERED_WHITE_POINT, whiteLevel: 1,
+        }, { data: alpha, size }, model)
+      }
+    }
+    ok(weightLoads === 1 && await api.ready(model.id), 'Three real detections initialize and transfer weights only once')
+    await inference.release(model.id)
+    ok(!(await api.ready(model.id)), 'Releasing an installed model clears worker residency')
+  } finally {
+    inference.shutdown()
+    out.portrait = { model: model.id, weightLoads, runs }
+  }
+}
+
+async function checkPortraitRender(source: SourceImage, alpha: { data: Float32Array; size: number }, model: SegmentModel) {
+  const photoId = `portrait-check-${crypto.randomUUID()}`
+  const kind = model.id === 'modnet' ? 'aiPerson' : 'aiSubject'
+  const key = alphaKey(photoId, kind, model.id)
+  const renderer = await Renderer.create(new OffscreenCanvas(1, 1))
+  try {
+    await saveAlpha(key, alpha)
+    const restored = await loadAlpha(key)
+    if (!restored) throw new Error('Portrait coverage was not persisted.')
+    ok(restored.data.every((value, index) => Math.abs(value - alpha.data[index]) <= 1 / 255),
+      'Actual portrait predictions survive byte-coverage storage')
+    renderer.setImage(source)
+    renderer.setFrame(null)
+    const base = defaultEdits('rendered')
+    const mask = newMask([], kind)
+    const geometry = mask.components[0].geometry
+    if (!('cacheKey' in geometry)) throw new Error('Expected detected geometry')
+    geometry.cacheKey = key
+    mask.adjustments.exposure = 3
+    const u = (0.43 * 512 - 64) / source.width
+    const v = 0.23
+    for (const cropped of [false, true]) {
+      const crop = cropped ? { left: 0.1, top: 0.05, right: 0.99, bottom: 0.9 } : base.crop
+      const edits = { ...base, crop: { ...base.crop, ...crop } }
+      renderer.renderOffscreen(edits)
+      const plain = await renderer.readPixels('prophoto', 16, null)
+      renderer.renderOffscreen({ ...edits, masks: [mask] })
+      const lit = await renderer.readPixels('prophoto', 16, null)
+      if (!lit || !plain) throw new Error('Portrait mask rendering returned no pixels.')
+      const changeAt = (x: number, y: number) => {
+        const px = Math.floor((x - crop.left) / (crop.right - crop.left) * lit.width)
+        const py = Math.floor((y - crop.top) / (crop.bottom - crop.top) * lit.height)
+        const index = (py * lit.width + px) * 4
+        return lit.data[index] - plain.data[index]
+      }
+      ok(changeAt(u, v) > 1000, `${model.id}: saved matte covers the face${cropped ? ' after cropping' : ''}`)
+      ok(Math.abs(changeAt(0.96, 0.06)) < 100,
+        `${model.id}: saved matte leaves the background unchanged${cropped ? ' after cropping' : ''}`)
+    }
+  } finally {
+    renderer.dispose()
+    dropAlphasFor(photoId)
+    await cacheDelete(key)
+  }
 }
 
 /** A flat prediction must not be stretched into noise. */
@@ -324,8 +446,14 @@ runCheck(async () => {
     await checkSupport()
     checkPrepare()
     checkFlat()
-    const alpha = await checkSegment()
-    await checkRender(alpha)
+    const model = new URLSearchParams(location.search).get('model')
+    if (model === 'modnet' || model === 'birefnet-lite' || model === 'birefnet-lite-webgpu') {
+      await checkPortrait(SEGMENT_MODELS[model])
+    } else {
+      if (model && model !== 'u2netp') throw new Error(`Unknown diagnostic model: ${model}`)
+      const alpha = await checkSegment()
+      await checkRender(alpha)
+    }
   } catch (err) {
     failures.push(`threw: ${(err as Error).message}\n${(err as Error).stack}`)
   }

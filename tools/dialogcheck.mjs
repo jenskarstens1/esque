@@ -156,7 +156,7 @@ try {
       assert.equal(await settings.getByText('Changes apply immediately.', { exact: true }).count(), 0)
       const tabs = settings.getByRole('tablist', { name: 'Settings sections' })
       assert.equal(await tabs.getAttribute('aria-orientation'), phone ? 'horizontal' : 'vertical')
-      assert.equal(await tabs.getByRole('tab').count(), 6)
+      assert.equal(await tabs.getByRole('tab').count(), 7)
       await settings.getByRole('tab', { name: 'Display', exact: true }).focus()
       await page.keyboard.press(phone ? 'ArrowRight' : 'ArrowDown')
       assert.equal(await settings.getByRole('tab', { name: 'Interface', exact: true }).getAttribute('aria-selected'), 'true')

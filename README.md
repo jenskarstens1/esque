@@ -167,26 +167,101 @@ the checks finish.
 
 ## Detected masks
 
-The first detection downloads an ONNX Runtime WebAssembly build (5.7 MB
-compressed) and the weights for the tier you picked. Both are cached — the
-runtime by the browser, the weights in OPFS — so it is a one-time cost, and the
-panel says what it will be before you commit to it. WebGPU is required; without
-it the detected mask kinds are disabled and say why.
+Manage local models in **Settings > AI models**. Downloads are blocked by
+default. Each model shows its size, licence and download sources; enable
+**Allow downloads** for that model, then choose **Download** or run detection
+in Develop. Permission applies only to that model artifact, not other models
+or replacement weights. Photos stay on your device.
+Downloads and cached weights are checked against the model's SHA-256 checksum;
+MODNet and both BiRefNet artifacts are pinned to immutable upstream revisions.
 
-| Tier | Size | Licence | Notes |
+You can cancel a download, revoke permission, or delete a model. Deleting also
+revokes its permission and releases its inference session after any current
+run finishes; saved masks and edits are preserved. Existing downloaded models
+can still run without download permission. If browser storage is cleared, an
+approved model can be downloaded again; revoke permission to prevent this.
+Settings' **Clear previews** keeps models and saved mask coverage.
+Automatic size- and age-based cleanup also protects both: saved masks are part
+of edits, not disposable previews. Protected files can keep total storage above
+the configured cache limit. Browser/site-data deletion can still remove them.
+
+Detection also loads an ONNX Runtime WebAssembly build (about 5.7 MB compressed)
+from this site. The browser caches the runtime, and model weights use the local
+binary cache (OPFS, with IndexedDB fallback). Browser eviction or clearing site
+data can require downloading again. WebGPU is required to enable the controls;
+if an adapter or model session cannot use it, inference falls back to WASM.
+
+| Model | Size | Licence | Notes |
 | --- | --- | --- | --- |
-| U²-Netp | 4.4 MB | Apache-2.0 | The default. 320px, well under a second on a GPU. |
-| U²-Net human | 168 MB | Apache-2.0 | Used for People masks. |
-| BiRefNet-lite | 109 MB | MIT | 1024px. Resolves hair and foliage; noticeably slower. |
+| [MODNet](https://huggingface.co/Xenova/modnet) | 12 MB | Apache-2.0 | Default for People. Portrait alpha, including soft edges; replaces the 168 MB U²-Net human model. |
+| [BiRefNet-lite, WebGPU export](https://huggingface.co/runes/birefnet-lite-webgpu) | 118 MB | MIT | Default for Subject/Background. 1024px segmentation, replacing U²-Netp's 320px output. Larger download and more computation. |
+| U²-Netp (legacy) | 4.4 MB | Apache-2.0 | Available for existing masks only. |
+| U²-Net human (legacy) | 168 MB | Apache-2.0 | Available for existing masks only; licensing caveat below. |
+| Original BiRefNet-lite export (legacy) | 109 MB | MIT | Saved coverage remains usable. This export can exceed WebGPU binding limits or WASM memory during detection. |
+
+The replacement BiRefNet artifact keeps the lite model's weights, but uses bounded
+graph operations and offline constant folding to avoid the old export's oversized
+Concat/Split nodes and CPU-only memory bottlenecks. It is **not**
+BiRefNet_lite-matting: that newer checkpoint still needs a verified browser export.
+MODNet is designed for prominent people and portraits, not every small person
+in a crowded scene. These are task-specific upgrades, not universal quality guarantees.
+
+For U²-Net human, Apache-2.0 is the upstream code licence; separate
+checkpoint-specific terms have not been independently verified. Its training
+labels also limit hair-level accuracy.
 
 Weights are fetched from GitHub and Hugging Face on demand and are not part of
 the repository. To self-host them — for an air-gapped deployment, or to avoid
 depending on someone else's uptime — run [`tools/fetch-models.sh`](tools/fetch-models.sh),
-which downloads them into `public/models/`, where the app looks first.
+which downloads and verifies the two active artifacts into `public/models/`,
+where the app looks first. Add `--all` to include legacy models.
+Same-origin model transfers still require the user's per-model permission.
 
-RMBG-1.4 is a conspicuous omission. It is the best quality per byte in this
-class, and its licence forbids commercial use, which is not a restriction esque
-can pass on to people who receive it under the AGPL.
+RMBG-1.4 is not included: its weight licence restricts commercial use. Model
+code and weight licences must both permit our intended distribution and use.
+
+MODNet uses aspect-aware resizing (512px short edge, capped at 1024px long edge,
+dimensions divisible by 32) and RGB normalization to `[-1,1]`. Its alpha is used
+directly, not contrast-stretched or passed through sigmoid. New People masks
+start with Refine at zero to preserve soft edges. Rectangular predictions are
+resampled into the existing normalized-coordinate square coverage format.
+
+BiRefNet retains square/ImageNet preprocessing and a single sigmoid on logits;
+legacy U²-Net retains its original saliency recipe. Existing saved masks, their
+model identities and refinement values are not migrated or rerun automatically.
+New artifacts have separate model IDs, coverage keys and download permissions:
+consent for a legacy artifact never authorizes its replacement. Legacy downloads
+remain manageable in Settings without deleting saved masks.
+
+Selecting another model leaves the current coverage and refinement active.
+**Replace Mask** applies the new model, coverage and default refinement together
+only after detection and storage succeed; custom refinement is preserved.
+Failures keep the old result editable, and late completions cannot change a
+different photo or a mask that has since changed.
+
+Repeat detections reuse the resident compiled model without rereading, hashing
+or transferring its weights. Residency checks, model switches and deletion are
+serialized; queued photos are copied only when their turn starts. Stopping the
+worker settles pending requests so detection can be retried.
+
+The consent, download lifecycle and Settings checks are in
+`checks/aimodelcheck.html` (append `?ui` to inspect the pane). They use isolated
+storage and synthetic responses, without downloading models. The real inference
+check is `checks/segcheck.html?download`; its explicit `download` flag permits
+the legacy Fast model transfer for that diagnostic. To exercise both replacement
+models on a real public-domain NASA portrait, install the optional fixture:
+
+```sh
+mkdir -p public/raw-fixtures
+curl -fL https://raw.githubusercontent.com/scikit-image/scikit-image/v0.19.3/skimage/data/astronaut.png \
+  -o public/raw-fixtures/ai-astronaut.png
+node tools/headless.mjs 'http://localhost:5173/checks/segcheck.html?model=modnet&download'
+node tools/headless.mjs 'http://localhost:5173/checks/segcheck.html?model=birefnet-lite-webgpu&download'
+```
+
+These checks cover square, portrait and landscape crops, face/background separation,
+continuous edge alpha, and offline reuse of installed weights. They are smoke
+checks, not a representative image-quality benchmark.
 
 ## Repository layout
 

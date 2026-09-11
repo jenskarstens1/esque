@@ -100,6 +100,8 @@ function edits(): Edits {
       { id: 'color-1', blend: 'add', invert: false, geometry: { kind: 'colorRange', samples: [{ r: 0.2, g: 0.5, b: 0.8 }], refine: 50 } },
       { id: 'luminance-1', blend: 'add', invert: false, geometry: { kind: 'luminanceRange', range: [0, 0.2, 0.8, 1], smoothness: 40 } },
       { id: 'ai-1', blend: 'add', invert: false, geometry: { kind: 'aiSubject', cacheKey: 'ai/private-original-cache', model: 'u2netp', refine: 50 } },
+      { id: 'ai-portrait', blend: 'add', invert: false, geometry: { kind: 'aiPerson', cacheKey: 'ai/private-portrait-cache', model: 'modnet', refine: 0 } },
+      { id: 'ai-subject', blend: 'add', invert: false, geometry: { kind: 'aiSubject', cacheKey: 'ai/private-subject-cache', model: 'birefnet-lite-webgpu', refine: 50 } },
     ],
     adjustments: { ...defaultMaskAdjustments(), exposure: 0.4 },
   }]
@@ -192,6 +194,7 @@ async function drive() {
   ])
   await source.settings.add({ key: 'export.destination', value: shoot })
 
+  async function checkArchiveBehavior() {
   const archive = await createCatalogArchive(source)
   const json = await archiveBlob(archive).text()
   const roundtrip = parseCatalogArchive(json)
@@ -276,7 +279,11 @@ async function drive() {
   await rejected(async () => parseCatalogArchive('{'), 'reject malformed JSON', true)
   const polluted: unknown = JSON.parse(json.replace('"basic":{', '"basic":{"__proto__":{"polluted":true},'))
   await rejected(() => mergeCatalogArchive(polluted, target), 'reject prototype keys', true)
+  return { archive, currentEdits }
+  }
+  const { archive, currentEdits } = await checkArchiveBehavior()
 
+  async function checkMergeConflicts() {
   const failed = fresh()
   await failed.folders.add({ id: 'untouched-folder', name: 'Untouched', handle: null, addedAt: 0, photoCount: 0 })
   const unchanged = await content(failed)
@@ -316,11 +323,14 @@ async function drive() {
   const blockedFolder = await mergeCatalogArchive(archive, changedFolder)
   ok(blockedFolder.counts.photos.conflicts === 2 && !(await changedFolder.photos.get(master.id)), 'a conflicting folder cannot silently supply a handle to new photos')
   ok(await (await changedFolder.folders.get('folder-shoot'))!.handle!.isSameEntry(files), 'conflicting folder handle stays untouched')
+  }
+  await checkMergeConflicts()
 
+  async function checkReconnection() {
   const reconnect = fresh()
   await mergeCatalogArchive(archive, reconnect)
   equal((await missingSources(reconnect)).originals.length, 3, 'unconnected master originals are listed once, not virtual copies')
-  equal((await missingSources(reconnect)).detectedMasks, 3, 'missing AI coverage is explicitly tracked for current photos')
+  equal((await missingSources(reconnect)).detectedMasks, 9, 'missing AI coverage is explicitly tracked for current photos')
   const wrongRoot = await inspectFolderReconnection('folder-shoot', files, reconnect)
   ok(wrongRoot.entries.every((entry) => entry.status === 'missing'), 'a matching basename elsewhere is not a relative-path match')
   await rejected(() => commitReconnection(wrongRoot, reconnect), 'unmatched folder cannot be connected')
@@ -334,7 +344,7 @@ async function drive() {
   const connectedFolder = await commitReconnection(folderPlan, reconnect)
   equal(connectedFolder, { originals: 1, virtualCopies: 1 }, 'folder connection counts originals and copies')
   equal(portablePhoto((await reconnect.photos.get(master.id))!), editsBefore, 'folder reconnection does not change metadata or edits')
-  equal((await missingSources(reconnect)).detectedMasks, 3, 'reconnecting originals does not falsely mark AI coverage recovered')
+  equal((await missingSources(reconnect)).detectedMasks, 9, 'reconnecting originals does not falsely mark AI coverage recovered')
   ok(await (await reconnect.folders.get('folder-shoot'))!.handle!.isSameEntry(shoot), 'folder connection persists a usable native handle')
   await rejected(() => commitReconnection(folderPlan, reconnect), 'a reviewed connection cannot replace an existing handle')
   await rejected(() => inspectFileReconnection(loose.id, duplicateHandle, reconnect), 'wrong loose file is rejected')
@@ -374,9 +384,13 @@ async function drive() {
   await reconnect.open()
   ok(await (await reconnect.folders.get('folder-shoot'))!.handle!.isSameEntry(shoot), 'folder handle survives closing and reopening the database')
   ok(await (await reconnect.photos.get(loose.id))!.fileHandle!.isSameEntry(looseHandle), 'file handle survives closing and reopening the database')
+  return reconnect
+  }
+  const reconnect = await checkReconnection()
 
   // Exercise the real Detect cached-result path with synthetic coverage: no
   // model downloads or inference are required by this local regression.
+  async function checkCoverageRecovery() {
   const recoveryId = `recovery-${crypto.randomUUID()}`
   const recoveryKey = alphaKey(recoveryId, 'aiSubject', 'u2netp')
   const recoveryEdits = structuredClone((await reconnect.photos.get(master.id))!.edits!)
@@ -405,8 +419,11 @@ async function drive() {
     delete status[recoveryKey]
     useDetect.setState({ status })
   }
+  }
+  await checkCoverageRecovery()
 
   // Exercise the real application barrier without writing application records.
+  async function checkFlushBarrier() {
   const originalFlush = useDevelop.getState().flush
   const pending: { release?: () => void } = {}
   const gate = new Promise<void>((resolve) => { pending.release = resolve })
@@ -426,6 +443,8 @@ async function drive() {
     pending.release?.()
     useDevelop.setState({ flush: originalFlush })
   }
+  }
+  await checkFlushBarrier()
 
   await uiChecks(archive)
 }

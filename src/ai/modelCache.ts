@@ -1,177 +1,252 @@
-/**
- * Fetching and keeping model weights.
- *
- * The first subject mask on a machine costs a download; every one after it
- * costs an OPFS read. That asymmetry is the whole design: the fetch is
- * streamed so the UI can show real progress against a known total, the result
- * is written next to the proxies under a pinned prefix the evictor leaves
- * alone, and a second caller arriving mid-download joins the first rather than
- * starting its own.
- *
- * Two sources, in order. A deployment that ran `tools/fetch-models.sh` has the
- * weights in `public/models`, so the fetch is same-origin and esque never talks
- * to anyone else — which is the point of a local-first editor and the only
- * version of "runs locally" worth claiming. Without that the upstream release
- * is used, once, and then it is on disk like the vendored copy would have been.
- */
+import { create } from 'zustand'
 import { cacheDelete, cacheRead, cacheWrite, modelKey } from '../catalog/opfs'
-import type { SegmentModel } from './models'
+import { SEGMENT_MODELS, type SegmentModel, type SegmentModelId } from './models'
+import { modelDownloadAllowed, setModelConsent, useAiPreferences } from './preferences'
 
 export interface DownloadProgress {
   loaded: number
-  /** The model's advertised size when the response has no length header. */
   total: number
 }
 
 export class ModelFetchError extends Error {}
+export class ModelConsentError extends Error {}
 
-const inflight = new Map<string, Promise<ArrayBuffer>>()
-
-/** True when the weights are already on disk, so no download is implied. */
-export async function isModelCached(model: SegmentModel): Promise<boolean> {
-  const file = await cacheRead(modelKey(model.id))
-  return !!file && file.size > 0
+export interface ModelDownload {
+  phase: 'idle' | 'downloading' | 'saving' | 'ready' | 'removing' | 'error'
+  progress: number
+  message: string | null
 }
 
-/**
- * Whether any weights are on disk — a stand-in for "has detection ever run".
- *
- * Used only to decide whether to quote the runtime download. There is no way to
- * ask whether a given URL is in the HTTP cache, but a model on disk means the
- * runtime was fetched at least once, and it is far stickier than a cache entry
- * the browser may have dropped. Being wrong here overstates a wait rather than
- * hiding one, which is the right direction to err.
- */
-export async function anyModelCached(models: SegmentModel[]): Promise<boolean> {
-  const hits = await Promise.all(models.map(isModelCached))
-  return hits.some(Boolean)
+interface ModelDownloads {
+  status: Partial<Record<SegmentModelId, ModelDownload>>
+  revision: number
 }
 
-export async function forgetModel(model: SegmentModel): Promise<void> {
-  inflight.delete(model.id)
-  await cacheDelete(modelKey(model.id))
+interface DownloadTask {
+  controller: AbortController
+  promise: Promise<ArrayBuffer>
+  listeners: Set<(progress: DownloadProgress) => void>
 }
 
-/**
- * Streams a response into one buffer, reporting progress as it goes.
- *
- * `Content-Length` is missing often enough — any compressed or chunked
- * transfer — that the registry's own byte count is used as the denominator
- * when it is. The number only drives a progress bar, so an estimate that is
- * close beats a bar that sits at zero and then jumps to done.
- */
+interface ModelCacheDependencies {
+  read: typeof cacheRead
+  write: (key: string, data: ArrayBuffer) => Promise<void>
+  remove: typeof cacheDelete
+  fetch: typeof fetch
+  allowed: (model: SegmentModel) => boolean
+  revoke: (model: SegmentModel) => void
+}
+
+async function matchesArtifact(model: SegmentModel, buffer: ArrayBuffer): Promise<boolean> {
+  const digest = await crypto.subtle.digest('SHA-256', buffer)
+  const hex = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('')
+  return hex === model.sha256
+}
+
+/** Injectable I/O keeps consent and cancellation checks out of the user's cache. */
+export function createModelCache(io: ModelCacheDependencies) {
+  const useModelDownloads = create<ModelDownloads>(() => ({ status: {}, revision: 0 }))
+  const inflight = new Map<SegmentModelId, DownloadTask>()
+  const removing = new Map<SegmentModelId, Promise<void>>()
+  const generations = new Map<SegmentModelId, number>()
+
+  function report(model: SegmentModel, phase: ModelDownload['phase'], progress = 0, message: string | null = null) {
+    useModelDownloads.setState((s) => ({
+      status: { ...s.status, [model.id]: { phase, progress, message } },
+      revision: s.revision + (phase === 'ready' || phase === 'idle' || phase === 'error' ? 1 : 0),
+    }))
+  }
+
+  function requireConsent(model: SegmentModel) {
+    if (!io.allowed(model)) {
+      throw new ModelConsentError(`Allow downloads for ${model.label} in Settings > AI models first.`)
+    }
+  }
+
+  function cancelModelDownload(model: SegmentModel): void {
+    inflight.get(model.id)?.controller.abort()
+  }
+
+  async function modelCacheInfo(model: SegmentModel) {
+    const file = await io.read(modelKey(model.id))
+    return { cached: file?.size === model.bytes, bytes: file?.size ?? 0 }
+  }
+
+  async function isModelCached(model: SegmentModel): Promise<boolean> {
+    return (await modelCacheInfo(model)).cached
+  }
+
+  function forgetModel(model: SegmentModel): Promise<void> {
+    const existing = removing.get(model.id)
+    if (existing) return existing
+    io.revoke(model)
+    cancelModelDownload(model)
+    generations.set(model.id, (generations.get(model.id) ?? 0) + 1)
+    const pending = inflight.get(model.id)
+    report(model, 'removing')
+    const task = (async () => {
+      // Wait for an OPFS write already in progress before removing its result.
+      if (pending) await Promise.allSettled([pending.promise])
+      await io.remove(modelKey(model.id))
+      report(model, 'idle')
+    })().catch((error: unknown) => {
+      report(model, 'error', 0, error instanceof Error ? error.message : 'Could not delete the model.')
+      throw error
+    }).finally(() => removing.delete(model.id))
+    removing.set(model.id, task)
+    return task
+  }
+
+  async function download(model: SegmentModel, onProgress: (progress: DownloadProgress) => void, signal: AbortSignal) {
+    let lastError: unknown
+    for (const url of [model.local, model.remote]) {
+      signal.throwIfAborted()
+      requireConsent(model)
+      try {
+        const response = await io.fetch(url, { signal, mode: 'cors', credentials: 'same-origin' })
+        const type = response.headers.get('content-type') ?? ''
+        if (!response.ok || type.includes('text/html')) {
+          await response.body?.cancel()
+          throw new ModelFetchError(`${url} responded ${response.status}${type.includes('text/html') ? ' with HTML' : ''}.`)
+        }
+        const buffer = await drain(response, model, onProgress, signal)
+        if (!(await matchesArtifact(model, buffer))) {
+          throw new ModelFetchError(`${model.label} failed its integrity check. The file does not match the approved model.`)
+        }
+        return buffer
+      } catch (error) {
+        if (signal.aborted) throw error
+        lastError = error
+      }
+    }
+    throw new ModelFetchError(
+      `Could not download ${model.label}. ${lastError instanceof Error ? lastError.message : 'No source responded.'}`,
+    )
+  }
+
+  /** Only a cache miss can reach the network, and every source requires consent. */
+  async function loadModelWeights(model: SegmentModel, onProgress?: (progress: DownloadProgress) => void): Promise<ArrayBuffer> {
+    const generation = generations.get(model.id) ?? 0
+    const available = () => {
+      if (removing.has(model.id) || generation !== (generations.get(model.id) ?? 0)) {
+        throw new Error('This model was deleted or is being deleted. Allow its download in Settings to use it again.')
+      }
+    }
+    available()
+    const key = modelKey(model.id)
+    const hit = await io.read(key)
+    available()
+    if (hit?.size === model.bytes) {
+      const buffer = await hit.arrayBuffer()
+      available()
+      if (await matchesArtifact(model, buffer)) {
+        available()
+        onProgress?.({ loaded: hit.size, total: hit.size })
+        return buffer
+      }
+      available()
+    }
+    requireConsent(model)
+
+    let task = inflight.get(model.id)
+    if (!task) {
+      const controller = new AbortController()
+      const listeners = new Set<(progress: DownloadProgress) => void>()
+      const promise = (async () => {
+        report(model, 'downloading')
+        if (hit) await io.remove(key)
+        const buffer = await download(model, (progress) => {
+          report(model, 'downloading', progress.loaded / progress.total)
+          for (const listener of listeners) listener(progress)
+        }, controller.signal)
+        controller.signal.throwIfAborted()
+        requireConsent(model)
+        report(model, 'saving', 1)
+        await io.write(key, buffer)
+        if (controller.signal.aborted || !io.allowed(model)) {
+          await io.remove(key)
+          controller.signal.throwIfAborted()
+          requireConsent(model)
+        }
+        report(model, 'ready', 1)
+        return buffer
+      })().catch((error: unknown) => {
+        // Deletion owns its status until the pending write has been removed.
+        if (!removing.has(model.id)) {
+          report(model, controller.signal.aborted ? 'idle' : 'error', 0,
+            controller.signal.aborted ? 'Download cancelled.' :
+              error instanceof Error && error.name === 'QuotaExceededError'
+                ? 'Not enough browser storage. Free space in Settings > Cache and retry.'
+                : error instanceof Error ? error.message : 'Model download failed.')
+        }
+        throw error
+      }).finally(() => inflight.delete(model.id))
+      task = { controller, listeners, promise }
+      inflight.set(model.id, task)
+    }
+    if (onProgress) task.listeners.add(onProgress)
+    try {
+      return await task.promise
+    } finally {
+      if (onProgress) task.listeners.delete(onProgress)
+    }
+  }
+
+  return { useModelDownloads, loadModelWeights, modelCacheInfo, isModelCached, cancelModelDownload, forgetModel }
+}
+
 async function drain(
   response: Response,
-  fallbackTotal: number,
-  onProgress?: (p: DownloadProgress) => void,
-  signal?: AbortSignal,
+  model: SegmentModel,
+  onProgress: (progress: DownloadProgress) => void,
+  signal: AbortSignal,
 ): Promise<ArrayBuffer> {
-  const header = Number(response.headers.get('content-length') ?? 0)
-  const total = header > 0 ? header : fallbackTotal
-  const body = response.body
-
-  if (!body) return response.arrayBuffer()
-
-  const reader = body.getReader()
-  const chunks: Uint8Array[] = []
+  // A fixed buffer bounds memory and rejects truncated/oversized artifacts.
+  const out = new Uint8Array(model.bytes)
+  const reader = response.body?.getReader()
+  if (!reader) {
+    const buffer = await response.arrayBuffer()
+    signal.throwIfAborted()
+    if (buffer.byteLength !== model.bytes) throw new ModelFetchError('Unexpected model size.')
+    return buffer
+  }
   let loaded = 0
+  let complete = false
   try {
     for (;;) {
-      signal?.throwIfAborted()
+      signal.throwIfAborted()
       const { done, value } = await reader.read()
       if (done) break
-      chunks.push(value)
+      if (loaded + value.byteLength > out.length) throw new ModelFetchError('Model exceeds its advertised size.')
+      out.set(value, loaded)
       loaded += value.byteLength
-      onProgress?.({ loaded, total: Math.max(total, loaded) })
+      onProgress({ loaded, total: model.bytes })
     }
+    if (loaded !== model.bytes) throw new ModelFetchError(`Incomplete model: received ${loaded} of ${model.bytes} bytes.`)
+    complete = true
+    return out.buffer
   } finally {
-    reader.releaseLock()
-  }
-
-  const out = new Uint8Array(loaded)
-  let at = 0
-  for (const c of chunks) {
-    out.set(c, at)
-    at += c.byteLength
-  }
-  return out.buffer
-}
-
-async function download(
-  model: SegmentModel,
-  onProgress?: (p: DownloadProgress) => void,
-  signal?: AbortSignal,
-): Promise<ArrayBuffer> {
-  const sources = [model.local, model.remote]
-  let lastError: unknown = null
-
-  for (const url of sources) {
     try {
-      signal?.throwIfAborted()
-      const response = await fetch(url, { signal, mode: 'cors' })
-      // A dev server that rewrites unknown paths to index.html answers 200 with
-      // markup, so the status alone does not prove the weights are there.
-      const type = response.headers.get('content-type') ?? ''
-      if (!response.ok || type.includes('text/html')) {
-        lastError = new ModelFetchError(`${url} responded ${response.status}`)
-        continue
-      }
-      const buffer = await drain(response, model.bytes, onProgress, signal)
-      if (buffer.byteLength < 1024) {
-        lastError = new ModelFetchError(`${url} returned ${buffer.byteLength} bytes`)
-        continue
-      }
-      return buffer
-    } catch (err) {
-      if (signal?.aborted) throw err
-      lastError = err
+      if (!complete) await reader.cancel()
+    } finally {
+      reader.releaseLock()
     }
   }
-
-  throw new ModelFetchError(
-    `Could not download ${model.label} weights. ${
-      lastError instanceof Error ? lastError.message : 'No source responded.'
-    }`,
-  )
 }
 
-/**
- * The model's weights, from OPFS if they are there and from the network if not.
- *
- * The write-back is deliberately not awaited against the caller's success: a
- * full origin quota should cost the *next* mask a re-download, not this one an
- * error, so a failed cache write is swallowed and the buffer returned anyway.
- */
-export async function loadModelWeights(
-  model: SegmentModel,
-  onProgress?: (p: DownloadProgress) => void,
-  signal?: AbortSignal,
-): Promise<ArrayBuffer> {
-  const key = modelKey(model.id)
+export const { useModelDownloads, loadModelWeights, modelCacheInfo, isModelCached, cancelModelDownload, forgetModel } =
+  createModelCache({
+    read: cacheRead,
+    write: cacheWrite,
+    remove: cacheDelete,
+    fetch: (...args) => fetch(...args),
+    allowed: modelDownloadAllowed,
+    revoke: (model) => setModelConsent(model, false),
+  })
 
-  const hit = await cacheRead(key)
-  if (hit && hit.size > 0) {
-    onProgress?.({ loaded: hit.size, total: hit.size })
-    return hit.arrayBuffer()
+// Revocation also covers requests made by the Develop panel and other tabs.
+useAiPreferences.subscribe(() => {
+  for (const model of Object.values(SEGMENT_MODELS)) {
+    if (!modelDownloadAllowed(model)) cancelModelDownload(model)
   }
-
-  const existing = inflight.get(model.id)
-  if (existing) return existing
-
-  const task = (async () => {
-    const buffer = await download(model, onProgress, signal)
-    try {
-      await cacheWrite(key, buffer)
-    } catch {
-      /* out of quota — the session still has its copy in memory */
-    }
-    return buffer
-  })()
-
-  inflight.set(model.id, task)
-  try {
-    return await task
-  } finally {
-    inflight.delete(model.id)
-  }
-}
+})

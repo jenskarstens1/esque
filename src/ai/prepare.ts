@@ -26,15 +26,12 @@
  * 3. **Colour.** ProPhoto D50 linear to sRGB D65, then the sRGB transfer
  *    function, because that is the encoding the training data was in.
  *
- * The result is stretched to a square rather than letterboxed, which is what
- * these networks' own preprocessing does. It distorts the aspect, but it is the
- * distortion they were trained under, and the mask comes back in the same
- * normalised coordinates it went out in — so the stretch cancels exactly when
- * the alpha is sampled over the source.
+ * ImageNet models expect a square. MODNet instead preserves the aspect ratio
+ * to within its 32px stride and receives RGB in [-1, 1], not ImageNet statistics.
  */
 import { PROPHOTO_D50_TO_SRGB_D65 } from '../core/color'
 import { halfToFloat } from '../core/half'
-import { MODEL_MEAN, MODEL_STD } from './models'
+import { MODEL_MEAN, MODEL_STD, type SegmentModel } from './models'
 
 /** The pixels the preparation needs; a `SourceImage` satisfies it. */
 export interface PrepareSource {
@@ -42,6 +39,7 @@ export interface PrepareSource {
   height: number
   /** RGBA half-float bit patterns, scene-linear ProPhoto D50. */
   data: Uint16Array
+  isRaw?: boolean
 }
 
 /**
@@ -74,7 +72,7 @@ function encodeSrgb(v: number): number {
 }
 
 /**
- * Resamples the proxy to `size` × `size` of linear sRGB.
+ * Resamples the proxy to linear sRGB at the requested dimensions.
  *
  * Two paths, because the proxy is not always the larger of the two. A 320 px
  * network gets a box average, walking the source once and accumulating into the
@@ -85,11 +83,11 @@ function encodeSrgb(v: number): number {
  * holes through the tensor, which the network reads as structure that isn't
  * there.
  */
-function reduceToSquare(src: PrepareSource, size: number): Float32Array {
+function reduceToSize(src: PrepareSource, targetWidth: number, targetHeight: number): Float32Array {
   const { width, height, data } = src
   const table = halfTable()
   const m = PROPHOTO_D50_TO_SRGB_D65
-  const out = new Float32Array(size * size * 3)
+  const out = new Float32Array(targetWidth * targetHeight * 3)
 
   // Written into by both paths, to keep the matrix in one place.
   const toSrgb = (r: number, g: number, b: number, o: number, w = 1) => {
@@ -98,21 +96,21 @@ function reduceToSquare(src: PrepareSource, size: number): Float32Array {
     out[o + 2] += (m[6] * r + m[7] * g + m[8] * b) * w
   }
 
-  if (width < size || height < size) {
-    const xScale = width / size
-    const yScale = height / size
-    for (let dy = 0; dy < size; dy++) {
+  if (width < targetWidth || height < targetHeight) {
+    const xScale = width / targetWidth
+    const yScale = height / targetHeight
+    for (let dy = 0; dy < targetHeight; dy++) {
       // Sample at cell centres, so the resample does not drift half a pixel.
       const sy = Math.min(height - 1, Math.max(0, (dy + 0.5) * yScale - 0.5))
       const y0 = Math.floor(sy)
       const y1 = Math.min(height - 1, y0 + 1)
       const fy = sy - y0
-      for (let dx = 0; dx < size; dx++) {
+      for (let dx = 0; dx < targetWidth; dx++) {
         const sx = Math.min(width - 1, Math.max(0, (dx + 0.5) * xScale - 0.5))
         const x0 = Math.floor(sx)
         const x1 = Math.min(width - 1, x0 + 1)
         const fx = sx - x0
-        const o = (dy * size + dx) * 3
+        const o = (dy * targetWidth + dx) * 3
         const corners = [
           [x0, y0, (1 - fx) * (1 - fy)],
           [x1, y0, fx * (1 - fy)],
@@ -129,17 +127,17 @@ function reduceToSquare(src: PrepareSource, size: number): Float32Array {
     return out
   }
 
-  const count = new Float64Array(size * size)
+  const count = new Float64Array(targetWidth * targetHeight)
 
   // Precomputed column bucket, so the inner loop is not doing a divide per pixel.
   const colBucket = new Int32Array(width)
   for (let x = 0; x < width; x++) {
-    colBucket[x] = Math.min(size - 1, Math.floor((x * size) / width))
+    colBucket[x] = Math.min(targetWidth - 1, Math.floor((x * targetWidth) / width))
   }
 
   for (let y = 0; y < height; y++) {
-    const row = Math.min(size - 1, Math.floor((y * size) / height))
-    const rowBase = row * size
+    const row = Math.min(targetHeight - 1, Math.floor((y * targetHeight) / height))
+    const rowBase = row * targetWidth
     let i = y * width * 4
     for (let x = 0; x < width; x++, i += 4) {
       // ProPhoto D50 → sRGB D65 while still linear. Out-of-gamut colours go
@@ -151,7 +149,7 @@ function reduceToSquare(src: PrepareSource, size: number): Float32Array {
     }
   }
 
-  for (let c = 0; c < size * size; c++) {
+  for (let c = 0; c < targetWidth * targetHeight; c++) {
     const n = count[c] || 1
     const o = c * 3
     out[o] /= n
@@ -198,10 +196,42 @@ export function prepareInput(
   size: number,
   divideByMax: boolean,
 ): Float32Array {
-  const rgb = reduceToSquare(src, size)
-  const scale = whiteScale(rgb)
+  return prepareTensor(src, size, size, divideByMax, 'imagenet')
+}
 
-  const n = size * size
+/** Bound panoramic inputs without forcing ordinary portraits into a square. */
+export function inputDimensions(src: Pick<PrepareSource, 'width' | 'height'>, model: SegmentModel) {
+  if (!Number.isSafeInteger(src.width) || !Number.isSafeInteger(src.height) || src.width < 1 || src.height < 1) {
+    throw new Error('The photo has invalid dimensions.')
+  }
+  if (model.preprocessing === 'imagenet') return { width: model.size, height: model.size }
+  const scale = Math.min(model.size / Math.min(src.width, src.height), 1024 / Math.max(src.width, src.height))
+  return {
+    width: Math.max(32, Math.floor(src.width * scale / 32) * 32),
+    height: Math.max(32, Math.floor(src.height * scale / 32) * 32),
+  }
+}
+
+export function prepareModelInput(src: PrepareSource, model: SegmentModel) {
+  const { width, height } = inputDimensions(src, model)
+  if (src.data.length !== src.width * src.height * 4) throw new Error('The photo has incomplete pixel data.')
+  return {
+    width, height,
+    data: prepareTensor(src, width, height, model.divideByMax, model.preprocessing),
+  }
+}
+
+function prepareTensor(
+  src: PrepareSource,
+  width: number,
+  height: number,
+  divideByMax: boolean,
+  preprocessing: SegmentModel['preprocessing'],
+): Float32Array {
+  const rgb = reduceToSize(src, width, height)
+  // Preserve rendered-photo exposure for MODNet; old models keep their recipe.
+  const scale = preprocessing === 'modnet' && src.isRaw === false ? 1 : whiteScale(rgb)
+  const n = width * height
   const encoded = new Float32Array(n * 3)
   let max = 0
   for (let i = 0; i < n * 3; i++) {
@@ -215,8 +245,8 @@ export function prepareInput(
   // NCHW: the whole red plane, then green, then blue.
   const tensor = new Float32Array(3 * n)
   for (let c = 0; c < 3; c++) {
-    const mean = MODEL_MEAN[c]
-    const std = MODEL_STD[c]
+    const mean = preprocessing === 'modnet' ? 0.5 : MODEL_MEAN[c]
+    const std = preprocessing === 'modnet' ? 0.5 : MODEL_STD[c]
     const plane = c * n
     for (let i = 0; i < n; i++) {
       tensor[plane + i] = (encoded[i * 3 + c] * norm - mean) / std
@@ -228,8 +258,7 @@ export function prepareInput(
 /**
  * Rescales a raw prediction to a usable 0..1 alpha.
  *
- * Both families emit an unbounded saliency map rather than a probability, so
- * the reference implementations stretch min to max before using it — without
+ * U²-Net's reference implementation stretches min to max before using it — without
  * that a confident mask and a hesitant one come back at different overall
  * strengths and the same Refine setting means two different things. A flat
  * prediction, which is what an empty frame produces, is returned as zero
@@ -252,4 +281,45 @@ export function normalizeAlpha(pred: Float32Array): Float32Array {
     out[i] = (v - min) / span
   }
   return out
+}
+
+/** FP16 outputs contain half-float bits, not small integer probabilities. */
+export function predictionAlpha(
+  data: Float32Array | Uint16Array,
+  size: number,
+  output: SegmentModel['output'] = 'saliency',
+  height = size,
+): Float32Array {
+  if (data.length !== size * height) throw new Error('The model returned an unexpected mask size.')
+  const prediction = data instanceof Float32Array ? data : Float32Array.from(data, halfToFloat)
+  if (!prediction.every(Number.isFinite)) throw new Error('The model returned non-finite mask values.')
+  if (output === 'alpha') return Float32Array.from(prediction, (value) => Math.min(1, Math.max(0, value)))
+  // BiRefNet emits logits. A global contrast stretch is not a probability
+  // calibration and turns an uncertain constant prediction into empty coverage.
+  return output === 'logits'
+    ? Float32Array.from(prediction, (value) => 1 / (1 + Math.exp(-value)))
+    : normalizeAlpha(prediction)
+}
+
+/** Store rectangular mattes in the existing square, normalized-coordinate cache. */
+export function squareAlpha(data: Float32Array, width: number, height: number) {
+  const size = Math.max(width, height)
+  if (width === height) return { data, size }
+  const alpha = new Float32Array(size * size)
+  for (let y = 0; y < size; y++) {
+    const sy = Math.min(height - 1, Math.max(0, (y + 0.5) * height / size - 0.5))
+    const y0 = Math.floor(sy)
+    const y1 = Math.min(height - 1, y0 + 1)
+    const fy = sy - y0
+    for (let x = 0; x < size; x++) {
+      const sx = Math.min(width - 1, Math.max(0, (x + 0.5) * width / size - 0.5))
+      const x0 = Math.floor(sx)
+      const x1 = Math.min(width - 1, x0 + 1)
+      const fx = sx - x0
+      const top = data[y0 * width + x0] * (1 - fx) + data[y0 * width + x1] * fx
+      const bottom = data[y1 * width + x0] * (1 - fx) + data[y1 * width + x1] * fx
+      alpha[y * size + x] = top * (1 - fy) + bottom * fy
+    }
+  }
+  return { data: alpha, size }
 }
