@@ -311,6 +311,7 @@ function NewsFace({ phone }: { phone: boolean }) {
           <div className="mt-3.5 flex flex-col gap-3.5">
             {groupChanges(release).map(([kind, changes]) => (
               <section key={kind}>
+                {/* label-ok: a changelog heading, not a caption for a control. */}
                 <h3
                   className={cn(
                     'text-micro font-semibold tracking-[0.06em] uppercase',
