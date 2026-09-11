@@ -49,8 +49,13 @@ const MenuTree = createContext<MenuTreeState | null>(null)
 /**
  * One base width for every menu, scaled with the user's text-size preference
  * rather than sized independently to each menu's content.
+ *
+ * 216 rather than 240: at 12px the longest label the app raises is around 150px
+ * set, and the rest of the column is icon, shortcut and chevron at fixed widths.
+ * The extra 24px was margin nobody read, and it is what made a nineteen-row
+ * photo menu read as a slab.
  */
-export const MENU_WIDTH = 240
+export const MENU_WIDTH = 216
 
 /**
  * The size every icon in a menu row is drawn at. Exported so call sites name
@@ -166,9 +171,19 @@ function itemClassName(item: MenuItem, active: boolean) {
   let highlight: string | false = false
   if (active) highlight = item.danger ? 'bg-red text-white' : 'bg-accent text-(--accent-ink)'
 
+  /*
+   * The highlight is inset and rounded rather than full-bleed, the way macOS
+   * has drawn a menu since Big Sur: a bar that runs edge to edge turns the menu
+   * into a table of rows, where a floating capsule reads as one thing picked
+   * out of a list. The inset is also what lets the row padding come in — the
+   * text sits 10px from the menu's edge instead of 12, without the highlight
+   * ever touching it.
+   *
+   * `py` stays generous under a finger; only the pointer case tightens.
+   */
   return cn(
-    'flex w-full items-center gap-2 px-3 text-left text-ui',
-    'py-[5px] coarse:py-2.5',
+    'mx-1 flex w-[calc(100%-0.5rem)] items-center gap-1.5 rounded-sm px-1.5 text-left text-ui',
+    'py-[3px] coarse:py-2.5',
     'transition-colors duration-[--duration-instant] focus-visible:shadow-none',
     state,
     highlight,
@@ -299,11 +314,13 @@ function MenuCommand({
 function MenuEntry(props: MenuEntryProps) {
   const { item } = props
   if (item.kind === 'separator') {
-    return <div role="separator" className="my-1 h-px bg-hairline" />
+    // Inset to the highlight's own edges, so a rule parts two groups of rows
+    // rather than slicing the card it sits in.
+    return <div role="separator" className="mx-1 my-1 h-px bg-hairline" />
   }
   if (item.kind === 'note') {
     return (
-      <div className="px-3 py-1 text-micro leading-snug text-balance text-label-tertiary">
+      <div className="px-2.5 py-1 text-micro leading-snug text-balance text-label-tertiary">
         {item.label}
       </div>
     )
@@ -392,14 +409,22 @@ export function Menu({
       const w = el.offsetWidth
       const h = el.offsetHeight
       const row = anchor?.getBoundingClientRect()
+      /*
+       * Submenu rows are inset by 4px inside their menu (see `itemClassName`),
+       * so the anchor's edges are not the menu's edges. Adding the inset back
+       * keeps the submenu overlapping the parent by the same 4px it always did,
+       * rather than by eight, and lines its first row up with the row that
+       * opened it instead of sitting a row-padding lower.
+       */
+      const inset = 4
       const left = row
-        ? row.right + w - 4 <= window.innerWidth - 8
-          ? row.right - 4
-          : row.left - w + 4
+        ? row.right + inset + w <= window.innerWidth - 8
+          ? row.right + inset - 4
+          : row.left - inset - w + 4
         : fromRight
           ? x - w
           : x
-      const top = row ? row.top : above ? y - h : y
+      const top = row ? row.top - inset : above ? y - h : y
       const next = {
         x: Math.max(8, Math.min(left, window.innerWidth - w - 8)),
         y: Math.max(8, Math.min(top, window.innerHeight - h - 8)),
