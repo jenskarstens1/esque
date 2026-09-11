@@ -279,14 +279,14 @@ function ZoomMenu({ frame }: { frame: NavigatorFrame | null }) {
     const items: MenuItem[] = [
       {
         label: 'Fit in Window',
-        shortcut: '⌘0',
+        commandId: 'zoom.fit',
         checked: mode === 'Fit',
         onSelect: () => zoomCommands()?.fit(),
       },
       { label: 'Fill Window', checked: mode === 'Fill', onSelect: () => zoomCommands()?.fill() },
       {
         label: '1:1',
-        shortcut: '⌘1',
+        commandId: 'zoom.actual',
         checked: mode === '1:1',
         onSelect: () => zoomCommands()?.actual(),
       },

@@ -11,9 +11,11 @@ import { openWhatsNew } from './whatsNew'
 
 export function TitleBar({
   onExport,
+  canExport,
   onSettings,
 }: {
   onExport: () => void
+  canExport: boolean
   onSettings: () => void
 }) {
   const module = useUI((s) => s.module)
@@ -79,7 +81,12 @@ export function TitleBar({
                   r.right,
                   r.bottom + 4,
                   [
-                    { label: 'Export…', icon: <ExportIcon size={MENU_ICON} />, onSelect: onExport },
+                    {
+                      label: 'Export…',
+                      icon: <ExportIcon size={MENU_ICON} />,
+                      onSelect: onExport,
+                      disabled: !canExport,
+                    },
                     {
                       label: 'Settings…',
                       icon: <SettingsIcon size={MENU_ICON} />,
@@ -110,7 +117,7 @@ export function TitleBar({
         ) : (
           <>
             <Tooltip content="Export" shortcut="⇧⌘E">
-              <IconButton label="Export" onClick={onExport}>
+              <IconButton label="Export" onClick={onExport} disabled={!canExport}>
                 <ExportIcon />
               </IconButton>
             </Tooltip>

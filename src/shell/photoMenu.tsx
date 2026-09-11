@@ -43,11 +43,11 @@ import { useExport } from '../state/exportStore'
 import { toast } from '../design/toast'
 import type { Collection, ColorLabel, Edits, Photo } from '../core/types'
 
-const LABELS: Array<{ value: ColorLabel; label: string; shortcut?: string }> = [
-  { value: 'red', label: 'Red', shortcut: '6' },
-  { value: 'yellow', label: 'Yellow', shortcut: '7' },
-  { value: 'green', label: 'Green', shortcut: '8' },
-  { value: 'blue', label: 'Blue', shortcut: '9' },
+const LABELS: Array<{ value: ColorLabel; label: string; commandId?: string }> = [
+  { value: 'red', label: 'Red', commandId: 'label.red' },
+  { value: 'yellow', label: 'Yellow', commandId: 'label.yellow' },
+  { value: 'green', label: 'Green', commandId: 'label.green' },
+  { value: 'blue', label: 'Blue', commandId: 'label.blue' },
   { value: 'purple', label: 'Purple' },
   { value: 'none', label: 'None' },
 ]
@@ -141,9 +141,9 @@ export function photoMenuItems(photo: Photo, options: PhotoMenuOptions = {}): Me
     ? []
     : [
         {
-          label: many ? `Open in Loupe${suffix}` : 'Open in Loupe',
+          label: 'Open in Loupe',
           icon: <LoupeIcon size={MENU_ICON} />,
-          shortcut: 'E',
+          commandId: 'view.loupe',
           onSelect: () => {
             ui.setModule('library')
             ui.setViewMode('loupe')
@@ -152,7 +152,7 @@ export function photoMenuItems(photo: Photo, options: PhotoMenuOptions = {}): Me
         {
           label: 'Edit in Develop',
           icon: <SlidersIcon size={MENU_ICON} />,
-          shortcut: 'D',
+          commandId: 'view.develop',
           onSelect: () => ui.setModule('develop'),
         },
         { kind: 'separator' },
@@ -162,9 +162,9 @@ export function photoMenuItems(photo: Photo, options: PhotoMenuOptions = {}): Me
     ? []
     : [
         {
-          label: `Copy Settings${isDeveloping ? '' : suffix}`,
+          label: 'Copy Settings',
           icon: <CopyIcon size={MENU_ICON} />,
-          shortcut: '⇧⌘C',
+          commandId: isDeveloping ? 'develop.copy' : undefined,
           disabled: !isDeveloping,
           onSelect: () => {
             dev.copySettings(ALL_SECTIONS)
@@ -174,13 +174,15 @@ export function photoMenuItems(photo: Photo, options: PhotoMenuOptions = {}): Me
         {
           label: `Paste Settings${suffix}`,
           icon: <PasteIcon size={MENU_ICON} />,
-          shortcut: '⇧⌘V',
+          commandId: isDeveloping && !many ? 'develop.paste' : undefined,
           disabled: !canPaste,
           onSelect: () => void pasteToAll(targets),
         },
         {
           label: `Reset Settings${suffix}`,
           icon: <ResetIcon size={MENU_ICON} />,
+          commandId: isDeveloping && !many ? 'develop.reset' : undefined,
+          danger: true,
           onSelect: () => {
             void resetEdits(targets)
             if (isDeveloping) dev.resetAll()
@@ -200,19 +202,19 @@ export function photoMenuItems(photo: Photo, options: PhotoMenuOptions = {}): Me
       submenu: [
         {
           label: 'Pick',
-          shortcut: 'P',
+          commandId: 'flag.pick',
           checked: photo.flag === 'pick',
           onSelect: () => void setFlag(targets, 'pick'),
         },
         {
           label: 'Reject',
-          shortcut: 'X',
+          commandId: 'flag.reject',
           checked: photo.flag === 'reject',
           onSelect: () => void setFlag(targets, 'reject'),
         },
         {
           label: 'Unflagged',
-          shortcut: 'U',
+          commandId: 'flag.none',
           checked: photo.flag === 'unflagged',
           onSelect: () => void setFlag(targets, 'unflagged'),
         },
@@ -223,7 +225,7 @@ export function photoMenuItems(photo: Photo, options: PhotoMenuOptions = {}): Me
       icon: <StarIcon size={MENU_ICON} filled={photo.rating > 0} />,
       submenu: [0, 1, 2, 3, 4, 5].map((n) => ({
         label: n === 0 ? 'None' : `${n} Star${n === 1 ? '' : 's'}`,
-        shortcut: String(n),
+        commandId: `rate.${n}`,
         checked: photo.rating === n,
         onSelect: () => void setRating(targets, n),
       })),
@@ -233,7 +235,7 @@ export function photoMenuItems(photo: Photo, options: PhotoMenuOptions = {}): Me
       icon: <ColorLabelIcon size={MENU_ICON} />,
       submenu: LABELS.map((l) => ({
         label: l.label,
-        shortcut: l.shortcut,
+        commandId: l.commandId,
         icon: swatch(l.value),
         checked: photo.label === l.value,
         onSelect: () => void setLabel(targets, l.value),
@@ -265,7 +267,7 @@ export function photoMenuItems(photo: Photo, options: PhotoMenuOptions = {}): Me
           onSelect: () => photo.stackId && void unstackPhotos(photo.stackId),
         },
         {
-          label: 'Expand / Collapse Stack',
+          label: photo.stackCollapsed ? 'Expand Stack' : 'Collapse Stack',
           disabled: !photo.stackId,
           onSelect: () => photo.stackId && void toggleStack(photo.stackId),
         },
@@ -288,14 +290,15 @@ export function photoMenuItems(photo: Photo, options: PhotoMenuOptions = {}): Me
     { kind: 'separator' },
 
     {
-      label: `Export…${suffix}`,
+      label: `Export${suffix}…`,
       icon: <ExportIcon size={MENU_ICON} />,
-      shortcut: '⇧⌘E',
+      commandId: 'file.export',
       onSelect: () => useExport.getState().openDialog(targets),
     },
     {
-      label: `Show in Info${suffix}`,
+      label: 'Show Right Panel',
       icon: <SidePanelIcon size={MENU_ICON} />,
+      disabled: ui.rightPanelOpen,
       onSelect: () => {
         if (!ui.rightPanelOpen) ui.toggleRightPanel()
       },
@@ -395,7 +398,7 @@ function collectionSubmenu(targets: string[], collections: Collection[]): MenuIt
   const usable = collections.filter((c) => !c.smart)
   return [
     {
-      label: 'New Collection…',
+      label: 'New Collection',
       onSelect: async () => {
         const id = await createCollection('Untitled Collection', targets)
         if (id) toast.show('Collection created')

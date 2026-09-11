@@ -16,6 +16,12 @@ import {
 } from '../shell/appMenus'
 import { defaultEdits, ALL_SECTIONS } from '../core/defaults'
 import type { CatalogFolder, Collection, Photo } from '../core/types'
+import { COMMAND_BY_ID, chordsFor, formatChord } from '../shell/commands'
+import { useUI } from '../state/ui'
+import { useCatalog } from '../state/catalog'
+import { useDevelop } from '../develop/session'
+import { newMask } from '../develop/masks'
+import { useMasking } from '../develop/masking'
 import '../styles/index.css'
 
 /*
@@ -96,6 +102,8 @@ function validate(name: string, items: MenuItem[], depth = 0) {
     separators = 0
     if (!item.label) return fail(`${where}: no label`)
     if (item.kind === 'note') return
+    if (item.commandId && !COMMAND_BY_ID.has(item.commandId))
+      fail(`${where}: unknown keyboard command ${item.commandId}`)
     if (item.submenu) {
       validate(`${where} “${item.label}”`, item.submenu, depth + 1)
       return
@@ -132,6 +140,7 @@ const cases: Array<[string, () => MenuItem[]]> = [
   ['grid background', () => gridBackgroundMenuItems()],
   ['viewport', () => viewportMenuItems()],
   ['crop', () => cropMenuItems()],
+  ['crop panel', () => [...cropMenuItems(false), { kind: 'separator' }, ...panelMenuItems('crop')]],
   ['mask', () => maskMenuItems()],
   ['retouch', () => retouchMenuItems()],
   ['compare', () => compareMenuItems(true)],
@@ -153,15 +162,107 @@ const cases: Array<[string, () => MenuItem[]]> = [
 for (const section of ALL_SECTIONS) cases.push([`panel · ${section}`, () => panelMenuItems(section)])
 
 const built = new Map<string, MenuItem[]>()
+const previousUI = useUI.getState()
+const previousCatalog = useCatalog.getState()
+const previousDevelop = useDevelop.getState()
+const previousMasking = useMasking.getState()
+useUI.setState({ module: 'develop', keyBindings: {} })
+useCatalog.setState({ primaryId: 'p1', selected: ['p1'], visibleIds: ['p1', 'p2'] })
+useDevelop.setState({ photoId: 'p1' })
+
+const mac = /mac|iphone|ipad/i.test(navigator.platform || navigator.userAgent)
+const expectedChords = [
+  ['mod+shift+c', mac ? '⇧⌘C' : 'Ctrl+Shift+C'],
+  ['mod+alt+shift+backspace', mac ? '⌥⇧⌘⌫' : 'Ctrl+Alt+Shift+Backspace'],
+  ['enter', mac ? '↩' : 'Enter'],
+  ['tab', mac ? '⇥' : 'Tab'],
+  ['delete', mac ? '⌦' : 'Delete'],
+  ['arrowleft', '←'],
+  ['\\', '\\'],
+  ['=', '='],
+]
+for (const [chord, expected] of expectedChords)
+  if (formatChord(chord) !== expected) fail(`${chord}: expected ${expected}, got ${formatChord(chord)}`)
+
 for (const [name, build] of cases) {
   try {
     const items = build()
     built.set(name, items)
-    validate(name, items)
     validateIcons(name, items)
   } catch (e) {
     fail(`${name}: threw — ${(e as Error).message}`)
   }
+}
+
+const cropResets = built.get('crop panel')?.filter((item) => item.label === 'Reset Crop')
+if (cropResets?.length !== 1) fail('crop panel: reset must appear exactly once')
+if (histogramMenuItems().some((item) => item.commandId))
+  fail('histogram: individual clipping toggles must not advertise the combined-toggle shortcut')
+const overlayMask = newMask([], 'linear')
+useDevelop.setState({ edits: { ...defaultEdits(), masks: [overlayMask] } })
+useMasking.setState({ selectedMaskId: overlayMask.id })
+built.set('mask with selection', maskMenuItems())
+const overlay = maskMenuItems().find((item) => item.label === 'Show Overlay')
+if (overlay?.submenu?.some((item) => item.commandId))
+  fail('mask overlay: a fixed overlay mode must not advertise the cycle shortcut')
+useMasking.setState({ selectedMaskId: null })
+built.set('mask without selection', maskMenuItems())
+
+const retouchEdits = defaultEdits()
+retouchEdits.spots = [{
+  id: 'spot', mode: 'heal', target: { x: 0.5, y: 0.5 }, source: { x: 0.6, y: 0.5 },
+  radius: 0.04, feather: 50, opacity: 1,
+}]
+retouchEdits.redEye = [{
+  id: 'eye', kind: 'human', center: { x: 0.5, y: 0.5 }, radius: 0.03, darken: 50,
+}]
+for (const [name, spots, redEye] of [
+  ['spots', retouchEdits.spots, []],
+  ['red eye', [], retouchEdits.redEye],
+  ['spots and red eye', retouchEdits.spots, retouchEdits.redEye],
+] as const) {
+  useDevelop.setState({ edits: { ...retouchEdits, spots: [...spots], redEye: [...redEye] } })
+  built.set(`retouch with ${name}`, retouchMenuItems())
+}
+
+useCatalog.setState({ selected: ['p1', 'p2'] })
+const many = photoMenuItems(photo('p1'), {
+  collections: [{ ...collection('long'), name: 'A collection with a long name that must remain readable' }],
+  collectionId: 'long',
+})
+built.set('multiple photos', many)
+if (many.find((item) => item.label === 'Paste Settings (2)')?.commandId)
+  fail('photo: batch paste must not advertise the single-photo shortcut')
+useUI.setState({ module: 'library' })
+const libraryPhoto = photoMenuItems(photo('p1'))
+if (libraryPhoto.find((item) => item.label === 'Copy Settings')?.commandId)
+  fail('photo: Library must not advertise a Develop-only copy shortcut')
+if (gridBackgroundMenuItems().find((item) => item.label === 'Filter Bar')?.commandId !== 'panels.filterBar')
+  fail('grid: Library filter bar must advertise its command')
+useUI.setState({ module: 'develop' })
+const filmstrip = gridBackgroundMenuItems()
+if (filmstrip.find((item) => item.label === 'Filter Bar')?.commandId)
+  fail('filmstrip: Develop must not advertise the Library filter shortcut')
+filmstrip.find((item) => item.label === 'Loupe View')?.onSelect?.()
+if (useUI.getState().module !== 'library' || useUI.getState().viewMode !== 'loupe')
+  fail('filmstrip: Loupe View must switch to the Library')
+
+useUI.setState(previousUI)
+useCatalog.setState(previousCatalog)
+useDevelop.setState(previousDevelop)
+useMasking.setState(previousMasking)
+
+function measureSubmenus(name: string, items: MenuItem[]) {
+  items.forEach((item) => {
+    if (!item.submenu) return
+    const childName = `${name} / ${item.label}`
+    built.set(childName, item.submenu)
+    measureSubmenus(childName, item.submenu)
+  })
+}
+for (const [name, items] of [...built]) {
+  validate(name, items)
+  measureSubmenus(name, items)
 }
 
 function countRows(items: MenuItem[]): number {
@@ -209,10 +310,26 @@ export function Harness() {
             fail(`${name} at ${scale}: ${el.offsetWidth}px wide, expected ${expectedWidth}`)
           if (el.offsetHeight > window.innerHeight - 16)
             fail(`${name}: menu extends beyond the available height`)
-          const clipped = [...el.querySelectorAll<HTMLElement>('[role^="menuitem"] .truncate')].find(
-            (s) => s.scrollWidth > s.clientWidth,
+          const clipped = [...el.querySelectorAll<HTMLElement>('[data-menu-label], kbd')].find(
+            (s) => s.scrollWidth > s.clientWidth + 1,
           )
           if (clipped) fail(`${name} at ${scale}: “${clipped.textContent}” is truncated`)
+          const rows = [...el.querySelectorAll<HTMLElement>('[role^="menuitem"]')]
+          const actions = items.filter((item) => !item.kind || item.kind === 'item')
+          rows.forEach((row, index) => {
+            const item = actions[index]
+            const command = item.commandId && COMMAND_BY_ID.get(item.commandId)
+            const chord = command && chordsFor(command, useUI.getState().keyBindings)[0]
+            const hint = row.querySelector('kbd')?.textContent
+            if (hint !== (chord ? formatChord(chord) : undefined))
+              fail(`${name}: incorrect shortcut for ${item.label}`)
+            if (row.getAttribute('aria-label') !== item.label)
+              fail(`${name}: accessible name includes more than the command label`)
+            const label = row.querySelector('[data-menu-label]')?.getBoundingClientRect()
+            const shortcut = row.querySelector('kbd')?.getBoundingClientRect()
+            if (label && shortcut && label.right > shortcut.left)
+              fail(`${name}: shortcut overlaps ${item.label}`)
+          })
         }
         setStep(step + 1)
         return

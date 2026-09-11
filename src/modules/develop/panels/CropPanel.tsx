@@ -64,7 +64,7 @@ export function CropPanel() {
     <PanelSection
       id="develop-crop"
       revealKey={tool === 'crop' ? tool : null}
-      menuItems={() => [...cropMenuItems(), { kind: 'separator' }, ...panelMenuItems('crop')]}
+      menuItems={() => [...cropMenuItems(false), { kind: 'separator' }, ...panelMenuItems('crop')]}
       title="Crop & Straighten"
       defaultOpen={false}
       modified={modified}

@@ -2,12 +2,15 @@ import {
   createContext,
   useCallback,
   useContext,
+  useId,
   useLayoutEffect,
   useMemo,
   useRef,
   useState,
+  type Dispatch,
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
+  type SetStateAction,
 } from 'react'
 import { createPortal } from 'react-dom'
 import { cn } from '../lib/cn'
@@ -15,6 +18,8 @@ import { CheckIcon, ChevronRightIcon } from './icons'
 import { isCoarsePointer } from '../lib/useViewport'
 import { canFocus, focusableElements, useModalBranch } from './focusScope'
 import { Scroller } from './Scroller'
+import { COMMAND_BY_ID, chordsFor, formatChord } from '../shell/commands'
+import { useUI } from '../state/ui'
 
 /**
  * Every menu portals to `document.body`, so a submenu is a *sibling* of the menu
@@ -34,6 +39,10 @@ interface MenuTreeState {
   mounted: boolean
   pointerPosition: { x: number; y: number } | null
 }
+
+type OpenSubmenu = { index: number; keyboard: boolean } | null
+type MenuPosition = { x: number; y: number }
+type KeyBindings = ReturnType<typeof useUI.getState>['keyBindings']
 
 const MenuTree = createContext<MenuTreeState | null>(null)
 
@@ -66,7 +75,8 @@ export interface MenuItem {
    */
   kind?: 'item' | 'separator' | 'note'
   label?: string
-  shortcut?: string
+  /** Resolve the current platform-specific binding rather than hard-coding a hint. */
+  commandId?: string
   icon?: ReactNode
   checked?: boolean
   danger?: boolean
@@ -95,6 +105,212 @@ function enabled(item: MenuItem): boolean {
   return (!item.kind || item.kind === 'item') && !item.disabled
 }
 
+const MOVE_KEYS = ['ArrowDown', 'ArrowUp', 'Home', 'End']
+const BACK_KEYS = ['ArrowLeft', 'Escape']
+const ACTIVATE_KEYS = ['Enter', ' ']
+
+function currentMenuIndex(
+  event: ReactKeyboardEvent<HTMLDivElement>,
+  buttons: Map<number, HTMLButtonElement>,
+  fallback: number,
+) {
+  if (!(event.target instanceof Element)) return fallback
+  const target = event.target.closest('button')
+  return [...buttons].find(([, button]) => button === target)?.[0] ?? fallback
+}
+
+function moveMenuFocus(
+  event: ReactKeyboardEvent<HTMLDivElement>,
+  indices: number[],
+  currentIndex: number,
+  focusItem: (index: number) => void,
+  closeSubmenu: () => void,
+) {
+  event.preventDefault()
+  closeSubmenu()
+  if (!indices.length) return
+
+  if (event.key === 'Home') return focusItem(indices[0])
+  if (event.key === 'End') return focusItem(indices.at(-1)!)
+  const direction = event.key === 'ArrowDown' ? 1 : -1
+  const next = (currentIndex + direction + indices.length) % indices.length
+  focusItem(indices[next])
+}
+
+function findTypeaheadMatch(
+  event: ReactKeyboardEvent<HTMLDivElement>,
+  items: MenuItem[],
+  indices: number[],
+  currentIndex: number,
+  search: { value: string; time: number },
+) {
+  if (event.key.length !== 1 || event.ctrlKey || event.metaKey || event.altKey) return
+  event.preventDefault()
+  const now = performance.now()
+  const key = event.key.toLocaleLowerCase()
+  const value = now - search.time > 700 ? key : search.value + key
+  search.value = value
+  search.time = now
+  const prefix = [...value].every((letter) => letter === key) ? key : value
+  const offset = prefix.length === 1 ? 1 : 0
+  const start = Math.max(0, currentIndex + offset)
+  const ordered = [...indices.slice(start), ...indices.slice(0, start)]
+  return ordered.find((index) => items[index].label?.toLocaleLowerCase().startsWith(prefix))
+}
+
+function itemClassName(item: MenuItem, active: boolean) {
+  let state = 'text-label'
+  if (item.disabled) state = 'pointer-events-none text-label-quaternary'
+  else if (item.danger) state = 'text-red'
+
+  let highlight: string | false = false
+  if (active) highlight = item.danger ? 'bg-red text-white' : 'bg-accent text-(--accent-ink)'
+
+  return cn(
+    'flex w-full items-center gap-2 px-3 text-left text-ui',
+    'py-[5px] coarse:py-2.5',
+    'transition-colors duration-[--duration-instant] focus-visible:shadow-none',
+    state,
+    highlight,
+  )
+}
+
+interface MenuEntryProps {
+  item: MenuItem
+  index: number
+  id: string
+  active: number
+  openSub: OpenSubmenu
+  pos: MenuPosition
+  keyBindings: KeyBindings
+  tree: MenuTreeState
+  buttons: Map<number, HTMLButtonElement>
+  focusItem: (index: number, reveal?: boolean) => void
+  setActive: Dispatch<SetStateAction<number>>
+  setOpenSub: Dispatch<SetStateAction<OpenSubmenu>>
+  onClose: () => void
+}
+
+function MenuCommand({
+  item,
+  index,
+  id,
+  active,
+  openSub,
+  pos,
+  keyBindings,
+  tree,
+  buttons,
+  focusItem,
+  setActive,
+  setOpenSub,
+  onClose,
+}: MenuEntryProps) {
+  const hasSubmenu = !!item.submenu?.length
+  const command = item.commandId ? COMMAND_BY_ID.get(item.commandId) : undefined
+  const chord = command ? chordsFor(command, keyBindings)[0] : undefined
+  const shortcut = chord ? formatChord(chord) : undefined
+  const shortcutId = `${id}-${index}-shortcut`
+
+  const select = (event: React.MouseEvent<HTMLButtonElement>) => {
+    if (hasSubmenu) {
+      const shouldClose = openSub?.index === index && isCoarsePointer() && event.detail !== 0
+      setOpenSub(shouldClose ? null : { index, keyboard: event.detail === 0 })
+      return
+    }
+    if (tree.trigger && canFocus(tree.trigger)) {
+      tree.trigger.focus({ preventScroll: true })
+    }
+    item.onSelect?.()
+    onClose()
+  }
+
+  return (
+    <div
+      role="none"
+      className="relative"
+      onPointerMove={(event) => {
+        event.stopPropagation()
+        if (event.pointerType === 'touch') return
+        const { clientX: x, clientY: y } = event
+        if (tree.pointerPosition?.x === x && tree.pointerPosition.y === y) return
+        tree.pointerPosition = { x, y }
+        if (item.disabled) return setOpenSub(null)
+        focusItem(index, false)
+        setOpenSub((current) =>
+          hasSubmenu
+            ? current?.index === index
+              ? current
+              : { index, keyboard: false }
+            : null,
+        )
+      }}
+    >
+      <button
+        ref={(element) => {
+          if (element) buttons.set(index, element)
+          else buttons.delete(index)
+        }}
+        type="button"
+        role={item.checked === undefined ? 'menuitem' : 'menuitemcheckbox'}
+        aria-label={item.label}
+        aria-describedby={shortcut ? shortcutId : undefined}
+        aria-checked={item.checked}
+        aria-haspopup={hasSubmenu ? 'menu' : undefined}
+        aria-expanded={hasSubmenu ? openSub?.index === index : undefined}
+        tabIndex={active === index ? 0 : -1}
+        disabled={item.disabled}
+        onFocus={() => setActive(index)}
+        onClick={select}
+        className={itemClassName(item, active === index)}
+      >
+        <span aria-hidden="true" className="flex w-3.5 shrink-0 justify-center opacity-80">
+          {item.checked ? <CheckIcon size={11} /> : item.icon}
+        </span>
+        <span data-menu-label className="min-w-0 flex-1 wrap-anywhere">{item.label}</span>
+        {shortcut && (
+          <kbd
+            id={shortcutId}
+            className="shrink-0 whitespace-nowrap font-ui text-mini font-normal tracking-normal opacity-75"
+          >
+            {shortcut}
+          </kbd>
+        )}
+        {hasSubmenu && <ChevronRightIcon size={10} className="shrink-0 opacity-55" />}
+      </button>
+      {hasSubmenu && openSub?.index === index && (
+        <Menu
+          items={item.submenu ?? []}
+          x={pos.x}
+          y={pos.y}
+          anchor={buttons.get(index)}
+          focusOnOpen={openSub.keyboard}
+          onBack={() => {
+            setOpenSub(null)
+            focusItem(index)
+          }}
+          onClose={onClose}
+        />
+      )}
+    </div>
+  )
+}
+
+function MenuEntry(props: MenuEntryProps) {
+  const { item } = props
+  if (item.kind === 'separator') {
+    return <div role="separator" className="my-1 h-px bg-hairline" />
+  }
+  if (item.kind === 'note') {
+    return (
+      <div className="px-3 py-1 text-micro leading-snug text-balance text-label-tertiary">
+        {item.label}
+      </div>
+    )
+  }
+  return <MenuCommand {...props} />
+}
+
 export function Menu({
   items,
   x,
@@ -107,13 +323,15 @@ export function Menu({
   focusOnOpen = true,
   onBack,
 }: MenuProps) {
+  const id = useId()
+  const keyBindings = useUI((state) => state.keyBindings)
   const ref = useRef<HTMLDivElement>(null)
   const buttons = useRef(new Map<number, HTMLButtonElement>())
   const close = useRef(onClose)
   const inModal = useModalBranch(ref)
   const [pos, setPos] = useState({ x, y })
   const [active, setActive] = useState(() => items.findIndex(enabled))
-  const [openSub, setOpenSub] = useState<{ index: number; keyboard: boolean } | null>(null)
+  const [openSub, setOpenSub] = useState<OpenSubmenu>(null)
   const search = useRef({ value: '', time: 0 })
 
   const inherited = useContext(MenuTree)
@@ -241,51 +459,41 @@ export function Menu({
 
   const onKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     event.stopPropagation()
-    const target = event.target instanceof Element ? event.target.closest('button') : null
-    const current = [...buttons.current].find(([, button]) => button === target)?.[0] ?? active
+    const current = currentMenuIndex(event, buttons.current, active)
     const indices = items.flatMap((item, index) => (enabled(item) ? [index] : []))
     const index = indices.indexOf(current)
 
-    if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
-      event.preventDefault()
-      setOpenSub(null)
-      if (!indices.length) return
-      const next =
-        event.key === 'Home'
-          ? 0
-          : event.key === 'End'
-            ? indices.length - 1
-            : (index + (event.key === 'ArrowDown' ? 1 : -1) + indices.length) % indices.length
-      focusItem(indices[next])
-    } else if (event.key === 'ArrowRight') {
+    if (MOVE_KEYS.includes(event.key)) {
+      moveMenuFocus(event, indices, index, focusItem, () => setOpenSub(null))
+      return
+    }
+    if (event.key === 'ArrowRight') {
       event.preventDefault()
       if (items[current]?.submenu?.length && enabled(items[current]))
         setOpenSub({ index: current, keyboard: true })
-    } else if (event.key === 'ArrowLeft' || event.key === 'Escape') {
+      return
+    }
+    if (BACK_KEYS.includes(event.key)) {
       event.preventDefault()
       if (onBack) onBack()
       else if (event.key === 'Escape') close.current()
-    } else if (event.key === 'Tab') {
+      return
+    }
+    if (event.key === 'Tab') {
       event.preventDefault()
       tree.tabDirection = event.shiftKey ? -1 : 1
       close.current()
-    } else if (event.key === 'Enter' || event.key === ' ') {
+      return
+    }
+    if (ACTIVATE_KEYS.includes(event.key)) {
       event.preventDefault()
       buttons.current.get(current)?.click()
-    } else if (event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey) {
-      event.preventDefault()
-      const now = performance.now()
-      const key = event.key.toLocaleLowerCase()
-      const value = now - search.current.time > 700 ? key : search.current.value + key
-      search.current = { value, time: now }
-      const prefix = [...value].every((letter) => letter === key) ? key : value
-      const start = Math.max(0, index + (prefix.length === 1 ? 1 : 0))
-      const ordered = [...indices.slice(start), ...indices.slice(0, start)]
-      const match = ordered.find((i) => items[i].label?.toLocaleLowerCase().startsWith(prefix))
-      if (match !== undefined) {
-        setOpenSub(null)
-        focusItem(match)
-      }
+      return
+    }
+    const match = findTypeaheadMatch(event, items, indices, index, search.current)
+    if (match !== undefined) {
+      setOpenSub(null)
+      focusItem(match)
     }
   }
 
@@ -294,7 +502,7 @@ export function Menu({
       <div
         ref={ref}
         role="menu"
-        aria-label={anchor?.textContent?.trim() || 'Actions'}
+        aria-label={anchor?.getAttribute('aria-label') || 'Actions'}
         tabIndex={-1}
         onKeyDown={onKeyDown}
         style={{
@@ -323,112 +531,24 @@ export function Menu({
           edgeFade={8}
           onScroll={() => setOpenSub(null)}
         >
-          {items.map((item, i) => {
-            if (item.kind === 'separator')
-              return <div key={i} role="separator" className="my-1 h-px bg-hairline" />
-            // Wraps, because a note exists to be read in full — the one thing in
-            // a menu that a fixed width must not clip.
-            if (item.kind === 'note')
-              return (
-                <div
-                  key={i}
-                  className="px-3 py-1 text-micro leading-snug text-balance text-label-tertiary"
-                >
-                  {item.label}
-                </div>
-              )
-            const hasSub = !!item.submenu?.length
-            return (
-              <div
-                key={i}
-                role="none"
-                className="relative"
-                onPointerMove={(e) => {
-                  e.stopPropagation()
-                  if (e.pointerType === 'touch') return
-                  // Scrolling can move a row under a stationary pointer.
-                  // Only actual pointer movement should replace keyboard focus.
-                  const { clientX: x, clientY: y } = e
-                  if (tree.pointerPosition?.x === x && tree.pointerPosition.y === y) return
-                  tree.pointerPosition = { x, y }
-                  if (item.disabled) return setOpenSub(null)
-                  focusItem(i, false)
-                  setOpenSub((current) =>
-                    hasSub ? (current?.index === i ? current : { index: i, keyboard: false }) : null,
-                  )
-                }}
-              >
-                <button
-                  ref={(element) => {
-                    if (element) buttons.current.set(i, element)
-                    else buttons.current.delete(i)
-                  }}
-                  type="button"
-                  role={item.checked === undefined ? 'menuitem' : 'menuitemcheckbox'}
-                  aria-checked={item.checked}
-                  aria-haspopup={hasSub ? 'menu' : undefined}
-                  aria-expanded={hasSub ? openSub?.index === i : undefined}
-                  tabIndex={active === i ? 0 : -1}
-                  disabled={item.disabled}
-                  onFocus={() => setActive(i)}
-                  onClick={(e) => {
-                    if (hasSub)
-                      return setOpenSub(
-                        openSub?.index === i && isCoarsePointer() && e.detail !== 0
-                          ? null
-                          : { index: i, keyboard: e.detail === 0 },
-                      )
-                    // A dialog opened by the action must inherit a live return
-                    // target, not this menu item which is about to unmount.
-                    if (tree.trigger && canFocus(tree.trigger))
-                      tree.trigger.focus({ preventScroll: true })
-                    item.onSelect?.()
-                    close.current()
-                  }}
-                  className={cn(
-                    'flex w-full items-center gap-2 px-3 text-left text-ui',
-                    // A menu row is a primary way through the app on touch, so it
-                    // gets a full target rather than the 22px a pointer needs.
-                    'py-[5px] coarse:py-2.5',
-                    'transition-colors duration-[--duration-instant] focus-visible:shadow-none',
-                    item.disabled
-                      ? 'pointer-events-none text-label-quaternary'
-                      : item.danger
-                        ? 'text-red'
-                        : 'text-label',
-                    !item.disabled &&
-                      active === i &&
-                      (item.danger
-                        ? 'bg-red text-white'
-                        : 'bg-accent text-(--accent-ink)'),
-                  )}
-                >
-                  <span aria-hidden="true" className="flex w-3.5 shrink-0 justify-center opacity-80">
-                    {item.checked ? <CheckIcon size={11} /> : item.icon}
-                  </span>
-                  <span className="flex-1 truncate">{item.label}</span>
-                  {item.shortcut && (
-                    <span className="shrink-0 font-mono text-micro opacity-55">{item.shortcut}</span>
-                  )}
-                  {hasSub && <ChevronRightIcon size={10} className="shrink-0 opacity-55" />}
-                </button>
-                {hasSub && openSub?.index === i && (
-                  <Menu
-                    items={item.submenu!}
-                    x={pos.x}
-                    y={pos.y}
-                    anchor={buttons.current.get(i)}
-                    focusOnOpen={openSub.keyboard}
-                    onBack={() => {
-                      setOpenSub(null)
-                      focusItem(i)
-                    }}
-                    onClose={onClose}
-                  />
-                )}
-              </div>
-            )
-          })}
+          {items.map((item, index) => (
+            <MenuEntry
+              key={index}
+              item={item}
+              index={index}
+              id={id}
+              active={active}
+              openSub={openSub}
+              pos={pos}
+              keyBindings={keyBindings}
+              tree={tree}
+              buttons={buttons.current}
+              focusItem={focusItem}
+              setActive={setActive}
+              setOpenSub={setOpenSub}
+              onClose={onClose}
+            />
+          ))}
         </Scroller>
         <style>{`@keyframes menuIn{from{opacity:0;scale:0.96}to{opacity:1;scale:1}}`}</style>
       </div>

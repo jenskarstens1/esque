@@ -151,20 +151,23 @@ const KEY_GLYPHS: Record<string, string> = {
   space: 'Space',
 }
 
-/** A chord as a human reads it: `⌘⇧C` on a Mac, `Ctrl+Shift+C` elsewhere. */
+/** A chord as a human reads it: `⇧⌘C` on a Mac, `Ctrl+Shift+C` elsewhere. */
 export function formatChord(chord: string): string {
   const parts = chord.split('+')
   // A chord ending in `+` (i.e. the plus key itself) splits into a trailing
   // empty string; put it back rather than rendering nothing.
   const key = parts.pop() || '+'
   const mods = new Set(parts)
-  const glyph = KEY_GLYPHS[key] ?? (key.length === 1 ? key.toUpperCase() : titleCase(key))
+  const namedKeys: Record<string, string> = IS_MAC
+    ? KEY_GLYPHS
+    : { ...KEY_GLYPHS, enter: 'Enter', tab: 'Tab', backspace: 'Backspace', delete: 'Delete' }
+  const glyph = namedKeys[key] ?? (key.length === 1 ? key.toUpperCase() : titleCase(key))
 
   if (IS_MAC) {
     return (
-      (mods.has('mod') ? '⌘' : '') +
       (mods.has('alt') ? '⌥' : '') +
       (mods.has('shift') ? '⇧' : '') +
+      (mods.has('mod') ? '⌘' : '') +
       glyph
     )
   }

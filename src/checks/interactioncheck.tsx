@@ -7,6 +7,7 @@ import { MENU_WIDTH, type MenuItem } from '../design/Menu'
 import { useMenu } from '../design/useMenu'
 import { focusableElements } from '../design/focusScope'
 import { useKeymap } from '../shell/useKeymap'
+import { formatChord } from '../shell/commands'
 import { useUI } from '../state/ui'
 import '../styles/index.css'
 
@@ -27,7 +28,8 @@ function element(selector: string, root: ParentNode = document): HTMLElement {
 
 const tick = () => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())))
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
-const activeText = () => document.activeElement?.textContent?.trim()
+const activeText = () =>
+  document.activeElement?.getAttribute('aria-label') ?? document.activeElement?.textContent?.trim()
 
 function press(key: string, shiftKey = false) {
   document.activeElement?.dispatchEvent(
@@ -40,6 +42,127 @@ async function click(selector: string) {
   target.focus()
   target.click()
   await tick()
+}
+
+async function checkSubmenuAndPointerNavigation(menu: HTMLElement) {
+  press('ArrowDown')
+  await tick()
+  press('ArrowRight')
+  await tick()
+  check(document.querySelectorAll('[role="menu"]').length === 2, 'Right arrow opens a submenu')
+  check(activeText() === 'Nested one', 'Submenu focuses its first enabled command')
+  check(document.activeElement?.getAttribute('aria-checked') === 'true', 'Checked state is accessible')
+  const child = element('[role="menu"][aria-label="Group"]')
+  check(parseFloat(child.style.left) < parseFloat(menu.style.left), 'A submenu flips left at the right edge')
+  press('ArrowLeft')
+  await tick()
+  check(document.querySelectorAll('[role="menu"]').length === 1 && activeText() === 'Group', 'Left arrow returns to the parent row')
+  press('ArrowRight')
+  await tick()
+  press('Escape')
+  await tick()
+  check(document.querySelectorAll('[role="menu"]').length === 1 && activeText() === 'Group', 'Submenu Escape leaves the root menu open')
+  press('ArrowRight')
+  await tick()
+  const betaRow = [...menu.querySelectorAll<HTMLElement>('[role^="menuitem"]')]
+    .find((row) => row.getAttribute('aria-label') === 'Beta')
+  if (!betaRow) throw new Error('Missing non-submenu command')
+  betaRow.dispatchEvent(new PointerEvent('pointermove', {
+    bubbles: true, pointerType: 'mouse', clientX: 15, clientY: 15,
+  }))
+  await tick()
+  check(document.querySelectorAll('[role="menu"]').length === 1,
+    'Pointer movement from a submenu command to a command closes the submenu')
+  press('b')
+  await tick()
+  check(activeText() === 'Beta', 'Typeahead finds an enabled command')
+  const beforeModule = useUI.getState().module
+  press('d')
+  await tick()
+  check(useUI.getState().module === beforeModule, 'App letter shortcuts do not run behind a menu')
+  press('End')
+  await tick()
+  const scroll = element('.esq-scroll', menu)
+  check(activeText() === 'Option 50' && scroll.scrollTop > 0, 'End reveals the final command')
+  check((document.activeElement?.getBoundingClientRect().bottom ?? Infinity) <= innerHeight - 7, 'The final command is on screen')
+  const pointerRow = [...menu.querySelectorAll<HTMLElement>('[role^="menuitem"]')]
+    .find((row) => row.textContent?.trim() === 'Option 49')
+  if (!pointerRow) throw new Error('Missing pointer navigation command')
+  pointerRow.dispatchEvent(new PointerEvent('pointerover', {
+    bubbles: true, pointerType: 'mouse', clientX: 10, clientY: 10,
+  }))
+  await tick()
+  check(activeText() === 'Option 50', 'Scrolling beneath a stationary pointer does not steal keyboard focus')
+  pointerRow.dispatchEvent(new PointerEvent('pointermove', {
+    bubbles: true, pointerType: 'mouse', clientX: 11, clientY: 10,
+  }))
+  await tick()
+  check(activeText() === 'Option 49', 'Real pointer movement takes over menu navigation')
+  press('End')
+  await tick()
+  pointerRow.dispatchEvent(new PointerEvent('pointermove', {
+    bubbles: true, pointerType: 'mouse', clientX: 11, clientY: 10,
+  }))
+  await tick()
+  check(activeText() === 'Option 50', 'Repeated pointer coordinates do not replace keyboard focus')
+  const highlighted = menu.querySelectorAll('button.bg-accent')
+  check(highlighted.length === 1 && highlighted[0] === document.activeElement, 'Only the active command is highlighted')
+  press('Home')
+  await tick()
+  press('Enter')
+  await tick()
+  check(selected === 1 && !document.querySelector('[role="menu"]'), 'Enter runs one command and closes the menu')
+  check(document.activeElement?.id === 'open-menu', 'Menu dismissal restores its trigger')
+}
+
+async function checkMenuKeyboardNavigation() {
+  await click('#open-menu')
+  await wait(160)
+  const menu = element('[role="menu"]')
+  check(activeText() === 'Alpha', 'A menu focuses its first enabled command')
+  check(menu.offsetWidth === MENU_WIDTH, 'Menu uses the shared base width')
+  check(menu.offsetHeight <= innerHeight - 16, 'Long menus fit the viewport')
+  check(menu.querySelectorAll('[role^="menuitem"][tabindex="0"]').length === 1, 'Menu uses a single tab stop')
+  press('ArrowDown')
+  await tick()
+  check(activeText() === 'Beta', 'Arrow navigation skips disabled rows, separators and notes')
+  check(document.activeElement?.getAttribute('aria-checked') === 'false', 'Unchecked state is accessible')
+  const beta = document.activeElement
+  const hint = beta?.querySelector('kbd')
+  check(hint?.textContent === formatChord('mod+d'), 'Menu shortcuts use the command registry')
+  check(beta?.getAttribute('aria-describedby') === hint?.id, 'Shortcuts describe rather than replace the accessible command name')
+  useUI.getState().setKeyBinding('nav.deselect', ['mod+alt+shift+backspace'])
+  await tick()
+  check(hint?.textContent === formatChord('mod+alt+shift+backspace'), 'Open menus update after a custom binding changes')
+  check(document.activeElement === beta, 'Updating a shortcut preserves keyboard focus')
+  const betaLabel = beta?.querySelector<HTMLElement>('[data-menu-label]')
+  check(betaLabel && hint && betaLabel.getBoundingClientRect().right <= hint.getBoundingClientRect().left,
+    'Long custom shortcuts do not overlap the command label')
+  check(hint && hint.scrollWidth <= hint.clientWidth + 1, 'Long custom shortcuts remain fully visible')
+  useUI.getState().setKeyBinding('nav.deselect', null)
+  await tick()
+  check(hint?.textContent === formatChord('mod+d'), 'Resetting a binding restores its default menu label')
+  await checkSubmenuAndPointerNavigation(menu)
+}
+
+async function checkSheetAndDrawer() {
+  await click('#open-sheet')
+  await wait(240)
+  check(!!document.activeElement?.closest('[role="dialog"]'), 'A sheet claims focus')
+  await click('#sheet-nested')
+  press('Escape')
+  await tick()
+  check(document.querySelectorAll('[role="dialog"]').length === 1 && document.activeElement?.id === 'sheet-nested', 'Dialog over a sheet uses the same focus stack')
+  press('Escape')
+  await tick()
+  check(document.activeElement?.id === 'open-sheet', 'Sheet dismissal restores its trigger')
+
+  await click('#open-drawer')
+  await wait(240)
+  check(document.activeElement?.id === 'drawer-action', 'A drawer claims focus')
+  press('Escape')
+  await tick()
+  check(document.activeElement?.id === 'open-drawer' && !element('#root').inert, 'Drawer dismissal restores focus and isolation')
 }
 
 export function Harness() {
@@ -58,7 +181,7 @@ export function Harness() {
     { label: 'Unavailable', disabled: true, onSelect: () => selected++ },
     { kind: 'separator' },
     { kind: 'note', label: 'A wrapped explanation, not a command.' },
-    { label: 'Beta', checked: false, onSelect: () => selected++ },
+    { label: 'Beta', commandId: 'nav.deselect', checked: false, onSelect: () => selected++ },
     {
       label: 'Group',
       submenu: [
@@ -79,77 +202,12 @@ export function Harness() {
     const run = async () => {
       await tick()
       if (cancelled) return
+      const previousBindings = useUI.getState().keyBindings
+      useUI.getState().resetKeyBindings()
       const previousScale = document.documentElement.style.getPropertyValue('--ui-scale')
       document.documentElement.style.setProperty('--ui-scale', '1')
       try {
-        await click('#open-menu')
-        await wait(160)
-        const menu = element('[role="menu"]')
-        check(activeText() === 'Alpha', 'A menu focuses its first enabled command')
-        check(menu.offsetWidth === MENU_WIDTH, 'Menu uses the shared base width')
-        check(menu.offsetHeight <= innerHeight - 16, 'Long menus fit the viewport')
-        check(menu.querySelectorAll('[role^="menuitem"][tabindex="0"]').length === 1, 'Menu uses a single tab stop')
-        press('ArrowDown')
-        await tick()
-        check(activeText() === 'Beta', 'Arrow navigation skips disabled rows, separators and notes')
-        check(document.activeElement?.getAttribute('aria-checked') === 'false', 'Unchecked state is accessible')
-        press('ArrowDown')
-        await tick()
-        press('ArrowRight')
-        await tick()
-        check(document.querySelectorAll('[role="menu"]').length === 2, 'Right arrow opens a submenu')
-        check(activeText() === 'Nested one', 'Submenu focuses its first enabled command')
-        check(document.activeElement?.getAttribute('aria-checked') === 'true', 'Checked state is accessible')
-        const child = element('[role="menu"][aria-label="Group"]')
-        check(parseFloat(child.style.left) < parseFloat(menu.style.left), 'A submenu flips left at the right edge')
-        press('ArrowLeft')
-        await tick()
-        check(document.querySelectorAll('[role="menu"]').length === 1 && activeText() === 'Group', 'Left arrow returns to the parent row')
-        press('ArrowRight')
-        await tick()
-        press('Escape')
-        await tick()
-        check(document.querySelectorAll('[role="menu"]').length === 1 && activeText() === 'Group', 'Submenu Escape leaves the root menu open')
-        press('b')
-        await tick()
-        check(activeText() === 'Beta', 'Typeahead finds an enabled command')
-        const beforeModule = useUI.getState().module
-        press('d')
-        await tick()
-        check(useUI.getState().module === beforeModule, 'App letter shortcuts do not run behind a menu')
-        press('End')
-        await tick()
-        const scroll = element('.esq-scroll', menu)
-        check(activeText() === 'Option 50' && scroll.scrollTop > 0, 'End reveals the final command')
-        check((document.activeElement?.getBoundingClientRect().bottom ?? Infinity) <= innerHeight - 7, 'The final command is on screen')
-        const pointerRow = [...menu.querySelectorAll<HTMLElement>('[role^="menuitem"]')]
-          .find((row) => row.textContent?.trim() === 'Option 49')
-        if (!pointerRow) throw new Error('Missing pointer navigation command')
-        pointerRow.dispatchEvent(new PointerEvent('pointerover', {
-          bubbles: true, pointerType: 'mouse', clientX: 10, clientY: 10,
-        }))
-        await tick()
-        check(activeText() === 'Option 50', 'Scrolling beneath a stationary pointer does not steal keyboard focus')
-        pointerRow.dispatchEvent(new PointerEvent('pointermove', {
-          bubbles: true, pointerType: 'mouse', clientX: 11, clientY: 10,
-        }))
-        await tick()
-        check(activeText() === 'Option 49', 'Real pointer movement takes over menu navigation')
-        press('End')
-        await tick()
-        pointerRow.dispatchEvent(new PointerEvent('pointermove', {
-          bubbles: true, pointerType: 'mouse', clientX: 11, clientY: 10,
-        }))
-        await tick()
-        check(activeText() === 'Option 50', 'Repeated pointer coordinates do not replace keyboard focus')
-        const highlighted = menu.querySelectorAll('button.bg-accent')
-        check(highlighted.length === 1 && highlighted[0] === document.activeElement, 'Only the active command is highlighted')
-        press('Home')
-        await tick()
-        press('Enter')
-        await tick()
-        check(selected === 1 && !document.querySelector('[role="menu"]'), 'Enter runs one command and closes the menu')
-        check(document.activeElement?.id === 'open-menu', 'Menu dismissal restores its trigger')
+        await checkMenuKeyboardNavigation()
 
         await click('#open-menu')
         press('Tab')
@@ -236,26 +294,11 @@ export function Harness() {
         press('Escape')
         await tick()
 
-        await click('#open-sheet')
-        await wait(240)
-        check(!!document.activeElement?.closest('[role="dialog"]'), 'A sheet claims focus')
-        await click('#sheet-nested')
-        press('Escape')
-        await tick()
-        check(document.querySelectorAll('[role="dialog"]').length === 1 && document.activeElement?.id === 'sheet-nested', 'Dialog over a sheet uses the same focus stack')
-        press('Escape')
-        await tick()
-        check(document.activeElement?.id === 'open-sheet', 'Sheet dismissal restores its trigger')
-
-        await click('#open-drawer')
-        await wait(240)
-        check(document.activeElement?.id === 'drawer-action', 'A drawer claims focus')
-        press('Escape')
-        await tick()
-        check(document.activeElement?.id === 'open-drawer' && !element('#root').inert, 'Drawer dismissal restores focus and isolation')
+        await checkSheetAndDrawer()
       } catch (error) {
         failures.push(error instanceof Error ? error.message : String(error))
       } finally {
+        useUI.setState({ keyBindings: previousBindings })
         if (previousScale) document.documentElement.style.setProperty('--ui-scale', previousScale)
         else document.documentElement.style.removeProperty('--ui-scale')
       }

@@ -105,13 +105,14 @@ export function gridBackgroundMenuItems(): MenuItem[] {
     {
       label: 'Select All',
       icon: <SelectAllIcon size={MENU_ICON} />,
-      shortcut: '⌘A',
+      commandId: 'nav.selectAll',
+      disabled: !cat.visibleIds.length,
       onSelect: () => cat.selectAll(),
     },
     {
       label: 'Deselect All',
       icon: <SelectNoneIcon size={MENU_ICON} />,
-      shortcut: '⌘D',
+      commandId: 'nav.deselect',
       disabled: !cat.selected.length,
       onSelect: () => cat.clearSelection(),
     },
@@ -175,13 +176,16 @@ export function gridBackgroundMenuItems(): MenuItem[] {
     {
       label: 'Loupe View',
       icon: <LoupeIcon size={MENU_ICON} />,
-      shortcut: 'E',
-      onSelect: () => ui.setViewMode('loupe'),
+      commandId: 'view.loupe',
+      onSelect: () => {
+        ui.setModule('library')
+        ui.setViewMode('loupe')
+      },
     },
     {
       label: 'Filter Bar',
       icon: <FilterIcon size={MENU_ICON} />,
-      shortcut: '\\',
+      commandId: ui.module === 'library' ? 'panels.filterBar' : undefined,
       checked: ui.filterBarOpen,
       onSelect: () => ui.toggleFilterBar(),
     },
@@ -195,7 +199,7 @@ export function gridBackgroundMenuItems(): MenuItem[] {
     {
       label: 'Import Photos…',
       icon: <ImportIcon size={MENU_ICON} />,
-      shortcut: '⇧⌘I',
+      commandId: 'file.import',
       onSelect: () => void useImporter.getState().run(),
     },
     {
@@ -206,7 +210,7 @@ export function gridBackgroundMenuItems(): MenuItem[] {
     {
       label: 'Export Selected…',
       icon: <ExportIcon size={MENU_ICON} />,
-      shortcut: '⇧⌘E',
+      commandId: 'file.export',
       disabled: !cat.selected.length,
       onSelect: () => useExport.getState().openDialog(cat.selected),
     },
@@ -228,7 +232,7 @@ const COMPARE_MODES: BeforeAfter[] = [
  * Turning and flipping are the two edits people reach for without opening a
  * panel at all, so they belong on the image itself.
  */
-export function cropMenuItems(): MenuItem[] {
+export function cropMenuItems(includeReset = true): MenuItem[] {
   const ui = useUI.getState()
   const dev = useDevelop.getState()
   const crop = dev.edits.crop
@@ -263,7 +267,7 @@ export function cropMenuItems(): MenuItem[] {
       // says the same thing twice, in the one column that has to stay scannable.
       label: 'Crop',
       icon: <CropIcon size={MENU_ICON} />,
-      shortcut: 'R',
+      commandId: 'develop.crop',
       checked: ui.developTool === 'crop',
       onSelect: () => ui.setDevelopTool(ui.developTool === 'crop' ? 'none' : 'crop'),
     },
@@ -305,13 +309,17 @@ export function cropMenuItems(): MenuItem[] {
           e.crop.flipV = !e.crop.flipV
         }, false),
     },
-    { kind: 'separator' },
-    {
-      label: 'Reset Crop',
-      icon: <ResetIcon size={MENU_ICON} />,
-      disabled: isSectionModified(dev.edits, 'crop', dev.kind) === false,
-      onSelect: () => dev.resetSection('crop'),
-    },
+    ...(includeReset
+      ? [
+          { kind: 'separator' } as MenuItem,
+          {
+            label: 'Reset Crop',
+            icon: <ResetIcon size={MENU_ICON} />,
+            disabled: !isSectionModified(dev.edits, 'crop', dev.kind),
+            onSelect: () => dev.resetSection('crop'),
+          },
+        ]
+      : []),
   ]
 }
 
@@ -372,7 +380,7 @@ export function maskMenuItems(): MenuItem[] {
     {
       label: 'Masking',
       icon: <MaskIcon size={MENU_ICON} />,
-      shortcut: 'M',
+      commandId: 'develop.mask',
       checked: ui.developTool === 'mask',
       onSelect: () => ui.setDevelopTool(ui.developTool === 'mask' ? 'none' : 'mask'),
     },
@@ -401,7 +409,6 @@ export function maskMenuItems(): MenuItem[] {
       icon: <EyeIcon size={MENU_ICON} off={mk.overlay === 'off'} />,
       submenu: (['tint', 'coverage', 'off'] as const).map((o) => ({
         label: o === 'tint' ? 'Overlay' : o === 'coverage' ? 'Mask Only' : 'Off',
-        shortcut: o === 'tint' ? 'O' : undefined,
         checked: mk.overlay === o,
         onSelect: () => mk.setOverlay(o),
       })),
@@ -411,7 +418,7 @@ export function maskMenuItems(): MenuItem[] {
   if (selected) {
     items.push({ kind: 'separator' })
     items.push({
-      label: selected.inverted ? 'Un-invert Mask' : 'Invert Mask',
+      label: 'Invert Mask',
       icon: <ContrastIcon size={MENU_ICON} />,
       checked: selected.inverted,
       onSelect: () =>
@@ -421,8 +428,8 @@ export function maskMenuItems(): MenuItem[] {
         }),
     })
     items.push({
-      label: selected.visible ? 'Hide Mask' : 'Show Mask',
-      icon: <EyeIcon size={MENU_ICON} off={selected.visible} />,
+      label: 'Show Mask',
+      icon: <EyeIcon size={MENU_ICON} off={!selected.visible} />,
       checked: selected.visible,
       onSelect: () =>
         dev.update('masks.visible', 'Toggle Mask', (e) => {
@@ -441,6 +448,7 @@ export function maskMenuItems(): MenuItem[] {
         mk.select(copy.id)
       },
     })
+    items.push({ kind: 'separator' })
     items.push({
       label: 'Delete Mask',
       icon: <TrashIcon size={MENU_ICON} />,
@@ -455,6 +463,7 @@ export function maskMenuItems(): MenuItem[] {
   }
 
   if (masks.length) {
+    if (!selected) items.push({ kind: 'separator' })
     items.push({
       label: 'Delete All Masks',
       icon: <TrashIcon size={MENU_ICON} />,
@@ -482,22 +491,20 @@ export function retouchMenuItems(): MenuItem[] {
     {
       label: 'Spot Removal',
       icon: <HealIcon size={MENU_ICON} />,
-      shortcut: 'Q',
+      commandId: 'develop.heal',
       checked: ui.developTool === 'heal',
       onSelect: () => ui.setDevelopTool(ui.developTool === 'heal' ? 'none' : 'heal'),
     },
     {
       label: 'Red Eye',
       icon: <RedEyeIcon size={MENU_ICON} />,
-      shortcut: '⇧Q',
+      commandId: 'develop.redeye',
       checked: ui.developTool === 'redeye',
       onSelect: () => ui.setDevelopTool(ui.developTool === 'redeye' ? 'none' : 'redeye'),
     },
     { kind: 'separator' },
     {
-      // One row for a two-way choice, because both options never apply at once
-      // and a submenu for two words costs more than it saves.
-      label: 'New Spots',
+      label: 'New Spot Mode',
       icon: <HealIcon size={MENU_ICON} />,
       submenu: [
         {
@@ -517,8 +524,8 @@ export function retouchMenuItems(): MenuItem[] {
   if (spots.length) {
     items.push({ kind: 'separator' })
     items.push({
-      label: rt.showSpots ? 'Hide Spot Outlines' : 'Show Spot Outlines',
-      icon: <EyeIcon size={MENU_ICON} off={rt.showSpots} />,
+      label: 'Show Spot Outlines',
+      icon: <EyeIcon size={MENU_ICON} off={!rt.showSpots} />,
       checked: rt.showSpots,
       onSelect: () => rt.toggleSpots(),
     })
@@ -530,6 +537,7 @@ export function retouchMenuItems(): MenuItem[] {
           for (const s of e.spots) s.mode = 'heal'
         }, false),
     })
+    items.push({ kind: 'separator' })
     items.push({
       label: `Delete ${spots.length} Spot${spots.length === 1 ? '' : 's'}`,
       icon: <TrashIcon size={MENU_ICON} />,
@@ -544,6 +552,7 @@ export function retouchMenuItems(): MenuItem[] {
   }
 
   if (redEye.length) {
+    if (!spots.length) items.push({ kind: 'separator' })
     items.push({
       label: `Delete ${redEye.length} Red Eye Fix${redEye.length === 1 ? '' : 'es'}`,
       icon: <TrashIcon size={MENU_ICON} />,
@@ -621,12 +630,12 @@ export function viewportMenuItems(): MenuItem[] {
       label: 'Zoom',
       icon: <ZoomIcon size={MENU_ICON} />,
       submenu: [
-        { label: 'Fit', shortcut: '⌘0', onSelect: () => zoom?.fit() },
-        { label: '1:1', shortcut: '⌘1', onSelect: () => zoom?.actual() },
-        { label: 'Toggle Zoom', shortcut: 'Z', onSelect: () => zoom?.toggle() },
+        { label: 'Fit in Window', commandId: 'zoom.fit', onSelect: () => zoom?.fit() },
+        { label: '1:1', commandId: 'zoom.actual', onSelect: () => zoom?.actual() },
+        { label: 'Toggle Zoom', commandId: 'zoom.toggle', onSelect: () => zoom?.toggle() },
         { kind: 'separator' },
-        { label: 'Zoom In', shortcut: '+', onSelect: () => zoom?.zoomIn() },
-        { label: 'Zoom Out', shortcut: '−', onSelect: () => zoom?.zoomOut() },
+        { label: 'Zoom In', commandId: 'zoom.in', onSelect: () => zoom?.zoomIn() },
+        { label: 'Zoom Out', commandId: 'zoom.out', onSelect: () => zoom?.zoomOut() },
       ],
     },
     {
@@ -635,7 +644,7 @@ export function viewportMenuItems(): MenuItem[] {
       submenu: COMPARE_MODES.map<MenuItem>((m) => ({
         label: BEFORE_AFTER_LABELS[m],
         checked: ui.beforeAfter === m,
-        shortcut: m === 'before' ? '\\' : m === 'sideBySide' ? 'Y' : undefined,
+        commandId: m !== 'off' && ui.beforeAfter !== m ? `develop.${m}` : undefined,
         onSelect: () => ui.setBeforeAfter(m),
       })),
     },
@@ -661,8 +670,8 @@ export function viewportMenuItems(): MenuItem[] {
           onSelect: () => ui.toggleClipping('highlights'),
         },
         {
-          label: 'Both',
-          shortcut: 'J',
+          label: 'Toggle Both',
+          commandId: 'develop.clipping',
           onSelect: () => {
             ui.toggleClipping('shadows')
             ui.toggleClipping('highlights')
@@ -673,7 +682,7 @@ export function viewportMenuItems(): MenuItem[] {
     {
       label: 'HDR Preview',
       icon: <ExposureIcon size={MENU_ICON} />,
-      shortcut: 'H',
+      commandId: 'view.hdr',
       checked: ui.hdr,
       disabled: !hdrSupported(),
       onSelect: () => ui.toggleHdr(),
@@ -682,14 +691,14 @@ export function viewportMenuItems(): MenuItem[] {
     {
       label: 'Undo',
       icon: <UndoIcon size={MENU_ICON} />,
-      shortcut: '⌘Z',
+      commandId: 'develop.undo',
       disabled: dev.historyIndex <= 0,
       onSelect: () => dev.undo(),
     },
     {
       label: 'Redo',
       icon: <RedoIcon size={MENU_ICON} />,
-      shortcut: '⇧⌘Z',
+      commandId: 'develop.redo',
       disabled: dev.historyIndex >= dev.history.length - 1,
       onSelect: () => dev.redo(),
     },
@@ -697,7 +706,7 @@ export function viewportMenuItems(): MenuItem[] {
     {
       label: 'Copy Settings',
       icon: <CopyIcon size={MENU_ICON} />,
-      shortcut: '⇧⌘C',
+      commandId: 'develop.copy',
       onSelect: () => {
         dev.copySettings(ALL_SECTIONS)
         toast.show('Settings copied')
@@ -717,7 +726,7 @@ export function viewportMenuItems(): MenuItem[] {
     {
       label: 'Paste Settings',
       icon: <PasteIcon size={MENU_ICON} />,
-      shortcut: '⇧⌘V',
+      commandId: 'develop.paste',
       disabled: !dev.clipboard,
       onSelect: () => dev.pasteSettings(),
     },
@@ -725,7 +734,7 @@ export function viewportMenuItems(): MenuItem[] {
     {
       label: 'Reset All Settings',
       icon: <ResetIcon size={MENU_ICON} />,
-      shortcut: '⌘R',
+      commandId: 'develop.reset',
       danger: true,
       onSelect: () => dev.resetAll(),
     },
@@ -746,6 +755,7 @@ export function panelMenuItems(section: EditSection): MenuItem[] {
     {
       label: `Reset ${label}`,
       icon: <ResetIcon size={MENU_ICON} />,
+      disabled: !isSectionModified(dev.edits, section, dev.kind, dev.iso),
       onSelect: () => dev.resetSection(section),
     },
     {
@@ -773,6 +783,7 @@ export function panelMenuItems(section: EditSection): MenuItem[] {
     {
       label: 'Reset All Settings',
       icon: <ResetIcon size={MENU_ICON} />,
+      commandId: 'develop.reset',
       danger: true,
       onSelect: () => dev.resetAll(),
     },
@@ -963,6 +974,7 @@ export function sourceMenuItems(
           {
             label: 'Empty Collection',
             icon: <EmptyIcon size={MENU_ICON} />,
+            danger: true,
             disabled: collection.photoIds.length === 0,
             onSelect: async () => {
               await db.collections.update(collection.id, { photoIds: [] })
@@ -1014,14 +1026,12 @@ export function histogramMenuItems(): MenuItem[] {
     {
       label: 'Show Shadow Clipping',
       icon: <WarningIcon size={MENU_ICON} />,
-      shortcut: 'J',
       checked: clip.shadows,
       onSelect: () => ui.toggleClipping('shadows'),
     },
     {
       label: 'Show Highlight Clipping',
       icon: <WarningIcon size={MENU_ICON} />,
-      shortcut: '⇧J',
       checked: clip.highlights,
       onSelect: () => ui.toggleClipping('highlights'),
     },
