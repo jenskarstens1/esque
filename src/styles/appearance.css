@@ -108,6 +108,14 @@ html[data-appearance='light'] {
   --color-slider-thumb-ring: #48484f;
   --color-slider-thumb-ring-hover: #2a2a2f;
 
+  /* One step lighter, so the ramps read as colour against a light panel
+     instead of as four dark bars. */
+  --color-wb-cool: oklch(0.72 0.086 254);
+  --color-wb-warm: oklch(0.72 0.086 72);
+  --color-tint-green: oklch(0.72 0.086 146);
+  --color-tint-magenta: oklch(0.72 0.086 334);
+  --color-wb-neutral: oklch(0.72 0.006 254);
+
   /*
    * Shadows carried over at dark-set opacity turn every panel edge into a
    * smudge: a drop shadow on a light ground is read as dirt long before it is

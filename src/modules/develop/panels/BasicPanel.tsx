@@ -8,9 +8,10 @@ import { isSectionModified } from '../../../develop/modified'
 import { useDevelop } from '../../../develop/session'
 import { autoDevelopCurrent } from '../../../develop/autoApply'
 import { CAMERA_PROFILES } from '../../../core/profiles'
-import { WB_PRESETS } from '../../../core/wb'
+import { WB_PRESETS, MIRED_SCALE, TEMP_MIN, TEMP_MAX, TINT_MIN, TINT_MAX } from '../../../core/wb'
 import type { BasicEdits, Edits, Treatment, WhiteBalanceMode } from '../../../core/types'
 import { useUI } from '../../../state/ui'
+import { clamp } from '../../../lib/math'
 
 const WB_OPTIONS: Array<{ value: WhiteBalanceMode; label: string }> = [
   { value: 'asShot', label: 'As Shot' },
@@ -24,10 +25,19 @@ const WB_OPTIONS: Array<{ value: WhiteBalanceMode; label: string }> = [
   { value: 'custom', label: 'Custom' },
 ]
 
-/** Ramps run in the direction the slider pushes the image, not the light. */
-const TEMP_GRADIENT =
-  'linear-gradient(90deg,#3f7dff 0%,#8fb6ff 25%,#dcdcdc 50%,#ffd479 75%,#ff9d2e 100%)'
-const TINT_GRADIENT = 'linear-gradient(90deg,#3ad16b 0%,#c9c9c9 50%,#e055c8 100%)'
+/**
+ * The ramps under Temp and Tint.
+ *
+ * They describe what the photograph does, not what the light was: dragging
+ * Temp left cools the image, so blue sits on the left. Neutral therefore
+ * belongs at the as-shot value — the one place on the track where the slider
+ * is doing nothing — which is neither the middle of the range nor a fixed
+ * point, since every file arrives with its own white point and Temp is not
+ * spaced linearly. Building the ramp around the origin keeps the colour under
+ * the knob honest about the direction the knob is about to go.
+ */
+const ramp = (origin: number, cool: string, warm: string) =>
+  `linear-gradient(90deg,${cool} 0%,var(--color-wb-neutral) ${(origin * 100).toFixed(2)}%,${warm} 100%)`
 
 /** Nudging Temp or Tint by hand is what turns a preset into a Custom balance. */
 const toCustom = (e: Edits) => {
@@ -112,6 +122,13 @@ export function BasicPanel() {
     await autoDevelopCurrent('tone')
   }
 
+  // The as-shot white point is both the slider's zero and the point its ramp
+  // has to call neutral, so it is clamped once here rather than at each use.
+  const asShotTemp = clamp(original.basic.temp, TEMP_MIN, TEMP_MAX)
+  const asShotTint = clamp(original.basic.tint, TINT_MIN, TINT_MAX)
+  const tempOrigin = MIRED_SCALE.toPosition(asShotTemp, TEMP_MIN, TEMP_MAX)
+  const tintOrigin = (asShotTint - TINT_MIN) / (TINT_MAX - TINT_MIN)
+
   return (
     <PanelSection
       menuItems={() => [
@@ -182,22 +199,24 @@ export function BasicPanel() {
         <EditSlider
           path="basic.temp"
           label="Temp"
-          min={2000}
-          max={50000}
+          min={TEMP_MIN}
+          max={TEMP_MAX}
           step={10}
-          origin={original.basic.temp}
-          defaultValue={original.basic.temp}
-          gradient={TEMP_GRADIENT}
+          suffix="K"
+          origin={asShotTemp}
+          defaultValue={asShotTemp}
+          scale={MIRED_SCALE}
+          gradient={ramp(tempOrigin, 'var(--color-wb-cool)', 'var(--color-wb-warm)')}
           side={toCustom}
         />
         <EditSlider
           path="basic.tint"
           label="Tint"
-          min={-150}
-          max={150}
-          origin={original.basic.tint}
-          defaultValue={original.basic.tint}
-          gradient={TINT_GRADIENT}
+          min={TINT_MIN}
+          max={TINT_MAX}
+          origin={asShotTint}
+          defaultValue={asShotTint}
+          gradient={ramp(tintOrigin, 'var(--color-tint-green)', 'var(--color-tint-magenta)')}
           side={toCustom}
         />
       </div>

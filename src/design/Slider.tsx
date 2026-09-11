@@ -39,6 +39,8 @@ export interface SliderProps {
   thumbStyle?: 'default' | 'precise'
   /** S2 `isEmphasized` — fills the track in the accent colour. */
   isEmphasized?: boolean
+  /** Spacing along the track. Defaults to linear. */
+  scale?: SliderScale
   onChange: (value: number) => void
   /** Fired once when a drag gesture ends, so history records one step per drag. */
   onCommit?: (value: number) => void
@@ -47,6 +49,48 @@ export interface SliderProps {
 }
 
 export type SliderSize = 'S' | 'M' | 'L' | 'XL'
+
+/**
+ * How values are spaced along the track.
+ *
+ * Most sliders are linear, because most of what they control is. A few are
+ * not: colour temperature in Kelvin crams every temperature a photograph is
+ * shot under into the first eighth of its range. A scale keeps the stored
+ * value honest — the readout, keyboard steps and history all stay in real
+ * units — and only changes where the knob sits.
+ */
+export interface SliderScale {
+  /** Value to position along the track, 0 at `min` and 1 at `max`. */
+  toPosition(value: number, min: number, max: number): number
+  /** The inverse, for turning a pointer position back into a value. */
+  fromPosition(frac: number, min: number, max: number): number
+}
+
+const LINEAR: SliderScale = {
+  toPosition: (v, min, max) => (v - min) / (max - min),
+  fromPosition: (f, min, max) => min + f * (max - min),
+}
+
+/**
+ * The value a keystroke asks for, or null when the key is not the slider's.
+ *
+ * Steps are taken in real units rather than along the track, so the arrows stay
+ * the precise tool even where the track is spaced non-linearly.
+ */
+function keyedValue(
+  e: React.KeyboardEvent,
+  value: number,
+  min: number,
+  max: number,
+  step: number,
+): number | null {
+  const big = step * (e.shiftKey ? 10 : 1)
+  if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') return value - big
+  if (e.key === 'ArrowRight' || e.key === 'ArrowUp') return value + big
+  if (e.key === 'Home') return min
+  if (e.key === 'End') return max
+  return null
+}
 
 /** Width of the thumb's hit box per S2 size, used to detect a knob grab. */
 const THUMB_BOX: Record<SliderSize, number> = { S: 18, M: 20, L: 22, XL: 24 }
@@ -68,6 +112,7 @@ export function Slider({
   trackStyle = 'thick',
   thumbStyle = 'precise',
   isEmphasized,
+  scale = LINEAR,
   onChange,
   onCommit,
   className,
@@ -87,7 +132,7 @@ export function Slider({
   const thumbW = thumbStyle === 'precise' ? PRECISE_THUMB_W : THUMB_BOX[size]
   const travel = (frac: number) => `calc(${thumbW / 2}px + (100% - ${thumbW}px) * ${frac})`
 
-  const frac = (v: number) => (clamp(v, min, max) - min) / (max - min)
+  const frac = (v: number) => clamp(scale.toPosition(clamp(v, min, max), min, max), 0, 1)
   const knobFrac = frac(value)
   const zeroFrac = frac(zero)
   const fillFrac = Math.min(knobFrac, zeroFrac)
@@ -96,18 +141,23 @@ export function Slider({
   /** Value under a client X, in the knob's inset coordinate space. */
   const valueAt = (clientX: number, rect: DOMRect) => {
     const usable = Math.max(1, rect.width - thumbW)
-    return min + ((clientX - rect.left - thumbW / 2) / usable) * (max - min)
+    return scale.fromPosition(clamp((clientX - rect.left - thumbW / 2) / usable, 0, 1), min, max)
   }
 
   const commitValue = useCallback(
     (next: number, snap: boolean) => {
       let v = clamp(next, min, max)
       // Detent: a small magnetic zone around the origin so "back to zero" is easy
-      // to hit by hand. Alt bypasses it for deliberate near-zero values.
-      if (snap && Math.abs(v - zero) < (max - min) * 0.012) v = zero
+      // to hit by hand. Alt bypasses it for deliberate near-zero values. It is
+      // measured along the track rather than in value space, so it stays the
+      // same few pixels wide on a slider that is not linear.
+      const reach = Math.abs(
+        scale.toPosition(v, min, max) - scale.toPosition(clamp(zero, min, max), min, max),
+      )
+      if (snap && reach < 0.012) v = zero
       onChange(quantize(v, step))
     },
-    [max, min, onChange, step, zero],
+    [max, min, onChange, scale, step, zero],
   )
 
   const onPointerDown = (e: React.PointerEvent) => {
@@ -139,9 +189,12 @@ export function Slider({
     const dx = e.clientX - drag.current.startX
     if (Math.abs(dx) > 1) drag.current.moved = true
     // Shift slows the gesture down for precision work at high zoom.
-    const scale = e.shiftKey ? 0.18 : 1
+    const speed = e.shiftKey ? 0.18 : 1
     const usable = Math.max(1, rect.width - thumbW)
-    const next = drag.current.startValue + (dx / usable) * (max - min) * scale
+    // The drag is measured along the track, not in value space, so the knob
+    // keeps up with the pointer whatever the scale is doing underneath.
+    const from = scale.toPosition(clamp(drag.current.startValue, min, max), min, max)
+    const next = scale.fromPosition(clamp(from + (dx / usable) * speed, 0, 1), min, max)
     commitValue(next, !e.altKey)
   }
 
@@ -155,12 +208,7 @@ export function Slider({
 
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (disabled) return
-    const big = e.shiftKey ? 10 : 1
-    let next: number | null = null
-    if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') next = value - step * big
-    else if (e.key === 'ArrowRight' || e.key === 'ArrowUp') next = value + step * big
-    else if (e.key === 'Home') next = min
-    else if (e.key === 'End') next = max
+    const next = keyedValue(e, value, min, max, step)
     if (next === null) return
     e.preventDefault()
     commitValue(next, false)
@@ -196,28 +244,62 @@ export function Slider({
         onCommit?.(resetTo)
       }}
     >
-      <div className="esq-slider__track" style={gradient ? { background: gradient } : undefined}>
-        {/* A bipolar fill already shows where neutral is, so the tick only earns
-            its place on gradient ramps, which have no fill. */}
-        {gradient && zero > min && zero < max && (
-          <div className="esq-slider__detent" style={{ left: travel(zeroFrac) }} />
-        )}
-        <div
-          className="esq-slider__fill"
-          style={{
-            // Pinned flush to the trough's end when the fill runs all the way
-            // there, so an origin-at-min slider has no dead gap.
-            left: fillFrac <= 0.0001 ? 0 : travel(fillFrac),
-            right:
-              fillFrac + fillSpan >= 0.9999
-                ? 0
-                : `calc(100% - ${travel(fillFrac + fillSpan)})`,
-          }}
-        />
-      </div>
+      <SliderTrack
+        gradient={gradient}
+        zero={zero}
+        min={min}
+        max={max}
+        zeroFrac={zeroFrac}
+        fillFrac={fillFrac}
+        fillSpan={fillSpan}
+        travel={travel}
+      />
       <div className="esq-slider__thumb" style={{ left: travel(knobFrac) }}>
         <div className="esq-slider__knob" />
       </div>
+    </div>
+  )
+}
+
+/** The trough: a colour ramp or a fill grown from the slider's zero. */
+function SliderTrack({
+  gradient,
+  zero,
+  min,
+  max,
+  zeroFrac,
+  fillFrac,
+  fillSpan,
+  travel,
+}: {
+  gradient?: string
+  zero: number
+  min: number
+  max: number
+  zeroFrac: number
+  fillFrac: number
+  fillSpan: number
+  travel: (frac: number) => string
+}) {
+  return (
+    <div className="esq-slider__track" style={gradient ? { background: gradient } : undefined}>
+      {/* A bipolar fill already shows where neutral is, so the tick only earns
+          its place on gradient ramps, which have no fill. */}
+      {gradient && zero > min && zero < max && (
+        <div className="esq-slider__detent" style={{ left: travel(zeroFrac) }} />
+      )}
+      <div
+        className="esq-slider__fill"
+        style={{
+          // Pinned flush to the trough's end when the fill runs all the way
+          // there, so an origin-at-min slider has no dead gap.
+          left: fillFrac <= 0.0001 ? 0 : travel(fillFrac),
+          right:
+            fillFrac + fillSpan >= 0.9999
+              ? 0
+              : `calc(100% - ${travel(fillFrac + fillSpan)})`,
+        }}
+      />
     </div>
   )
 }
@@ -232,6 +314,8 @@ export interface NumberFieldProps {
   precision?: number
   suffix?: string
   disabled?: boolean
+  /** Matches the slider's spacing, so scrubbing and dragging move together. */
+  scale?: SliderScale
   onChange: (value: number) => void
   onCommit?: (value: number) => void
 }
@@ -248,6 +332,7 @@ export function NumberField({
   precision,
   suffix = '',
   disabled,
+  scale = LINEAR,
   onChange,
   onCommit,
 }: NumberFieldProps) {
@@ -289,8 +374,12 @@ export function NumberField({
     const dx = e.clientX - drag.current.x
     if (Math.abs(dx) < 2) return
     drag.current.moved = true
-    const sensitivity = (e.shiftKey ? 0.05 : 0.4) * (max - min) * 0.01
-    onChange(quantize(clamp(drag.current.start + dx * sensitivity, min, max), step))
+    // A fraction of the track per pixel, so the scrub covers the same ground
+    // the knob would and stays usable on a non-linear scale.
+    const rate = (e.shiftKey ? 0.05 : 0.4) * 0.01
+    const from = scale.toPosition(clamp(drag.current.start, min, max), min, max)
+    const next = scale.fromPosition(clamp(from + dx * rate, 0, 1), min, max)
+    onChange(quantize(clamp(next, min, max), step))
   }
 
   const onPointerUp = (e: React.PointerEvent) => {
@@ -406,6 +495,7 @@ export function SliderRow({
           precision={precision}
           suffix={suffix}
           disabled={slider.disabled}
+          scale={slider.scale}
           onChange={slider.onChange}
           onCommit={slider.onCommit}
         />

@@ -54,6 +54,22 @@
   --color-slider-thumb-ring: #dbdbde; /* S2 gray-800 */
   --color-slider-thumb-ring-hover: #f2f2f4; /* S2 gray-900 */
 
+  /* ---- White-balance ramps --------------------------------------------- */
+  /*
+   * The two sliders that carry a colour ramp rather than a fill. They are a
+   * direction, not a swatch: what the photograph does as the knob moves. So
+   * they are held at one lightness and one chroma and vary only in hue, which
+   * keeps them from outshouting the photograph and stops the middle of the
+   * track reading as a bright band. Stated in OKLCH because that is the only
+   * space where "same lightness, opposite hue" is true by construction.
+   */
+  --color-wb-cool: oklch(0.63 0.088 254);
+  --color-wb-warm: oklch(0.63 0.088 72);
+  --color-tint-green: oklch(0.63 0.088 146);
+  --color-tint-magenta: oklch(0.63 0.088 334);
+  /* The no-op point of either ramp, at the same lightness as its ends. */
+  --color-wb-neutral: oklch(0.63 0.006 254);
+
   /* ---- Accent & semantics --------------------------------------------- */
   --color-accent: #0a84ff;
   --color-accent-hover: #3d9dff;
