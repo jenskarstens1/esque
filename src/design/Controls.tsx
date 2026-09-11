@@ -1,4 +1,4 @@
-import { forwardRef, useEffect, useRef, useState, type AnchorHTMLAttributes, type ButtonHTMLAttributes, type ReactNode } from 'react'
+import { forwardRef, useEffect, useLayoutEffect, useRef, useState, type AnchorHTMLAttributes, type ButtonHTMLAttributes, type ReactNode } from 'react'
 import { cn } from '../lib/cn'
 
 const focusRing =
@@ -168,8 +168,40 @@ export function SegmentedControl<T extends string>({
   full?: boolean
   className?: string
 }) {
+  const trackRef = useRef<HTMLDivElement>(null)
+  /*
+   * Segments are content-sized, not equal thirds — `Hue|Sat|Lum|All` and
+   * `RGB|R|G|B` each sit on a different width — so the chip is measured off the
+   * selected tab rather than stepped by percentage. Null until the first
+   * measurement, which keeps the chip from sliding in from the left edge on
+   * mount: it renders already in place and only later changes animate.
+   */
+  const [chip, setChip] = useState<{ left: number; width: number } | null>(null)
+
+  useLayoutEffect(() => {
+    const track = trackRef.current
+    if (!track) return
+    const measure = () => {
+      const tab = track.querySelector<HTMLElement>('[data-selected="true"]')
+      if (!tab) return setChip(null)
+      const next = { left: tab.offsetLeft, width: tab.offsetWidth }
+      // Callers pass `options` inline, so this effect re-runs on every render;
+      // holding the old object when the geometry is unchanged keeps that from
+      // becoming a render loop.
+      setChip((prev) =>
+        prev && prev.left === next.left && prev.width === next.width ? prev : next,
+      )
+    }
+    measure()
+    const ro = new ResizeObserver(measure)
+    ro.observe(track)
+    for (const tab of track.querySelectorAll('[role="tab"]')) ro.observe(tab)
+    return () => ro.disconnect()
+  }, [value, options])
+
   return (
     <div
+      ref={trackRef}
       role="tablist"
       className={cn(
         'relative inline-flex shrink-0 items-center bg-raised p-0.5',
@@ -180,6 +212,26 @@ export function SegmentedControl<T extends string>({
         className,
       )}
     >
+      {chip && (
+        <span
+          aria-hidden
+          className={cn(
+            'pointer-events-none absolute inset-y-0.5 left-0',
+            // The fill alone is nine levels of grey off the track it sits in —
+            // enough to read as a tint, not as an edge. The hairline is what
+            // draws the chip's own outline, and it flips with the appearance so
+            // the same rule works on a light track.
+            'bg-control',
+            'shadow-[0_0_0_0.5px_var(--color-hairline-strong),0_1px_2.5px_rgb(0_0_0/0.32),inset_0_0.5px_0_rgb(255_255_255/0.1)]',
+            size === 'sm' ? 'rounded-md' : 'rounded-[5px]',
+            // Fast enough to read as the chip following the click rather than as
+            // a thing to wait for; the width tweens too so uneven segments don't
+            // jump a frame ahead of the slide.
+            'transition-[translate,width] duration-[--duration-fast] ease-[--ease-out] motion-reduce:transition-none',
+          )}
+          style={{ translate: `${chip.left}px`, width: chip.width }}
+        />
+      )}
       {options.map((opt) => {
         const selected = opt.value === value
         return (
@@ -189,10 +241,11 @@ export function SegmentedControl<T extends string>({
             type="button"
             title={opt.title}
             aria-selected={selected}
+            data-selected={selected}
             onClick={() => onChange(opt.value)}
             className={cn(
               'relative flex flex-1 items-center justify-center whitespace-nowrap font-medium',
-              'transition-[color,background-color,box-shadow] duration-[--duration-fast] ease-[--ease-out]',
+              'transition-[color,background-color] duration-[--duration-fast] ease-[--ease-out]',
               focusRing,
               /*
                * The `sm` chip is sized to the `sm` Select's box, not to the
@@ -206,14 +259,7 @@ export function SegmentedControl<T extends string>({
                 ? 'h-6 coarse:h-8 esq-tap rounded-md px-2 text-micro'
                 : 'h-6 coarse:h-11 rounded-[5px] px-2.5 text-mini',
               selected
-                ? // The fill alone is nine levels of grey off the track it sits
-                  // in — enough to read as a tint, not as an edge. The hairline
-                  // is what draws the chip's own outline, and it flips with the
-                  // appearance so the same rule works on a light track.
-                  cn(
-                    'bg-control text-icon',
-                    'shadow-[0_0_0_0.5px_var(--color-hairline-strong),0_1px_2.5px_rgb(0_0_0/0.32),inset_0_0.5px_0_rgb(255_255_255/0.1)]',
-                  )
+                ? 'text-icon'
                 : // Unselected segments had no hit state at all beyond the label
                   // changing colour, so the target you were aiming at was
                   // invisible until you landed on it.
