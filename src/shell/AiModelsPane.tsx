@@ -126,7 +126,7 @@ function ModelSettings({ model }: { model: SegmentModel }) {
     try {
       await forgetModel(model)
       await releaseDetectionModel(model.id)
-      toast.show(`${model.label} model deleted`, { detail: 'Download permission removed. Saved masks are unchanged.' })
+      toast.show(`${model.label} model deleted`, { detail: 'Download permission removed. Saved layers are unchanged.' })
     } catch (cause) {
       toast.error('Could not delete the model', cause instanceof Error ? cause.message : String(cause))
     } finally {
@@ -136,18 +136,17 @@ function ModelSettings({ model }: { model: SegmentModel }) {
 
   const message = error ?? status?.message
   return (
-    <FieldGroup title={`${model.label} (${model.id})`}>
+    <FieldGroup title={model.label}>
       <p className="mb-3 text-mini leading-relaxed text-label-secondary">
-        {model.note} {formatBytes(model.bytes)} of weights. {model.license}.
-        {' '}Fetched from this site first, then {source} if unavailable.
+        {model.note} {formatBytes(model.bytes)}, {model.license}, from {source}.
       </p>
       {model.licenseNote && <p className="mb-3 text-mini leading-relaxed text-label-secondary">{model.licenseNote}</p>}
-      <Field label="Permission" hint="Applies only to this model. Turning it off cancels its download; existing files remain usable.">
+      <Field label="Permission" hint="Turning this off cancels the download. Files already saved stay usable.">
         <Checkbox
           checked={allowed}
           disabled={removing}
           onChange={consent}
-          label={`Allow downloads for ${model.label}`}
+          label="Allow download"
         />
       </Field>
       <ModelStorage model={model} status={status} removing={removing} cached={cached} bytes={bytes} />
@@ -178,26 +177,14 @@ export function AiModelsPane() {
     <>
       <FieldGroup title="Local AI models">
         <p className="text-ui leading-relaxed text-label-secondary">
-          AI masks run on this device. Your photos are not uploaded. No model is
-          downloaded until you allow it below; each model has its own permission.
-        </p>
-        <p className="mt-2 text-mini leading-relaxed text-label-secondary">
-          Detection also loads a shared runtime from this site (about {formatBytes(RUNTIME_BYTES)} compressed).
-          Model downloads stay in this browser until deleted or browser storage is cleared.
-          Deleting a model also removes its download permission, but keeps saved masks and edits.
+          AI layers run on this device; photos are never uploaded. Nothing is downloaded
+          until you allow it. Models are stored in this browser, plus a shared
+          runtime of about {formatBytes(RUNTIME_BYTES)}.
         </p>
         {support?.reason && <p className="mt-2 text-mini leading-relaxed text-label-secondary">{support.reason}</p>}
         {error && <p role="alert" className="mt-2 text-mini leading-relaxed text-red">{error}</p>}
       </FieldGroup>
       {SEGMENT_MODEL_LIST.filter((model) => !model.legacy).map((model) => <ModelSettings key={model.id} model={model} />)}
-      <details className="text-ui text-label-secondary">
-        <summary className="cursor-pointer py-3">Legacy models</summary>
-        <p className="mb-4 text-mini leading-relaxed">
-          Older models are kept for existing masks. New masks use the models above.
-          You can delete legacy downloads without changing saved results.
-        </p>
-        {SEGMENT_MODEL_LIST.filter((model) => model.legacy).map((model) => <ModelSettings key={model.id} model={model} />)}
-      </details>
     </>
   )
 }

@@ -29,6 +29,7 @@ import {
   Copy,
   CopyPlus,
   Crop,
+  Cpu,
   Database,
   Download,
   Ellipsis,
@@ -296,6 +297,7 @@ export const WarningIcon = wrap(TriangleAlert)
 // — Settings panes —
 
 export const CacheIcon = wrap(Database)
+export const AiModelIcon = wrap(Cpu)
 export const DisplayIcon = wrap(Monitor)
 export const InterfaceIcon = wrap(PanelsTopLeft)
 export const KeyboardIcon = wrap(Keyboard)

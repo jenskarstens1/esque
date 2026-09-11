@@ -18,6 +18,7 @@ import { Scroller } from "../design/Scroller";
 import { Slider } from "../design/Slider";
 import { toast } from "../design/toast";
 import {
+  AiModelIcon,
   CacheIcon,
   DisplayIcon,
   FolderIcon,
@@ -25,7 +26,6 @@ import {
   InterfaceIcon,
   KeyboardIcon,
   Logo,
-  MaskIcon,
 } from "../design/icons";
 import { cacheClear, cacheStats, type CacheStats } from "../catalog/opfs";
 import { formatBytes } from "../lib/math";
@@ -72,7 +72,7 @@ const PANES = [
   { id: "files", label: "Files", icon: FolderIcon },
   { id: "keyboard", label: "Keyboard", icon: KeyboardIcon },
   { id: "cache", label: "Cache", icon: CacheIcon },
-  { id: "ai", label: "AI models", icon: MaskIcon },
+  { id: "ai", label: "AI models", icon: AiModelIcon },
   { id: "about", label: "About", icon: InfoIcon },
 ] as const;
 
