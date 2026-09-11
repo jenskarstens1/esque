@@ -5,6 +5,8 @@ import { DevelopLeftPanel } from '../modules/develop/DevelopLeftPanel'
 import { ToastHost } from '../design/ToastHost'
 import { PromptHost } from '../design/PromptHost'
 import { db } from '../catalog/db'
+import { defaultEdits } from '../core/defaults'
+import type { Preset } from '../core/types'
 import { useUI } from '../state/ui'
 import '../styles/index.css'
 
@@ -58,6 +60,12 @@ function rightClick(el: Element) {
 const escape = () =>
   window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
 
+interface PanelContext {
+  header: HTMLElement | undefined
+  navigator: Element | undefined
+  presetScroll: HTMLElement | undefined
+}
+
 async function run() {
   // This runs against the live catalog when opened in a real browser, so the
   // user's own presets are put back exactly as they were — including if an
@@ -79,8 +87,20 @@ async function run() {
 }
 
 async function drive() {
+  await seedPresets()
+  const context = checkScrollableLayout()
+  await checkGroups()
+  await checkHeaderActions(context.header)
+  await checkLibraryMenu(context.header)
+  await checkPresetMenus()
+  await checkBuiltInAndGroupMenus()
+  await checkTreeOverflow(context)
+  await leaveScreenshotState(context.presetScroll)
+}
+
+async function seedPresets() {
   await db.presets.clear()
-  await db.presets.bulkAdd([
+  const fixtures: Preset[] = [
     {
       id: 'u1',
       name: 'My Warm Look',
@@ -88,7 +108,7 @@ async function drive() {
       builtin: false,
       sections: ['basic'],
       paths: ['basic.contrast'],
-      edits: { basic: { contrast: 10 } },
+      edits: { basic: { ...defaultEdits().basic, contrast: 10 } },
       createdAt: 1,
     },
     {
@@ -98,14 +118,16 @@ async function drive() {
       builtin: false,
       sections: ['basic'],
       paths: ['basic.contrast'],
-      edits: { basic: { contrast: -5 } },
+      edits: { basic: { ...defaultEdits().basic, contrast: -5 } },
       createdAt: 2,
     },
-  ] as never)
+  ]
+  await db.presets.bulkAdd(fixtures)
   useUI.getState().setPresetGroupsExpanded([])
   await sleep(500)
+}
 
-  // --- Only the preset tree scrolls; the Navigator stays put. ---------------
+function checkScrollableLayout(): PanelContext {
   const scrollers = [...document.querySelectorAll<HTMLElement>('.esq-scroll')]
   const navigator = [...document.querySelectorAll('*')].find(
     (n) => n.textContent?.trim() === 'Navigator',
@@ -119,8 +141,10 @@ async function drive() {
   )
   if (!header) fail('no Presets header')
   else if (presetScroll?.contains(header)) fail('the Presets header scrolls with the tree')
+  return { header, navigator, presetScroll }
+}
 
-  // --- Groups start closed, one row each, with a count. ---------------------
+async function checkGroups() {
   const rows = groupRows()
   if (rows.length !== 6) fail(`expected 6 group rows, saw ${rows.length}`)
   if (rows.some((r) => r.getAttribute('aria-expanded') !== 'false'))
@@ -141,16 +165,19 @@ async function drive() {
   groupRow('Cinematic')?.click()
   await sleep(450)
   if (useUI.getState().expandedPresetGroups.includes('Cinematic')) fail('group did not close')
+}
 
-  // --- One always-visible ⋯ is the whole interaction layer. -----------------
+async function checkHeaderActions(header: HTMLElement | undefined) {
   const bar = header?.lastElementChild
   if (bar && getComputedStyle(bar).opacity !== '1')
     fail(`the header action is hidden (opacity ${getComputedStyle(bar).opacity})`)
   const actions = [...(header?.querySelectorAll<HTMLButtonElement>('button[title]') ?? [])]
   if (actions.length !== 1)
     fail(`expected one header action, saw ${actions.map((b) => b.title).join(' | ')}`)
+}
 
-  // --- …and it carries save, both imports, and expand all. -----------------
+async function checkLibraryMenu(header: HTMLElement | undefined) {
+  const actions = [...(header?.querySelectorAll<HTMLButtonElement>('button[title]') ?? [])]
   actions.at(-1)?.click()
   await sleep(180)
   const lib = document.body.textContent ?? ''
@@ -173,8 +200,9 @@ async function drive() {
     escape()
     await sleep(180)
   }
+}
 
-  // --- A user preset offers rename / move / export / delete. ----------------
+async function checkPresetMenus() {
   useUI.getState().setPresetGroupsExpanded(['User Presets'])
   await sleep(450)
   const mine = presetRow('My Warm Look')
@@ -188,8 +216,9 @@ async function drive() {
     escape()
     await sleep(180)
   }
+}
 
-  // --- A built-in offers no destructive edits. ------------------------------
+async function checkBuiltInAndGroupMenus() {
   useUI.getState().setPresetGroupsExpanded(['Cinematic'])
   await sleep(450)
   const builtin = presetRow('Teal & Orange')
@@ -205,7 +234,6 @@ async function drive() {
     await sleep(180)
   }
 
-  // --- Group header menu exports the group. --------------------------------
   const gm = groupRow('User Presets')
   if (!gm) fail('group row for the menu test not found')
   else {
@@ -216,36 +244,45 @@ async function drive() {
     escape()
     await sleep(180)
   }
+}
 
-  // --- A full tree overflows the preset area alone. -------------------------
-  const navBefore = navigator?.getBoundingClientRect().top
-  const headBefore = header?.getBoundingClientRect().top
+async function checkTreeOverflow(context: PanelContext) {
+  const navBefore = context.navigator?.getBoundingClientRect().top
+  const headBefore = context.header?.getBoundingClientRect().top
   useUI
     .getState()
     .setPresetGroupsExpanded(['Colour Negative', 'Cinematic', 'Black & White', 'Genre', 'Tools', 'User Presets'])
   await sleep(600)
-  const view = presetScroll as HTMLElement | undefined
+  const view = context.presetScroll
   if (!view || view.scrollHeight <= view.clientHeight + 1)
     fail(`the expanded tree does not overflow (${view?.scrollHeight} vs ${view?.clientHeight})`)
-  else {
-    view.scrollTop = view.scrollHeight
-    await sleep(120)
-    if (view.scrollTop <= 0) fail('the preset area did not scroll')
-    if (navigator?.getBoundingClientRect().top !== navBefore) fail('the Navigator moved on scroll')
-    if (header?.getBoundingClientRect().top !== headBefore)
-      fail('the Presets header moved on scroll')
-    if (document.documentElement.scrollTop || document.body.scrollTop)
-      fail('the panel itself scrolled')
-    await sleep(120)
-    if (!header?.nextElementSibling?.firstElementChild?.className.includes('hairline-t'))
-      fail('no rule appears under the header once content is hidden behind it')
-    view.scrollTop = 0
-    await sleep(120)
-    if (header?.nextElementSibling?.firstElementChild?.className.includes('hairline-t'))
-      fail('the header rule stayed after scrolling back to the top')
-  }
+  else await checkScrolledTree(context, view, navBefore, headBefore)
+}
 
-  // Leave the panel in its busiest state, so the screenshot shows the tree.
+async function checkScrolledTree(
+  context: PanelContext,
+  view: HTMLElement,
+  navBefore: number | undefined,
+  headBefore: number | undefined,
+) {
+  view.scrollTop = view.scrollHeight
+  await sleep(120)
+  if (view.scrollTop <= 0) fail('the preset area did not scroll')
+  if (context.navigator?.getBoundingClientRect().top !== navBefore) fail('the Navigator moved on scroll')
+  if (context.header?.getBoundingClientRect().top !== headBefore)
+    fail('the Presets header moved on scroll')
+  if (document.documentElement.scrollTop || document.body.scrollTop)
+    fail('the panel itself scrolled')
+  await sleep(120)
+  if (!context.header?.nextElementSibling?.firstElementChild?.className.includes('hairline-t'))
+    fail('no rule appears under the header once content is hidden behind it')
+  view.scrollTop = 0
+  await sleep(120)
+  if (context.header?.nextElementSibling?.firstElementChild?.className.includes('hairline-t'))
+    fail('the header rule stayed after scrolling back to the top')
+}
+
+async function leaveScreenshotState(view: HTMLElement | undefined) {
   useUI
     .getState()
     .setPresetGroupsExpanded(['Colour Negative', 'Cinematic', 'Black & White', 'User Presets'])

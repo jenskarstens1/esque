@@ -62,6 +62,19 @@ class Cancelled extends Error {
   }
 }
 
+async function ensureDetectedMasks(edits: Edits, signal?: { cancelled: boolean }) {
+  for (const mask of edits.masks) {
+    if (!mask.visible || mask.opacity === 0 || isNeutralMask(mask)) continue
+    for (const { geometry } of mask.components) {
+      if (!isAiGeometry(geometry)) continue
+      check(signal)
+      if (!geometry.cacheKey || !(await loadAlpha(geometry.cacheKey))) {
+        throw new Error(`"${mask.name}" needs detection. Open Masking and run detection again before exporting.`)
+      }
+    }
+  }
+}
+
 /**
  * Renders `image` at full resolution and returns display-referred pixels.
  *
@@ -75,16 +88,7 @@ export async function renderFull(
   opts: FullRenderOptions,
 ): Promise<Plane> {
   check(opts.signal)
-  for (const mask of opts.edits.masks) {
-    if (!mask.visible || mask.opacity === 0 || isNeutralMask(mask)) continue
-    for (const { geometry } of mask.components) {
-      if (!isAiGeometry(geometry)) continue
-      check(opts.signal)
-      if (!geometry.cacheKey || !(await loadAlpha(geometry.cacheKey))) {
-        throw new Error(`"${mask.name}" needs detection. Open Masking and run detection again before exporting.`)
-      }
-    }
-  }
+  await ensureDetectedMasks(opts.edits, opts.signal)
   check(opts.signal)
   const { width, height, depth } = { ...image, depth: opts.depth }
   const total = width * height

@@ -9,6 +9,48 @@ export const stem = (name: string) => {
 
 const pad = (n: number, width: number) => String(n).padStart(width, '0')
 
+function formattedDate(date: Date, pattern?: string) {
+  if (!pattern) {
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1, 2)}-${pad(date.getDate(), 2)}`
+  }
+  return pattern
+    .replace(/YYYY/g, String(date.getFullYear()))
+    .replace(/MM/g, pad(date.getMonth() + 1, 2))
+    .replace(/DD/g, pad(date.getDate(), 2))
+    .replace(/HH/g, pad(date.getHours(), 2))
+    .replace(/mm/g, pad(date.getMinutes(), 2))
+    .replace(/ss/g, pad(date.getSeconds(), 2))
+}
+
+function shutterLabel(value: number) {
+  if (!value) return ''
+  return value >= 1 ? `${value}s` : `1-${Math.round(1 / value)}`
+}
+
+function templateValues(
+  photo: Photo,
+  sequence: number,
+  custom: string,
+  date: Date,
+  argument?: string,
+): Record<string, () => string> {
+  return {
+    name: () => stem(photo.filename),
+    original: () => stem(photo.filename),
+    seq: () => pad(sequence, argument ? Number(argument) || 1 : 1),
+    sequence: () => pad(sequence, argument ? Number(argument) || 1 : 1),
+    date: () => formattedDate(date, argument),
+    camera: () => photo.meta.cameraModel || photo.meta.cameraMake || '',
+    lens: () => photo.meta.lens || '',
+    iso: () => photo.meta.iso ? String(photo.meta.iso) : '',
+    shutter: () => shutterLabel(photo.meta.shutter),
+    aperture: () => photo.meta.aperture ? `f${photo.meta.aperture}` : '',
+    title: () => photo.title || stem(photo.filename),
+    custom: () => custom,
+    customtext: () => custom,
+  }
+}
+
 /**
  * Expands a filename template.
  *
@@ -23,48 +65,10 @@ export function expandTemplate(
   custom = '',
 ): string {
   const when = new Date(photo.meta.captureTime ?? photo.modifiedAt)
-  const iso = (d: Date) =>
-    `${d.getFullYear()}-${pad(d.getMonth() + 1, 2)}-${pad(d.getDate(), 2)}`
 
   const out = template.replace(/\{([a-zA-Z]+)(?::([^}]+))?\}/g, (all, key: string, arg?: string) => {
-    switch (key.toLowerCase()) {
-      case 'name':
-      case 'original':
-        return stem(photo.filename)
-      case 'seq':
-      case 'sequence':
-        return pad(sequence, arg ? Number(arg) || 1 : 1)
-      case 'date':
-        if (!arg) return iso(when)
-        return arg
-          .replace(/YYYY/g, String(when.getFullYear()))
-          .replace(/MM/g, pad(when.getMonth() + 1, 2))
-          .replace(/DD/g, pad(when.getDate(), 2))
-          .replace(/HH/g, pad(when.getHours(), 2))
-          .replace(/mm/g, pad(when.getMinutes(), 2))
-          .replace(/ss/g, pad(when.getSeconds(), 2))
-      case 'camera':
-        return photo.meta.cameraModel || photo.meta.cameraMake || ''
-      case 'lens':
-        return photo.meta.lens || ''
-      case 'iso':
-        return photo.meta.iso ? String(photo.meta.iso) : ''
-      case 'shutter':
-        return photo.meta.shutter
-          ? photo.meta.shutter >= 1
-            ? `${photo.meta.shutter}s`
-            : `1-${Math.round(1 / photo.meta.shutter)}`
-          : ''
-      case 'aperture':
-        return photo.meta.aperture ? `f${photo.meta.aperture}` : ''
-      case 'title':
-        return photo.title || stem(photo.filename)
-      case 'custom':
-      case 'customtext':
-        return custom
-      default:
-        return all
-    }
+    const value = templateValues(photo, sequence, custom, when, arg)[key.toLowerCase()]
+    return value ? value() : all
   })
 
   const safe = out.replace(/[/\\:*?"<>|]/g, '-').trim()

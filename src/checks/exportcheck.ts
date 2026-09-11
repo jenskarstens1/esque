@@ -168,6 +168,10 @@ async function checkMaskCoverage() {
     check(await restoreCoverage(key), 'Develop restores saved coverage without detection')
     check(!!getAlpha(key) && useDetect.getState().status[key]?.phase === 'ready',
       'Reopened coverage is available to the viewport and detection controls')
+    check(!(await detect({ photoId, kind: 'aiSubject', modelId: 'u2netp', force: true })),
+      'Explicit re-detection bypasses saved coverage and requires a loaded photo')
+    check(getAlpha(key)?.data[0] === 1,
+      'An unsuccessful re-detection retains the previous mask')
 
     await cacheDelete(key)
     dropAlphasFor(photoId)
@@ -213,13 +217,34 @@ async function checkMaskCoverage() {
   return { pass: failures.length === 0, assertions, failures }
 }
 
-async function run() {
-  const masks = await checkMaskCoverage()
-  if (new URLSearchParams(location.search).get('case') === 'masks') return masks
-  const out: Record<string, unknown> = { masks }
-  const failures: string[] = [...masks.failures]
-  const image = ramped(W, H)
+interface PixelPlane {
+  width: number
+  height: number
+  data: ArrayLike<number>
+}
 
+const px = (plane: Pick<PixelPlane, 'width' | 'data'>, x: number, y: number) => {
+  const i = (y * plane.width + x) * 4
+  return [plane.data[i], plane.data[i + 1], plane.data[i + 2]]
+}
+
+/** Mean absolute difference over a coarse grid of sample points. */
+const diff = (a: PixelPlane, b: PixelPlane) => {
+  if (a.width !== b.width || a.height !== b.height) return Infinity
+  let sum = 0
+  let n = 0
+  for (let y = 2; y < a.height - 2; y += 7) {
+    for (let x = 2; x < a.width - 2; x += 7) {
+      const pa = px(a, x, y)
+      const pb = px(b, x, y)
+      sum += Math.abs(pa[0] - pb[0]) + Math.abs(pa[1] - pb[1]) + Math.abs(pa[2] - pb[2])
+      n += 3
+    }
+  }
+  return sum / Math.max(1, n)
+}
+
+function checkDngHeadroom(out: Record<string, unknown>, failures: string[]) {
   const dngCodes = halfRgbaToRgb16(
     new Uint16Array([toHalf(0.5), toHalf(1), toHalf(2), toHalf(1)]),
     1,
@@ -233,36 +258,16 @@ async function run() {
   ) {
     failures.push(`dngHeadroom ${Array.from(dngCodes).join(',')}`)
   }
+}
 
-  const px = (plane: { width: number; data: ArrayLike<number> }, x: number, y: number) => {
-    const i = (y * plane.width + x) * 4
-    return [plane.data[i], plane.data[i + 1], plane.data[i + 2]]
-  }
-
-  /** Mean absolute difference over a coarse grid of sample points. */
-  const diff = (
-    a: { width: number; height: number; data: ArrayLike<number> },
-    b: { width: number; height: number; data: ArrayLike<number> },
-  ) => {
-    if (a.width !== b.width || a.height !== b.height) return Infinity
-    let sum = 0
-    let n = 0
-    for (let y = 2; y < a.height - 2; y += 7) {
-      for (let x = 2; x < a.width - 2; x += 7) {
-        const pa = px(a, x, y)
-        const pb = px(b, x, y)
-        sum += Math.abs(pa[0] - pb[0]) + Math.abs(pa[1] - pb[1]) + Math.abs(pa[2] - pb[2])
-        n += 3
-      }
-    }
-    return sum / Math.max(1, n)
-  }
-
-  // Small enough to take the single-shot path.
+async function checkCropExport(
+  image: ReturnType<typeof ramped>,
+  out: Record<string, unknown>,
+  failures: string[],
+) {
   const render = (edits: Edits) =>
     renderFull(image, { edits, outputSpace: 'srgb', depth: 8 })
 
-  // -- geometry changes the exported size ------------------------------------
   const cropped = defaultEdits()
   cropped.crop.left = 0.25
   cropped.crop.top = 0.1
@@ -299,11 +304,9 @@ async function run() {
   if (Math.abs(topEdge[1] - wantTop[1]) > 4) {
     failures.push(`cropReadsRampY ${topEdge[1]} vs ${wantTop[1]}`)
   }
+}
 
-  // -- the tiled path agrees with the single-shot one ------------------------
-  // `renderFull` picks its path by pixel count, so the tiled branch is reached
-  // by handing it an image past the threshold. A 5000×5000 ramp is 25 MP, just
-  // over, and still cheap because the graph is mostly disabled.
+async function checkTiledExport(out: Record<string, unknown>, failures: string[]) {
   const big = ramped(5000, 5000)
   const bigEdits = defaultEdits()
   bigEdits.basic.exposure = 0.4
@@ -380,7 +383,16 @@ async function run() {
   }
   out.worstPlainSeam = worstPlainSeam
   if (worstPlainSeam > 6) failures.push(`plainSeam ${worstPlainSeam}`)
+}
 
+async function run() {
+  const masks = await checkMaskCoverage()
+  if (new URLSearchParams(location.search).get('case') === 'masks') return masks
+  const out: Record<string, unknown> = { masks }
+  const failures: string[] = [...masks.failures]
+  checkDngHeadroom(out, failures)
+  await checkCropExport(ramped(W, H), out, failures)
+  await checkTiledExport(out, failures)
   out.failures = failures
   out.pass = failures.length === 0
   return out

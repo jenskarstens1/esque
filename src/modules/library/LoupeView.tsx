@@ -24,6 +24,21 @@ export function LoupeView({ photos }: { photos: Photo[] }) {
 /** The standard preview's long edge; past this the loupe needs a detail render. */
 const PREVIEW_EDGE = 1920
 
+function PreviewStatus({
+  source,
+  pending,
+  raw,
+}: {
+  source: string | null | undefined
+  pending: boolean
+  raw: boolean
+}) {
+  if (source && !pending) return null
+  let label = 'Loading photo'
+  if (source) label = raw ? 'Developing RAW' : 'Decoding'
+  return <StatusPill>{label}</StatusPill>
+}
+
 function PhotoCanvas({ photo }: { photo: Photo }) {
   const frameRef = useRef<HTMLDivElement>(null)
   const imgRef = useRef<HTMLDivElement>(null)
@@ -159,11 +174,7 @@ function PhotoCanvas({ photo }: { photo: Photo }) {
         />
       </div>
 
-      {(!src || detail.pending) && (
-        <StatusPill>
-          {!src ? 'Loading photo' : photo.isRaw ? 'Developing RAW' : 'Decoding'}
-        </StatusPill>
-      )}
+      <PreviewStatus source={src} pending={detail.pending} raw={photo.isRaw} />
 
       {menu}
     </div>

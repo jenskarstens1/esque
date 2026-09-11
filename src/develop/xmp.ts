@@ -194,72 +194,64 @@ export interface ParsedXmp {
   supportsAmount: boolean
 }
 
-export function parseXmp(xml: string): ParsedXmp | null {
-  const doc = new DOMParser().parseFromString(xml, 'application/xml')
-  if (doc.getElementsByTagName('parsererror').length) return null
+type NumberField = readonly [
+  path: string,
+  keys: string | string[],
+  fallback: number | undefined,
+  set: (value: number) => void,
+]
 
-  const bag = crsBag(doc)
-  if (!bag.size) return null
-  const r = reader(bag)
-  const e = defaultEdits()
+function readNumbers(r: Reader, fields: NumberField[]): void {
+  for (const [path, keys, fallback, set] of fields) {
+    if (r.mark(path, keys)) set(r.num(keys, fallback))
+  }
+}
 
-  // ---- Basic -------------------------------------------------------------
+function parseBasic(r: Reader, e: Edits): void {
   const wbRaw = r.str('WhiteBalance').trim().toLowerCase()
   if (wbRaw) {
     e.basic.wbMode = WB_MAP[wbRaw] ?? 'custom'
     r.claim('basic.wbMode')
   }
-  if (r.mark('basic.temp', 'Temperature')) e.basic.temp = r.num('Temperature', 5500)
-  if (r.mark('basic.tint', 'Tint')) e.basic.tint = r.num('Tint')
-
-  if (r.mark('basic.exposure', ['Exposure2012', 'Exposure']))
-    e.basic.exposure = r.num(['Exposure2012', 'Exposure'])
-  if (r.mark('basic.contrast', ['Contrast2012', 'Contrast']))
-    e.basic.contrast = r.num(['Contrast2012', 'Contrast'])
-  if (r.mark('basic.highlights', ['Highlights2012', 'HighlightRecovery']))
-    e.basic.highlights = r.num(['Highlights2012', 'HighlightRecovery'])
-  if (r.mark('basic.shadows', ['Shadows2012', 'FillLight']))
-    e.basic.shadows = r.num(['Shadows2012', 'FillLight'])
-  if (r.mark('basic.whites', ['Whites2012'])) e.basic.whites = r.num('Whites2012')
-  if (r.mark('basic.blacks', ['Blacks2012', 'Blacks']))
-    e.basic.blacks = r.num(['Blacks2012', 'Blacks'])
-
-  if (r.mark('basic.texture', 'Texture')) e.basic.texture = r.num('Texture')
-  if (r.mark('basic.clarity', ['Clarity2012', 'Clarity']))
-    e.basic.clarity = r.num(['Clarity2012', 'Clarity'])
-  if (r.mark('basic.dehaze', 'Dehaze')) e.basic.dehaze = r.num('Dehaze')
-  if (r.mark('basic.vibrance', 'Vibrance')) e.basic.vibrance = r.num('Vibrance')
-  if (r.mark('basic.saturation', 'Saturation')) e.basic.saturation = r.num('Saturation')
-
+  readNumbers(r, [
+    ['basic.temp', 'Temperature', 5500, (v) => (e.basic.temp = v)],
+    ['basic.tint', 'Tint', undefined, (v) => (e.basic.tint = v)],
+    ['basic.exposure', ['Exposure2012', 'Exposure'], undefined, (v) => (e.basic.exposure = v)],
+    ['basic.contrast', ['Contrast2012', 'Contrast'], undefined, (v) => (e.basic.contrast = v)],
+    ['basic.highlights', ['Highlights2012', 'HighlightRecovery'], undefined, (v) => (e.basic.highlights = v)],
+    ['basic.shadows', ['Shadows2012', 'FillLight'], undefined, (v) => (e.basic.shadows = v)],
+    ['basic.whites', 'Whites2012', undefined, (v) => (e.basic.whites = v)],
+    ['basic.blacks', ['Blacks2012', 'Blacks'], undefined, (v) => (e.basic.blacks = v)],
+    ['basic.texture', 'Texture', undefined, (v) => (e.basic.texture = v)],
+    ['basic.clarity', ['Clarity2012', 'Clarity'], undefined, (v) => (e.basic.clarity = v)],
+    ['basic.dehaze', 'Dehaze', undefined, (v) => (e.basic.dehaze = v)],
+    ['basic.vibrance', 'Vibrance', undefined, (v) => (e.basic.vibrance = v)],
+    ['basic.saturation', 'Saturation', undefined, (v) => (e.basic.saturation = v)],
+  ])
   if (r.mark('basic.treatment', 'ConvertToGrayscale'))
     e.basic.treatment = r.bool('ConvertToGrayscale') ? 'bw' : 'color'
   if (r.mark('basic.protectSkin', 'esq:ProtectSkin'))
     e.basic.protectSkin = r.bool('esq:ProtectSkin', true)
   if (r.mark('basic.avoidColorShift', 'esq:AvoidColorShift'))
     e.basic.avoidColorShift = r.bool('esq:AvoidColorShift')
+}
 
-  // ---- Camera profile ----------------------------------------------------
-  // On a RAW this is the base rendering every slider then works against, so a
-  // preset that names one has to be able to carry it.
-  if (r.mark('profile', ['esq:Profile', 'CameraProfile'])) {
-    const named = r.str(['esq:Profile', 'CameraProfile']).trim()
-    const match = CAMERA_PROFILES.find(
-      (p) => p.id === named.toLowerCase() || p.name.toLowerCase() === named.toLowerCase(),
-    )
-    // An Adobe profile name we don't ship ("Adobe Color", a camera-matching
-    // profile) has no equivalent here; leaving the default is more honest than
-    // picking something that merely sounds close.
-    if (match) e.profile = match.id
-    else r.touched.delete('profile')
-  }
+function parseProfile(r: Reader, e: Edits): void {
+  if (!r.mark('profile', ['esq:Profile', 'CameraProfile'])) return
+  const named = r.str(['esq:Profile', 'CameraProfile']).trim().toLowerCase()
+  const match = CAMERA_PROFILES.find((p) => p.id === named || p.name.toLowerCase() === named)
+  if (match) e.profile = match.id
+  else r.touched.delete('profile')
+}
 
-  // ---- Tone (RawTherapee) ------------------------------------------------
-  const RECOVERY: HighlightRecovery[] = ['off', 'clip', 'blend', 'propagate']
+function parseTone(r: Reader, e: Edits): void {
+  const recovery: HighlightRecovery[] = ['off', 'clip', 'blend', 'propagate']
   if (r.mark('tone.recovery', 'esq:HighlightRecovery')) {
     const mode = r.str('esq:HighlightRecovery') as HighlightRecovery
-    e.tone.recovery = RECOVERY.includes(mode) ? mode : 'off'
+    e.tone.recovery = recovery.includes(mode) ? mode : 'off'
   }
-  const tone = [
+  const defaults = defaultEdits().tone
+  const fields = [
     ['esq:RecoveryThreshold', 'recoveryThreshold'],
     ['esq:SHHighlights', 'shHighlights'],
     ['esq:SHShadows', 'shShadows'],
@@ -273,189 +265,142 @@ export function parseXmp(xml: string): ParsedXmp | null {
     ['esq:DetailCoarsest', 'detailCoarsest'],
     ['esq:DetailThreshold', 'detailThreshold'],
   ] as const
-  const toneDefaults = defaultEdits().tone
-  for (const [key, field] of tone) {
-    if (r.mark(`tone.${field}`, key)) e.tone[field] = r.num(key, toneDefaults[field] as number)
+  for (const [key, field] of fields) {
+    if (r.mark(`tone.${field}`, key)) e.tone[field] = r.num(key, defaults[field] as number)
   }
+}
 
-  // ---- Tone curve --------------------------------------------------------
-  const para = [
+function parseCurve(r: Reader, e: Edits): void {
+  const parametric = [
     ['ParametricHighlights', 'highlights'],
     ['ParametricLights', 'lights'],
     ['ParametricDarks', 'darks'],
     ['ParametricShadows', 'shadows'],
   ] as const
-  for (const [key, field] of para) {
+  for (const [key, field] of parametric) {
     if (r.mark(`curve.parametric.${field}`, key)) e.curve.parametric[field] = r.num(key)
   }
-  if (r.mark('curve.parametric.shadowSplit', 'ParametricShadowSplit'))
-    e.curve.parametric.shadowSplit = r.num('ParametricShadowSplit', 25) / 100
-  if (r.mark('curve.parametric.midtoneSplit', 'ParametricMidtoneSplit'))
-    e.curve.parametric.midtoneSplit = r.num('ParametricMidtoneSplit', 50) / 100
-  if (r.mark('curve.parametric.highlightSplit', 'ParametricHighlightSplit'))
-    e.curve.parametric.highlightSplit = r.num('ParametricHighlightSplit', 75) / 100
-
-  const channels = [
+  readNumbers(r, [
+    ['curve.parametric.shadowSplit', 'ParametricShadowSplit', 25, (v) => (e.curve.parametric.shadowSplit = v / 100)],
+    ['curve.parametric.midtoneSplit', 'ParametricMidtoneSplit', 50, (v) => (e.curve.parametric.midtoneSplit = v / 100)],
+    ['curve.parametric.highlightSplit', 'ParametricHighlightSplit', 75, (v) => (e.curve.parametric.highlightSplit = v / 100)],
+  ])
+  for (const [field, keys] of [
     ['rgb', ['ToneCurvePV2012', 'ToneCurve']],
     ['red', ['ToneCurvePV2012Red', 'ToneCurveRed']],
     ['green', ['ToneCurvePV2012Green', 'ToneCurveGreen']],
     ['blue', ['ToneCurvePV2012Blue', 'ToneCurveBlue']],
-  ] as const
-  for (const [field, keys] of channels) {
-    const pts = r.points(keys as unknown as string[])
-    if (pts) {
-      e.curve[field] = pts
+  ] as const) {
+    const points = r.points(keys as unknown as string[])
+    if (points) {
+      e.curve[field] = points
       r.claim(`curve.${field}`)
     }
   }
-  // A point curve that isn't a straight line means the user was working there.
   if (e.curve.rgb.length > 2 || e.curve.rgb.some((p) => Math.abs(p.x - p.y) > 1e-3)) {
     e.curve.mode = 'point'
     r.claim('curve.mode')
   }
-  const CURVE_MODES: CurveMode[] = [
-    'standard',
-    'weighted',
-    'filmLike',
-    'saturationAndValue',
-    'luminance',
-    'perceptual',
-  ]
   if (r.mark('curve.mode', 'esq:CurveEditMode')) {
-    const editMode = r.str('esq:CurveEditMode')
-    if (editMode === 'parametric' || editMode === 'point') e.curve.mode = editMode
+    const mode = r.str('esq:CurveEditMode')
+    if (mode === 'parametric' || mode === 'point') e.curve.mode = mode
   }
   if (r.mark('curve.rgbMode', 'esq:CurveMode')) {
     const mode = r.str('esq:CurveMode') as CurveMode
-    e.curve.rgbMode = CURVE_MODES.includes(mode) ? mode : 'standard'
+    const modes: CurveMode[] = ['standard', 'weighted', 'filmLike', 'saturationAndValue', 'luminance', 'perceptual']
+    e.curve.rgbMode = modes.includes(mode) ? mode : 'standard'
   }
+}
 
-  // ---- Colour mixer ------------------------------------------------------
+function parseColor(r: Reader, e: Edits): void {
   for (const band of COLOR_BANDS) {
-    const B = cap(band)
-    if (r.mark(`colorMixer.hue.${band}`, `HueAdjustment${B}`))
-      e.colorMixer.hue[band as ColorBand] = r.num(`HueAdjustment${B}`)
-    if (r.mark(`colorMixer.saturation.${band}`, `SaturationAdjustment${B}`))
-      e.colorMixer.saturation[band as ColorBand] = r.num(`SaturationAdjustment${B}`)
-    if (r.mark(`colorMixer.luminance.${band}`, `LuminanceAdjustment${B}`))
-      e.colorMixer.luminance[band as ColorBand] = r.num(`LuminanceAdjustment${B}`)
-    if (r.mark(`colorMixer.bw.${band}`, `GrayMixer${B}`))
-      e.colorMixer.bw[band as ColorBand] = r.num(`GrayMixer${B}`)
+    const name = cap(band)
+    readNumbers(r, [
+      [`colorMixer.hue.${band}`, `HueAdjustment${name}`, undefined, (v) => (e.colorMixer.hue[band as ColorBand] = v)],
+      [`colorMixer.saturation.${band}`, `SaturationAdjustment${name}`, undefined, (v) => (e.colorMixer.saturation[band as ColorBand] = v)],
+      [`colorMixer.luminance.${band}`, `LuminanceAdjustment${name}`, undefined, (v) => (e.colorMixer.luminance[band as ColorBand] = v)],
+      [`colorMixer.bw.${band}`, `GrayMixer${name}`, undefined, (v) => (e.colorMixer.bw[band as ColorBand] = v)],
+    ])
   }
-
-  // ---- Colour grading ----------------------------------------------------
-  const wheels = [
+  for (const [field, modern, legacy] of [
     ['shadows', 'ColorGradeShadow', 'SplitToningShadow'],
     ['midtones', 'ColorGradeMidtone', null],
     ['highlights', 'ColorGradeHighlight', 'SplitToningHighlight'],
     ['global', 'ColorGradeGlobal', null],
-  ] as const
-  for (const [field, modern, legacy] of wheels) {
-    const hueKeys = legacy ? [`${modern}Hue`, `${legacy}Hue`] : [`${modern}Hue`]
-    const satKeys = legacy ? [`${modern}Sat`, `${legacy}Saturation`] : [`${modern}Sat`]
-    if (r.mark(`colorGrading.${field}.hue`, hueKeys)) e.colorGrading[field].hue = r.num(hueKeys)
-    if (r.mark(`colorGrading.${field}.saturation`, satKeys))
-      e.colorGrading[field].saturation = r.num(satKeys)
-    if (r.mark(`colorGrading.${field}.luminance`, `${modern}Lum`))
-      e.colorGrading[field].luminance = r.num(`${modern}Lum`)
+  ] as const) {
+    const hue = legacy ? [`${modern}Hue`, `${legacy}Hue`] : [`${modern}Hue`]
+    const saturation = legacy ? [`${modern}Sat`, `${legacy}Saturation`] : [`${modern}Sat`]
+    readNumbers(r, [
+      [`colorGrading.${field}.hue`, hue, undefined, (v) => (e.colorGrading[field].hue = v)],
+      [`colorGrading.${field}.saturation`, saturation, undefined, (v) => (e.colorGrading[field].saturation = v)],
+      [`colorGrading.${field}.luminance`, `${modern}Lum`, undefined, (v) => (e.colorGrading[field].luminance = v)],
+    ])
   }
-  if (r.mark('colorGrading.blending', 'ColorGradeBlending'))
-    e.colorGrading.blending = r.num('ColorGradeBlending', 50)
-  if (r.mark('colorGrading.balance', ['ColorGradeGlobalBalance', 'SplitToningBalance']))
-    e.colorGrading.balance = r.num(['ColorGradeGlobalBalance', 'SplitToningBalance'])
+  readNumbers(r, [
+    ['colorGrading.blending', 'ColorGradeBlending', 50, (v) => (e.colorGrading.blending = v)],
+    ['colorGrading.balance', ['ColorGradeGlobalBalance', 'SplitToningBalance'], undefined, (v) => (e.colorGrading.balance = v)],
+  ])
+}
 
-  // ---- Detail ------------------------------------------------------------
-  if (r.mark('detail.sharpenAmount', 'Sharpness')) e.detail.sharpenAmount = r.num('Sharpness', 40)
-  if (r.mark('detail.sharpenRadius', 'SharpenRadius'))
-    e.detail.sharpenRadius = r.num('SharpenRadius', 1)
-  if (r.mark('detail.sharpenDetail', 'SharpenDetail'))
-    e.detail.sharpenDetail = r.num('SharpenDetail', 25)
-  if (r.mark('detail.sharpenMasking', 'SharpenEdgeMasking'))
-    e.detail.sharpenMasking = r.num('SharpenEdgeMasking')
-  if (r.mark('detail.luminanceNR', 'LuminanceSmoothing'))
-    e.detail.luminanceNR = r.num('LuminanceSmoothing')
-  if (r.mark('detail.luminanceNRDetail', 'LuminanceNoiseReductionDetail'))
-    e.detail.luminanceNRDetail = r.num('LuminanceNoiseReductionDetail', 50)
-  if (r.mark('detail.luminanceNRContrast', 'LuminanceNoiseReductionContrast'))
-    e.detail.luminanceNRContrast = r.num('LuminanceNoiseReductionContrast')
-  if (r.mark('detail.colorNR', 'ColorNoiseReduction'))
-    e.detail.colorNR = r.num('ColorNoiseReduction', 25)
-  if (r.mark('detail.colorNRDetail', 'ColorNoiseReductionDetail'))
-    e.detail.colorNRDetail = r.num('ColorNoiseReductionDetail', 50)
-  if (r.mark('detail.colorNRSmoothness', 'ColorNoiseReductionSmoothness'))
-    e.detail.colorNRSmoothness = r.num('ColorNoiseReductionSmoothness', 50)
-  if (r.mark('detail.impulseNR', 'esq:ImpulseNR')) e.detail.impulseNR = r.num('esq:ImpulseNR')
+function parseDetailEffects(r: Reader, e: Edits): void {
+  readNumbers(r, [
+    ['detail.sharpenAmount', 'Sharpness', 40, (v) => (e.detail.sharpenAmount = v)],
+    ['detail.sharpenRadius', 'SharpenRadius', 1, (v) => (e.detail.sharpenRadius = v)],
+    ['detail.sharpenDetail', 'SharpenDetail', 25, (v) => (e.detail.sharpenDetail = v)],
+    ['detail.sharpenMasking', 'SharpenEdgeMasking', undefined, (v) => (e.detail.sharpenMasking = v)],
+    ['detail.luminanceNR', 'LuminanceSmoothing', undefined, (v) => (e.detail.luminanceNR = v)],
+    ['detail.luminanceNRDetail', 'LuminanceNoiseReductionDetail', 50, (v) => (e.detail.luminanceNRDetail = v)],
+    ['detail.luminanceNRContrast', 'LuminanceNoiseReductionContrast', undefined, (v) => (e.detail.luminanceNRContrast = v)],
+    ['detail.colorNR', 'ColorNoiseReduction', 25, (v) => (e.detail.colorNR = v)],
+    ['detail.colorNRDetail', 'ColorNoiseReductionDetail', 50, (v) => (e.detail.colorNRDetail = v)],
+    ['detail.colorNRSmoothness', 'ColorNoiseReductionSmoothness', 50, (v) => (e.detail.colorNRSmoothness = v)],
+    ['detail.impulseNR', 'esq:ImpulseNR', undefined, (v) => (e.detail.impulseNR = v)],
+    ['effects.vignetteAmount', 'PostCropVignetteAmount', undefined, (v) => (e.effects.vignetteAmount = v)],
+    ['effects.vignetteMidpoint', 'PostCropVignetteMidpoint', 50, (v) => (e.effects.vignetteMidpoint = v)],
+    ['effects.vignetteRoundness', 'PostCropVignetteRoundness', undefined, (v) => (e.effects.vignetteRoundness = v)],
+    ['effects.vignetteFeather', 'PostCropVignetteFeather', 50, (v) => (e.effects.vignetteFeather = v)],
+    ['effects.vignetteHighlights', 'PostCropVignetteHighlightContrast', undefined, (v) => (e.effects.vignetteHighlights = v)],
+    ['effects.grainAmount', 'GrainAmount', undefined, (v) => (e.effects.grainAmount = v)],
+    ['effects.grainSize', 'GrainSize', 25, (v) => (e.effects.grainSize = v)],
+    ['effects.grainRoughness', 'GrainFrequency', 50, (v) => (e.effects.grainRoughness = v)],
+  ])
+}
 
-  // ---- Effects -----------------------------------------------------------
-  if (r.mark('effects.vignetteAmount', 'PostCropVignetteAmount'))
-    e.effects.vignetteAmount = r.num('PostCropVignetteAmount')
-  if (r.mark('effects.vignetteMidpoint', 'PostCropVignetteMidpoint'))
-    e.effects.vignetteMidpoint = r.num('PostCropVignetteMidpoint', 50)
-  if (r.mark('effects.vignetteRoundness', 'PostCropVignetteRoundness'))
-    e.effects.vignetteRoundness = r.num('PostCropVignetteRoundness')
-  if (r.mark('effects.vignetteFeather', 'PostCropVignetteFeather'))
-    e.effects.vignetteFeather = r.num('PostCropVignetteFeather', 50)
-  if (r.mark('effects.vignetteHighlights', 'PostCropVignetteHighlightContrast'))
-    e.effects.vignetteHighlights = r.num('PostCropVignetteHighlightContrast')
-  if (r.mark('effects.grainAmount', 'GrainAmount')) e.effects.grainAmount = r.num('GrainAmount')
-  if (r.mark('effects.grainSize', 'GrainSize')) e.effects.grainSize = r.num('GrainSize', 25)
-  if (r.mark('effects.grainRoughness', 'GrainFrequency'))
-    e.effects.grainRoughness = r.num('GrainFrequency', 50)
-
-  // ---- Calibration -------------------------------------------------------
-  const calib = [
-    ['ShadowTint', 'shadowTint'],
-    ['RedHue', 'redHue'],
-    ['RedSaturation', 'redSaturation'],
-    ['GreenHue', 'greenHue'],
-    ['GreenSaturation', 'greenSaturation'],
-    ['BlueHue', 'blueHue'],
-    ['BlueSaturation', 'blueSaturation'],
-  ] as const
-  for (const [key, field] of calib) {
-    if (r.mark(`calibration.${field}`, key)) e.calibration[field] = r.num(key)
-  }
-
-  // ---- Lens --------------------------------------------------------------
+function parseCalibrationLensTransform(r: Reader, e: Edits): void {
+  readNumbers(r, [
+    ['calibration.shadowTint', 'ShadowTint', undefined, (v) => (e.calibration.shadowTint = v)],
+    ['calibration.redHue', 'RedHue', undefined, (v) => (e.calibration.redHue = v)],
+    ['calibration.redSaturation', 'RedSaturation', undefined, (v) => (e.calibration.redSaturation = v)],
+    ['calibration.greenHue', 'GreenHue', undefined, (v) => (e.calibration.greenHue = v)],
+    ['calibration.greenSaturation', 'GreenSaturation', undefined, (v) => (e.calibration.greenSaturation = v)],
+    ['calibration.blueHue', 'BlueHue', undefined, (v) => (e.calibration.blueHue = v)],
+    ['calibration.blueSaturation', 'BlueSaturation', undefined, (v) => (e.calibration.blueSaturation = v)],
+    ['lens.distortion', 'LensManualDistortionAmount', undefined, (v) => (e.lens.distortion = v)],
+    ['lens.vignetting', 'VignetteAmount', undefined, (v) => (e.lens.vignetting = v)],
+    ['lens.caRed', 'ChromaticAberrationR', undefined, (v) => (e.lens.caRed = v)],
+    ['lens.caBlue', 'ChromaticAberrationB', undefined, (v) => (e.lens.caBlue = v)],
+    ['lens.defringePurpleAmount', 'DefringePurpleAmount', undefined, (v) => (e.lens.defringePurpleAmount = v)],
+    ['lens.defringePurpleHueLo', 'DefringePurpleHueLo', 30, (v) => (e.lens.defringePurpleHueLo = v)],
+    ['lens.defringePurpleHueHi', 'DefringePurpleHueHi', 70, (v) => (e.lens.defringePurpleHueHi = v)],
+    ['lens.defringeGreenAmount', 'DefringeGreenAmount', undefined, (v) => (e.lens.defringeGreenAmount = v)],
+    ['lens.defringeGreenHueLo', 'DefringeGreenHueLo', 40, (v) => (e.lens.defringeGreenHueLo = v)],
+    ['lens.defringeGreenHueHi', 'DefringeGreenHueHi', 60, (v) => (e.lens.defringeGreenHueHi = v)],
+    ['transform.vertical', 'PerspectiveVertical', undefined, (v) => (e.transform.vertical = v)],
+    ['transform.horizontal', 'PerspectiveHorizontal', undefined, (v) => (e.transform.horizontal = v)],
+    ['transform.rotate', 'PerspectiveRotate', undefined, (v) => (e.transform.rotate = v)],
+    ['transform.aspect', 'PerspectiveAspect', undefined, (v) => (e.transform.aspect = v)],
+    ['transform.offsetX', 'PerspectiveX', undefined, (v) => (e.transform.offsetX = v)],
+    ['transform.offsetY', 'PerspectiveY', undefined, (v) => (e.transform.offsetY = v)],
+    ['transform.scale', 'PerspectiveScale', 100, (v) => (e.transform.scale = v)],
+  ])
   if (r.mark('lens.enableProfile', 'LensProfileEnable'))
     e.lens.enableProfile = r.num('LensProfileEnable') > 0
-  if (r.mark('lens.distortion', 'LensManualDistortionAmount'))
-    e.lens.distortion = r.num('LensManualDistortionAmount')
-  if (r.mark('lens.vignetting', 'VignetteAmount')) e.lens.vignetting = r.num('VignetteAmount')
-  if (r.mark('lens.caRed', 'ChromaticAberrationR')) e.lens.caRed = r.num('ChromaticAberrationR')
-  if (r.mark('lens.caBlue', 'ChromaticAberrationB')) e.lens.caBlue = r.num('ChromaticAberrationB')
-  if (r.mark('lens.defringePurpleAmount', 'DefringePurpleAmount'))
-    e.lens.defringePurpleAmount = r.num('DefringePurpleAmount')
-  if (r.mark('lens.defringePurpleHueLo', 'DefringePurpleHueLo'))
-    e.lens.defringePurpleHueLo = r.num('DefringePurpleHueLo', 30)
-  if (r.mark('lens.defringePurpleHueHi', 'DefringePurpleHueHi'))
-    e.lens.defringePurpleHueHi = r.num('DefringePurpleHueHi', 70)
-  if (r.mark('lens.defringeGreenAmount', 'DefringeGreenAmount'))
-    e.lens.defringeGreenAmount = r.num('DefringeGreenAmount')
-  if (r.mark('lens.defringeGreenHueLo', 'DefringeGreenHueLo'))
-    e.lens.defringeGreenHueLo = r.num('DefringeGreenHueLo', 40)
-  if (r.mark('lens.defringeGreenHueHi', 'DefringeGreenHueHi'))
-    e.lens.defringeGreenHueHi = r.num('DefringeGreenHueHi', 60)
+}
 
-  // ---- Transform ---------------------------------------------------------
-  const xform = [
-    ['PerspectiveVertical', 'vertical'],
-    ['PerspectiveHorizontal', 'horizontal'],
-    ['PerspectiveRotate', 'rotate'],
-    ['PerspectiveAspect', 'aspect'],
-    ['PerspectiveX', 'offsetX'],
-    ['PerspectiveY', 'offsetY'],
-  ] as const
-  for (const [key, field] of xform) {
-    if (r.mark(`transform.${field}`, key)) e.transform[field] = r.num(key)
-  }
-  if (r.mark('transform.scale', 'PerspectiveScale'))
-    e.transform.scale = r.num('PerspectiveScale', 100)
-
-  // ---- Crop --------------------------------------------------------------
+function parseCrop(r: Reader, e: Edits): void {
   if (r.bool('HasCrop')) {
-    for (const f of ['left', 'top', 'right', 'bottom', 'angle', 'aspect'] as const)
-      r.claim(`crop.${f}`)
+    for (const field of ['left', 'top', 'right', 'bottom', 'angle', 'aspect'] as const)
+      r.claim(`crop.${field}`)
     e.crop.left = r.num('CropLeft')
     e.crop.top = r.num('CropTop')
     e.crop.right = r.num('CropRight', 1)
@@ -471,68 +416,64 @@ export function parseXmp(xml: string): ParsedXmp | null {
     e.crop.quarterTurns = ((Math.round(r.num('esq:QuarterTurns')) % 4) + 4) % 4
   if (r.mark('crop.flipH', 'esq:FlipH')) e.crop.flipH = r.num('esq:FlipH') > 0
   if (r.mark('crop.flipV', 'esq:FlipV')) e.crop.flipV = r.num('esq:FlipV') > 0
+}
 
-  // ---- Masks -------------------------------------------------------------
-  const masksJson = r.str('esq:Masks')
-  if (masksJson && r.mark('masks', 'esq:Masks')) {
-    try {
-      const parsed = JSON.parse(masksJson)
-      if (Array.isArray(parsed)) e.masks = parsed.map(normaliseMask).filter(Boolean) as Mask[]
-    } catch {
-      // A corrupt sidecar should cost you the masks, not the whole develop
-      // state, so this is swallowed on purpose.
-    }
+function parseJsonList<T>(
+  r: Reader,
+  path: string,
+  key: string,
+  normalise: (raw: unknown) => T | null,
+  set: (items: T[]) => void,
+): void {
+  const raw = r.str(key)
+  if (!raw || !r.mark(path, key)) return
+  try {
+    const parsed = JSON.parse(raw)
+    if (Array.isArray(parsed)) set(parsed.map(normalise).filter((item): item is T => item !== null))
+  } catch {
+    // Corrupt local-adjustment data must not discard the rest of a sidecar.
   }
+}
 
-  // ---- Retouching --------------------------------------------------------
-  const spotsJson = r.str('esq:Spots')
-  if (spotsJson && r.mark('spots', 'esq:Spots')) {
-    try {
-      const parsed = JSON.parse(spotsJson)
-      if (Array.isArray(parsed)) e.spots = parsed.map(normaliseSpot).filter(Boolean) as SpotEdit[]
-    } catch {
-      // Same reasoning as the masks: a bad blob costs the spots, nothing else.
-    }
-  }
-  const eyesJson = r.str('esq:RedEye')
-  if (eyesJson && r.mark('redEye', 'esq:RedEye')) {
-    try {
-      const parsed = JSON.parse(eyesJson)
-      if (Array.isArray(parsed)) e.redEye = parsed.map(normaliseEye).filter(Boolean) as RedEyeEdit[]
-    } catch {
-      /* ignored */
-    }
-  }
+function parseLocalAdjustments(r: Reader, e: Edits): void {
+  parseJsonList(r, 'masks', 'esq:Masks', normaliseMask, (items) => (e.masks = items))
+  parseJsonList(r, 'spots', 'esq:Spots', normaliseSpot, (items) => (e.spots = items))
+  parseJsonList(r, 'redEye', 'esq:RedEye', normaliseEye, (items) => (e.redEye = items))
+}
 
-  // ---- Identity ----------------------------------------------------------
-  const name =
-    doc.querySelector('crs\\:Name rdf\\:li')?.textContent?.trim() || r.str('Name') || ''
+export function parseXmp(xml: string): ParsedXmp | null {
+  const doc = new DOMParser().parseFromString(xml, 'application/xml')
+  if (doc.getElementsByTagName('parsererror').length) return null
+
+  const bag = crsBag(doc)
+  if (!bag.size) return null
+  const r = reader(bag)
+  const edits = defaultEdits()
+  parseBasic(r, edits)
+  parseProfile(r, edits)
+  parseTone(r, edits)
+  parseCurve(r, edits)
+  parseColor(r, edits)
+  parseDetailEffects(r, edits)
+  parseCalibrationLensTransform(r, edits)
+  parseCrop(r, edits)
+  parseLocalAdjustments(r, edits)
+
+  const name = doc.querySelector('crs\\:Name rdf\\:li')?.textContent?.trim() || r.str('Name') || ''
   const group =
     doc.querySelector('crs\\:Group rdf\\:li')?.textContent?.trim() ||
     r.str('Group') ||
     r.str('Cluster') ||
     ''
-
-  // `crs:RawFileName` names the file the settings belong to, which a preset
-  // never has. Lightroom writes `HasSettings="True"` into a developed photo's
-  // sidecar as well as into presets, so treating that flag as decisive read
-  // every edited photo's sidecar as a preset the user could apply elsewhere.
-  const isSidecar = bag.has('RawFileName')
-  const isPreset =
-    !isSidecar && (r.str('PresetType') !== '' || r.bool('HasSettings') || !!name)
-
   const paths = [...r.touched]
-  // An XMP file is written once and read for years, so it carries the edit
-  // version it was written under. Absent means it predates the field, which is
-  // v1 — the same rule the catalogue upgrade uses.
   const editVersion = Math.max(1, Math.round(r.num('esq:EditVersion'))) || 1
   return {
     name,
     group,
-    edits: migratePartialEdits(e, editVersion) as Edits,
+    edits: migratePartialEdits(edits, editVersion) as Edits,
     sections: [...new Set(paths.map(sectionOfPath))],
     paths,
-    isPreset,
+    isPreset: !bag.has('RawFileName') && (r.str('PresetType') !== '' || r.bool('HasSettings') || !!name),
     supportsAmount: r.bool('SupportsAmount'),
   }
 }
@@ -675,231 +616,158 @@ const WB_OUT: Record<WhiteBalanceMode, string> = {
  * would hand back a preset that once again resets your white balance — the
  * exact failure the field-level model exists to prevent.
  */
-function crsAttributes(e: Edits, sections: EditSection[], only?: string[] | null): string[] {
-  const want = new Set(sections)
-  const allow = only?.length ? new Set(only) : null
-  const out: string[] = [
+type PutAttribute = (path: string, ...attributes: string[]) => void
+
+interface AttributeWriter {
+  out: string[]
+  put: PutAttribute
+  wants(path: string): boolean
+}
+
+function attributeWriter(sections: EditSection[], only?: string[] | null): AttributeWriter {
+  const wanted = new Set(sections)
+  const allowed = only?.length ? new Set(only) : null
+  const out = [
     'crs:Version="15.0"',
     'crs:ProcessVersion="11.0"',
     `esq:EditVersion="${EDITS_VERSION}"`,
   ]
+  const wants = (path: string) => wanted.has(sectionOfPath(path)) && (!allowed || allowed.has(path))
+  return { out, wants, put: (path, ...attributes) => { if (wants(path)) out.push(...attributes) } }
+}
 
-  /** Emits `attr` when its field is in scope. */
-  const put = (path: string, ...attrs: string[]) => {
-    if (!want.has(sectionOfPath(path))) return
-    if (allow && !allow.has(path)) return
-    out.push(...attrs)
-  }
-  const wants = (path: string) =>
-    want.has(sectionOfPath(path)) && (!allow || allow.has(path))
+function writeBasicAttributes(e: Edits, put: PutAttribute): void {
+  const b = e.basic
+  put('profile', `crs:CameraProfile="${xmlAttr(cameraProfile(e.profile).name)}"`, `esq:Profile="${xmlAttr(e.profile)}"`)
+  put('basic.wbMode', `crs:WhiteBalance="${WB_OUT[b.wbMode]}"`)
+  for (const [path, attribute] of [
+    ['basic.temp', `crs:Temperature="${int(b.temp)}"`], ['basic.tint', `crs:Tint="${int(b.tint)}"`],
+    ['basic.exposure', `crs:Exposure2012="${n(b.exposure, 2)}"`], ['basic.contrast', `crs:Contrast2012="${int(b.contrast)}"`],
+    ['basic.highlights', `crs:Highlights2012="${int(b.highlights)}"`], ['basic.shadows', `crs:Shadows2012="${int(b.shadows)}"`],
+    ['basic.whites', `crs:Whites2012="${int(b.whites)}"`], ['basic.blacks', `crs:Blacks2012="${int(b.blacks)}"`],
+    ['basic.texture', `crs:Texture="${int(b.texture)}"`], ['basic.clarity', `crs:Clarity2012="${int(b.clarity)}"`],
+    ['basic.dehaze', `crs:Dehaze="${int(b.dehaze)}"`], ['basic.vibrance', `crs:Vibrance="${int(b.vibrance)}"`],
+    ['basic.saturation', `crs:Saturation="${int(b.saturation)}"`],
+    ['basic.treatment', `crs:ConvertToGrayscale="${b.treatment === 'bw' ? 'True' : 'False'}"`],
+    ['basic.protectSkin', `esq:ProtectSkin="${b.protectSkin ? 'True' : 'False'}"`],
+    ['basic.avoidColorShift', `esq:AvoidColorShift="${b.avoidColorShift ? 'True' : 'False'}"`],
+  ] as const) put(path, attribute)
+}
 
-  // `crs:CameraProfile` is the field Lightroom itself uses, so a sidecar
-  // written here names the rendering in a way Camera Raw understands even
-  // though it won't have our curve.
-  put(
-    'profile',
-    `crs:CameraProfile="${xmlAttr(cameraProfile(e.profile).name)}"`,
-    `esq:Profile="${xmlAttr(e.profile)}"`,
-  )
-
-  put('basic.wbMode', `crs:WhiteBalance="${WB_OUT[e.basic.wbMode]}"`)
-  put('basic.temp', `crs:Temperature="${int(e.basic.temp)}"`)
-  put('basic.tint', `crs:Tint="${int(e.basic.tint)}"`)
-  put('basic.exposure', `crs:Exposure2012="${n(e.basic.exposure, 2)}"`)
-  put('basic.contrast', `crs:Contrast2012="${int(e.basic.contrast)}"`)
-  put('basic.highlights', `crs:Highlights2012="${int(e.basic.highlights)}"`)
-  put('basic.shadows', `crs:Shadows2012="${int(e.basic.shadows)}"`)
-  put('basic.whites', `crs:Whites2012="${int(e.basic.whites)}"`)
-  put('basic.blacks', `crs:Blacks2012="${int(e.basic.blacks)}"`)
-  put('basic.texture', `crs:Texture="${int(e.basic.texture)}"`)
-  put('basic.clarity', `crs:Clarity2012="${int(e.basic.clarity)}"`)
-  put('basic.dehaze', `crs:Dehaze="${int(e.basic.dehaze)}"`)
-  put('basic.vibrance', `crs:Vibrance="${int(e.basic.vibrance)}"`)
-  put('basic.saturation', `crs:Saturation="${int(e.basic.saturation)}"`)
-  put(
-    'basic.treatment',
-    `crs:ConvertToGrayscale="${e.basic.treatment === 'bw' ? 'True' : 'False'}"`,
-  )
-  put('basic.protectSkin', `esq:ProtectSkin="${e.basic.protectSkin ? 'True' : 'False'}"`)
-  put(
-    'basic.avoidColorShift',
-    `esq:AvoidColorShift="${e.basic.avoidColorShift ? 'True' : 'False'}"`,
-  )
-
+function writeToneAttributes(e: Edits, put: PutAttribute): void {
   const t = e.tone
-  put('tone.recovery', `esq:HighlightRecovery="${t.recovery}"`)
-  put('tone.recoveryThreshold', `esq:RecoveryThreshold="${int(t.recoveryThreshold)}"`)
-  put('tone.shHighlights', `esq:SHHighlights="${int(t.shHighlights)}"`)
-  put('tone.shShadows', `esq:SHShadows="${int(t.shShadows)}"`)
-  put('tone.shRadius', `esq:SHRadius="${int(t.shRadius)}"`)
-  put('tone.shTonalWidth', `esq:SHTonalWidth="${int(t.shTonalWidth)}"`)
-  put('tone.drcAmount', `esq:DRCAmount="${int(t.drcAmount)}"`)
-  put('tone.drcDetail', `esq:DRCDetail="${int(t.drcDetail)}"`)
-  put('tone.detailFinest', `esq:DetailFinest="${int(t.detailFinest)}"`)
-  put('tone.detailFine', `esq:DetailFine="${int(t.detailFine)}"`)
-  put('tone.detailCoarse', `esq:DetailCoarse="${int(t.detailCoarse)}"`)
-  put('tone.detailCoarsest', `esq:DetailCoarsest="${int(t.detailCoarsest)}"`)
-  put('tone.detailThreshold', `esq:DetailThreshold="${int(t.detailThreshold)}"`)
+  for (const [path, attribute] of [
+    ['tone.recovery', `esq:HighlightRecovery="${t.recovery}"`], ['tone.recoveryThreshold', `esq:RecoveryThreshold="${int(t.recoveryThreshold)}"`],
+    ['tone.shHighlights', `esq:SHHighlights="${int(t.shHighlights)}"`], ['tone.shShadows', `esq:SHShadows="${int(t.shShadows)}"`],
+    ['tone.shRadius', `esq:SHRadius="${int(t.shRadius)}"`], ['tone.shTonalWidth', `esq:SHTonalWidth="${int(t.shTonalWidth)}"`],
+    ['tone.drcAmount', `esq:DRCAmount="${int(t.drcAmount)}"`], ['tone.drcDetail', `esq:DRCDetail="${int(t.drcDetail)}"`],
+    ['tone.detailFinest', `esq:DetailFinest="${int(t.detailFinest)}"`], ['tone.detailFine', `esq:DetailFine="${int(t.detailFine)}"`],
+    ['tone.detailCoarse', `esq:DetailCoarse="${int(t.detailCoarse)}"`], ['tone.detailCoarsest', `esq:DetailCoarsest="${int(t.detailCoarsest)}"`],
+    ['tone.detailThreshold', `esq:DetailThreshold="${int(t.detailThreshold)}"`],
+  ] as const) put(path, attribute)
+}
 
+function writeCurveAttributes(e: Edits, put: PutAttribute): void {
   const p = e.curve.parametric
-  put('curve.parametric.shadows', `crs:ParametricShadows="${int(p.shadows)}"`)
-  put('curve.parametric.darks', `crs:ParametricDarks="${int(p.darks)}"`)
-  put('curve.parametric.lights', `crs:ParametricLights="${int(p.lights)}"`)
-  put('curve.parametric.highlights', `crs:ParametricHighlights="${int(p.highlights)}"`)
-  put(
-    'curve.parametric.shadowSplit',
-    `crs:ParametricShadowSplit="${int(p.shadowSplit * 100)}"`,
-  )
-  put(
-    'curve.parametric.midtoneSplit',
-    `crs:ParametricMidtoneSplit="${int(p.midtoneSplit * 100)}"`,
-  )
-  put(
-    'curve.parametric.highlightSplit',
-    `crs:ParametricHighlightSplit="${int(p.highlightSplit * 100)}"`,
-  )
-  put('curve.rgbMode', `esq:CurveMode="${e.curve.rgbMode}"`)
-  put('curve.mode', `esq:CurveEditMode="${e.curve.mode}"`)
+  for (const [path, attribute] of [
+    ['curve.parametric.shadows', `crs:ParametricShadows="${int(p.shadows)}"`], ['curve.parametric.darks', `crs:ParametricDarks="${int(p.darks)}"`],
+    ['curve.parametric.lights', `crs:ParametricLights="${int(p.lights)}"`], ['curve.parametric.highlights', `crs:ParametricHighlights="${int(p.highlights)}"`],
+    ['curve.parametric.shadowSplit', `crs:ParametricShadowSplit="${int(p.shadowSplit * 100)}"`],
+    ['curve.parametric.midtoneSplit', `crs:ParametricMidtoneSplit="${int(p.midtoneSplit * 100)}"`],
+    ['curve.parametric.highlightSplit', `crs:ParametricHighlightSplit="${int(p.highlightSplit * 100)}"`],
+    ['curve.rgbMode', `esq:CurveMode="${e.curve.rgbMode}"`], ['curve.mode', `esq:CurveEditMode="${e.curve.mode}"`],
+  ] as const) put(path, attribute)
+}
 
+function writeColorAttributes(e: Edits, put: PutAttribute): void {
   for (const band of COLOR_BANDS) {
-    const B = cap(band)
-    put(`colorMixer.hue.${band}`, `crs:HueAdjustment${B}="${int(e.colorMixer.hue[band])}"`)
-    put(
-      `colorMixer.saturation.${band}`,
-      `crs:SaturationAdjustment${B}="${int(e.colorMixer.saturation[band])}"`,
-    )
-    put(
-      `colorMixer.luminance.${band}`,
-      `crs:LuminanceAdjustment${B}="${int(e.colorMixer.luminance[band])}"`,
-    )
-    put(`colorMixer.bw.${band}`, `crs:GrayMixer${B}="${int(e.colorMixer.bw[band])}"`)
+    const name = cap(band)
+    put(`colorMixer.hue.${band}`, `crs:HueAdjustment${name}="${int(e.colorMixer.hue[band])}"`)
+    put(`colorMixer.saturation.${band}`, `crs:SaturationAdjustment${name}="${int(e.colorMixer.saturation[band])}"`)
+    put(`colorMixer.luminance.${band}`, `crs:LuminanceAdjustment${name}="${int(e.colorMixer.luminance[band])}"`)
+    put(`colorMixer.bw.${band}`, `crs:GrayMixer${name}="${int(e.colorMixer.bw[band])}"`)
   }
-
-  const g = e.colorGrading
-  for (const [field, name] of [
-    ['shadows', 'Shadow'],
-    ['midtones', 'Midtone'],
-    ['highlights', 'Highlight'],
-    ['global', 'Global'],
-  ] as const) {
-    put(`colorGrading.${field}.hue`, `crs:ColorGrade${name}Hue="${int(g[field].hue)}"`)
-    put(
-      `colorGrading.${field}.saturation`,
-      `crs:ColorGrade${name}Sat="${int(g[field].saturation)}"`,
-    )
-    put(
-      `colorGrading.${field}.luminance`,
-      `crs:ColorGrade${name}Lum="${int(g[field].luminance)}"`,
-    )
+  for (const [field, name] of [['shadows', 'Shadow'], ['midtones', 'Midtone'], ['highlights', 'Highlight'], ['global', 'Global']] as const) {
+    put(`colorGrading.${field}.hue`, `crs:ColorGrade${name}Hue="${int(e.colorGrading[field].hue)}"`)
+    put(`colorGrading.${field}.saturation`, `crs:ColorGrade${name}Sat="${int(e.colorGrading[field].saturation)}"`)
+    put(`colorGrading.${field}.luminance`, `crs:ColorGrade${name}Lum="${int(e.colorGrading[field].luminance)}"`)
   }
-  put('colorGrading.blending', `crs:ColorGradeBlending="${int(g.blending)}"`)
-  put('colorGrading.balance', `crs:SplitToningBalance="${int(g.balance)}"`)
+  put('colorGrading.blending', `crs:ColorGradeBlending="${int(e.colorGrading.blending)}"`)
+  put('colorGrading.balance', `crs:SplitToningBalance="${int(e.colorGrading.balance)}"`)
+}
 
+function writeDetailEffectsAttributes(e: Edits, put: PutAttribute): void {
   const d = e.detail
-  put('detail.sharpenAmount', `crs:Sharpness="${int(d.sharpenAmount)}"`)
-  put('detail.sharpenRadius', `crs:SharpenRadius="${d.sharpenRadius.toFixed(1)}"`)
-  put('detail.sharpenDetail', `crs:SharpenDetail="${int(d.sharpenDetail)}"`)
-  put('detail.sharpenMasking', `crs:SharpenEdgeMasking="${int(d.sharpenMasking)}"`)
-  put('detail.luminanceNR', `crs:LuminanceSmoothing="${int(d.luminanceNR)}"`)
-  put(
-    'detail.luminanceNRDetail',
-    `crs:LuminanceNoiseReductionDetail="${int(d.luminanceNRDetail)}"`,
-  )
-  put(
-    'detail.luminanceNRContrast',
-    `crs:LuminanceNoiseReductionContrast="${int(d.luminanceNRContrast)}"`,
-  )
-  put('detail.colorNR', `crs:ColorNoiseReduction="${int(d.colorNR)}"`)
-  put('detail.colorNRDetail', `crs:ColorNoiseReductionDetail="${int(d.colorNRDetail)}"`)
-  put(
-    'detail.colorNRSmoothness',
-    `crs:ColorNoiseReductionSmoothness="${int(d.colorNRSmoothness)}"`,
-  )
-  put('detail.impulseNR', `esq:ImpulseNR="${int(d.impulseNR)}"`)
-
   const f = e.effects
-  put(
-    'effects.vignetteAmount',
-    `crs:PostCropVignetteAmount="${int(f.vignetteAmount)}"`,
-    `crs:PostCropVignetteStyle="1"`,
-  )
-  put('effects.vignetteMidpoint', `crs:PostCropVignetteMidpoint="${int(f.vignetteMidpoint)}"`)
-  put('effects.vignetteFeather', `crs:PostCropVignetteFeather="${int(f.vignetteFeather)}"`)
-  put('effects.vignetteRoundness', `crs:PostCropVignetteRoundness="${int(f.vignetteRoundness)}"`)
-  put(
-    'effects.vignetteHighlights',
-    `crs:PostCropVignetteHighlightContrast="${int(f.vignetteHighlights)}"`,
-  )
-  put('effects.grainAmount', `crs:GrainAmount="${int(f.grainAmount)}"`)
-  put('effects.grainSize', `crs:GrainSize="${int(f.grainSize)}"`)
-  put('effects.grainRoughness', `crs:GrainFrequency="${int(f.grainRoughness)}"`)
+  for (const [path, attribute] of [
+    ['detail.sharpenAmount', `crs:Sharpness="${int(d.sharpenAmount)}"`], ['detail.sharpenRadius', `crs:SharpenRadius="${d.sharpenRadius.toFixed(1)}"`],
+    ['detail.sharpenDetail', `crs:SharpenDetail="${int(d.sharpenDetail)}"`], ['detail.sharpenMasking', `crs:SharpenEdgeMasking="${int(d.sharpenMasking)}"`],
+    ['detail.luminanceNR', `crs:LuminanceSmoothing="${int(d.luminanceNR)}"`], ['detail.luminanceNRDetail', `crs:LuminanceNoiseReductionDetail="${int(d.luminanceNRDetail)}"`],
+    ['detail.luminanceNRContrast', `crs:LuminanceNoiseReductionContrast="${int(d.luminanceNRContrast)}"`], ['detail.colorNR', `crs:ColorNoiseReduction="${int(d.colorNR)}"`],
+    ['detail.colorNRDetail', `crs:ColorNoiseReductionDetail="${int(d.colorNRDetail)}"`], ['detail.colorNRSmoothness', `crs:ColorNoiseReductionSmoothness="${int(d.colorNRSmoothness)}"`],
+    ['detail.impulseNR', `esq:ImpulseNR="${int(d.impulseNR)}"`],
+  ] as const) put(path, attribute)
+  put('effects.vignetteAmount', `crs:PostCropVignetteAmount="${int(f.vignetteAmount)}"`, 'crs:PostCropVignetteStyle="1"')
+  for (const [path, attribute] of [
+    ['effects.vignetteMidpoint', `crs:PostCropVignetteMidpoint="${int(f.vignetteMidpoint)}"`], ['effects.vignetteFeather', `crs:PostCropVignetteFeather="${int(f.vignetteFeather)}"`],
+    ['effects.vignetteRoundness', `crs:PostCropVignetteRoundness="${int(f.vignetteRoundness)}"`], ['effects.vignetteHighlights', `crs:PostCropVignetteHighlightContrast="${int(f.vignetteHighlights)}"`],
+    ['effects.grainAmount', `crs:GrainAmount="${int(f.grainAmount)}"`], ['effects.grainSize', `crs:GrainSize="${int(f.grainSize)}"`],
+    ['effects.grainRoughness', `crs:GrainFrequency="${int(f.grainRoughness)}"`],
+  ] as const) put(path, attribute)
+}
 
+function writeCalibrationLensTransformAttributes(e: Edits, put: PutAttribute): void {
   const cal = e.calibration
-  put('calibration.shadowTint', `crs:ShadowTint="${int(cal.shadowTint)}"`)
-  put('calibration.redHue', `crs:RedHue="${int(cal.redHue)}"`)
-  put('calibration.redSaturation', `crs:RedSaturation="${int(cal.redSaturation)}"`)
-  put('calibration.greenHue', `crs:GreenHue="${int(cal.greenHue)}"`)
-  put('calibration.greenSaturation', `crs:GreenSaturation="${int(cal.greenSaturation)}"`)
-  put('calibration.blueHue', `crs:BlueHue="${int(cal.blueHue)}"`)
-  put('calibration.blueSaturation', `crs:BlueSaturation="${int(cal.blueSaturation)}"`)
-
   const l = e.lens
-  put('lens.enableProfile', `crs:LensProfileEnable="${l.enableProfile ? 1 : 0}"`)
-  put('lens.distortion', `crs:LensManualDistortionAmount="${int(l.distortion)}"`)
-  put('lens.vignetting', `crs:VignetteAmount="${int(l.vignetting)}"`)
-  put('lens.caRed', `crs:ChromaticAberrationR="${int(l.caRed)}"`)
-  put('lens.caBlue', `crs:ChromaticAberrationB="${int(l.caBlue)}"`)
-  put('lens.defringePurpleAmount', `crs:DefringePurpleAmount="${int(l.defringePurpleAmount)}"`)
-  put('lens.defringePurpleHueLo', `crs:DefringePurpleHueLo="${int(l.defringePurpleHueLo)}"`)
-  put('lens.defringePurpleHueHi', `crs:DefringePurpleHueHi="${int(l.defringePurpleHueHi)}"`)
-  put('lens.defringeGreenAmount', `crs:DefringeGreenAmount="${int(l.defringeGreenAmount)}"`)
-  put('lens.defringeGreenHueLo', `crs:DefringeGreenHueLo="${int(l.defringeGreenHueLo)}"`)
-  put('lens.defringeGreenHueHi', `crs:DefringeGreenHueHi="${int(l.defringeGreenHueHi)}"`)
-
   const x = e.transform
-  put('transform.vertical', `crs:PerspectiveVertical="${int(x.vertical)}"`)
-  put('transform.horizontal', `crs:PerspectiveHorizontal="${int(x.horizontal)}"`)
-  put('transform.rotate', `crs:PerspectiveRotate="${x.rotate.toFixed(1)}"`)
-  put('transform.aspect', `crs:PerspectiveAspect="${int(x.aspect)}"`)
-  put('transform.scale', `crs:PerspectiveScale="${int(x.scale)}"`)
-  put('transform.offsetX', `crs:PerspectiveX="${x.offsetX.toFixed(1)}"`)
-  put('transform.offsetY', `crs:PerspectiveY="${x.offsetY.toFixed(1)}"`)
+  for (const [path, attribute] of [
+    ['calibration.shadowTint', `crs:ShadowTint="${int(cal.shadowTint)}"`], ['calibration.redHue', `crs:RedHue="${int(cal.redHue)}"`],
+    ['calibration.redSaturation', `crs:RedSaturation="${int(cal.redSaturation)}"`], ['calibration.greenHue', `crs:GreenHue="${int(cal.greenHue)}"`],
+    ['calibration.greenSaturation', `crs:GreenSaturation="${int(cal.greenSaturation)}"`], ['calibration.blueHue', `crs:BlueHue="${int(cal.blueHue)}"`],
+    ['calibration.blueSaturation', `crs:BlueSaturation="${int(cal.blueSaturation)}"`], ['lens.enableProfile', `crs:LensProfileEnable="${l.enableProfile ? 1 : 0}"`],
+    ['lens.distortion', `crs:LensManualDistortionAmount="${int(l.distortion)}"`], ['lens.vignetting', `crs:VignetteAmount="${int(l.vignetting)}"`],
+    ['lens.caRed', `crs:ChromaticAberrationR="${int(l.caRed)}"`], ['lens.caBlue', `crs:ChromaticAberrationB="${int(l.caBlue)}"`],
+    ['lens.defringePurpleAmount', `crs:DefringePurpleAmount="${int(l.defringePurpleAmount)}"`], ['lens.defringePurpleHueLo', `crs:DefringePurpleHueLo="${int(l.defringePurpleHueLo)}"`],
+    ['lens.defringePurpleHueHi', `crs:DefringePurpleHueHi="${int(l.defringePurpleHueHi)}"`], ['lens.defringeGreenAmount', `crs:DefringeGreenAmount="${int(l.defringeGreenAmount)}"`],
+    ['lens.defringeGreenHueLo', `crs:DefringeGreenHueLo="${int(l.defringeGreenHueLo)}"`], ['lens.defringeGreenHueHi', `crs:DefringeGreenHueHi="${int(l.defringeGreenHueHi)}"`],
+    ['transform.vertical', `crs:PerspectiveVertical="${int(x.vertical)}"`], ['transform.horizontal', `crs:PerspectiveHorizontal="${int(x.horizontal)}"`],
+    ['transform.rotate', `crs:PerspectiveRotate="${x.rotate.toFixed(1)}"`], ['transform.aspect', `crs:PerspectiveAspect="${int(x.aspect)}"`],
+    ['transform.scale', `crs:PerspectiveScale="${int(x.scale)}"`], ['transform.offsetX', `crs:PerspectiveX="${x.offsetX.toFixed(1)}"`],
+    ['transform.offsetY', `crs:PerspectiveY="${x.offsetY.toFixed(1)}"`],
+  ] as const) put(path, attribute)
+}
 
-  // The crop rectangle is one value in four numbers — `crs:HasCrop` gates the
-  // rest of it, so the group travels together or not at all.
+function writeCropAttributes(e: Edits, writer: AttributeWriter): void {
   const c = e.crop
-  if (['left', 'top', 'right', 'bottom', 'angle'].some((k) => wants(`crop.${k}`))) {
-    const cropped =
-      c.left > 0 || c.top > 0 || c.right < 1 || c.bottom < 1 || Math.abs(c.angle) > 1e-4
-    out.push(`crs:HasCrop="${cropped ? 'True' : 'False'}"`)
-    if (cropped) {
-      out.push(
-        `crs:CropTop="${c.top.toFixed(6)}"`,
-        `crs:CropLeft="${c.left.toFixed(6)}"`,
-        `crs:CropBottom="${c.bottom.toFixed(6)}"`,
-        `crs:CropRight="${c.right.toFixed(6)}"`,
-        `crs:CropAngle="${c.angle.toFixed(4)}"`,
-        `crs:CropConstrainToWarp="0"`,
-      )
-    }
+  if (['left', 'top', 'right', 'bottom', 'angle'].some((field) => writer.wants(`crop.${field}`))) {
+    const cropped = c.left > 0 || c.top > 0 || c.right < 1 || c.bottom < 1 || Math.abs(c.angle) > 1e-4
+    writer.out.push(`crs:HasCrop="${cropped ? 'True' : 'False'}"`)
+    if (cropped) writer.out.push(`crs:CropTop="${c.top.toFixed(6)}"`, `crs:CropLeft="${c.left.toFixed(6)}"`, `crs:CropBottom="${c.bottom.toFixed(6)}"`, `crs:CropRight="${c.right.toFixed(6)}"`, `crs:CropAngle="${c.angle.toFixed(4)}"`, 'crs:CropConstrainToWarp="0"')
   }
-  // Adobe stores the orientation in tiff:Orientation and has no key at all
-  // for the chosen aspect preset, so the framing lives in our namespace.
-  put('crop.aspect', `esq:CropAspect="${c.aspect}"`)
-  put('crop.aspectLocked', `esq:CropAspectLocked="${c.aspectLocked ? 1 : 0}"`)
-  put('crop.quarterTurns', `esq:QuarterTurns="${c.quarterTurns}"`)
-  put('crop.flipH', `esq:FlipH="${c.flipH ? 1 : 0}"`)
-  put('crop.flipV', `esq:FlipV="${c.flipV ? 1 : 0}"`)
+  writer.put('crop.aspect', `esq:CropAspect="${c.aspect}"`)
+  writer.put('crop.aspectLocked', `esq:CropAspectLocked="${c.aspectLocked ? 1 : 0}"`)
+  writer.put('crop.quarterTurns', `esq:QuarterTurns="${c.quarterTurns}"`)
+  writer.put('crop.flipH', `esq:FlipH="${c.flipH ? 1 : 0}"`)
+  writer.put('crop.flipV', `esq:FlipV="${c.flipV ? 1 : 0}"`)
+}
 
-  // Adobe's MaskGroupBasedCorrections is a deep rdf:Seq of per-mask structs
-  // with no room for our extra shapes, so the whole list goes out as one JSON
-  // blob. Lightroom ignores it; we round-trip it exactly. Same pragmatic
-  // answer for RetouchAreas.
+function writeLocalAdjustmentAttributes(e: Edits, put: PutAttribute): void {
   if (e.masks.length) put('masks', `esq:Masks="${xmlAttr(JSON.stringify(e.masks))}"`)
   if (e.spots.length) put('spots', `esq:Spots="${xmlAttr(JSON.stringify(e.spots))}"`)
   if (e.redEye.length) put('redEye', `esq:RedEye="${xmlAttr(JSON.stringify(e.redEye))}"`)
+}
 
-  return out
+function crsAttributes(e: Edits, sections: EditSection[], only?: string[] | null): string[] {
+  const writer = attributeWriter(sections, only)
+  writeBasicAttributes(e, writer.put)
+  writeToneAttributes(e, writer.put)
+  writeCurveAttributes(e, writer.put)
+  writeColorAttributes(e, writer.put)
+  writeDetailEffectsAttributes(e, writer.put)
+  writeCalibrationLensTransformAttributes(e, writer.put)
+  writeCropAttributes(e, writer)
+  writeLocalAdjustmentAttributes(e, writer.put)
+  return writer.out
 }
 
 /**

@@ -1,4 +1,13 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+  type RefObject,
+} from 'react'
 import { Renderer, type Rect, type MaskOverlay as RendererMaskOverlay } from '../../gpu/renderer'
 import { geometryOutputSize, uncrop, ungeometry } from '../../gpu/geometry'
 import { loadPreview, loadProxy, peekProxy, type Proxy } from '../../develop/proxy'
@@ -166,6 +175,153 @@ function layoutFor(
   return { before: rect, after: rect }
 }
 
+function useStoredCoverage(
+  edits: Edits,
+  previewEdits: Edits | null,
+  beforeMasks: Edits['masks'],
+  beforeAfter: BeforeAfter,
+) {
+  const keys = useMemo(() => [...new Set([
+    ...edits.masks,
+    ...(previewEdits?.masks ?? []),
+    ...(beforeAfter === 'off' ? [] : beforeMasks),
+  ].flatMap((mask) => mask.components.flatMap(({ geometry }) =>
+    isAiGeometry(geometry) && geometry.cacheKey ? [geometry.cacheKey] : [],
+  )))].sort(), [edits.masks, previewEdits?.masks, beforeMasks, beforeAfter])
+  const stored = useRef(keys)
+  const changed =
+    keys.length !== stored.current.length ||
+    keys.some((key, index) => key !== stored.current[index])
+  if (changed) stored.current = keys
+  return stored.current
+}
+
+function sourceSize(photo: Photo | null, proxy: Proxy | null) {
+  if (proxy) return { width: proxy.fullWidth, height: proxy.fullHeight }
+  if (photo) return { width: photo.width, height: photo.height }
+  return { width: 0, height: 0 }
+}
+
+function selectedMaskOverlay(
+  masking: boolean,
+  selectedMaskId: string | null,
+  mode: ReturnType<typeof useMasking.getState>['overlay'],
+): RendererMaskOverlay | null {
+  if (!masking || !selectedMaskId || mode === 'off') return null
+  return { maskId: selectedMaskId, mode }
+}
+
+function useStableImageSize(size: { width: number; height: number }) {
+  const stored = useRef(size)
+  if (stored.current.width !== size.width || stored.current.height !== size.height) {
+    stored.current = size
+  }
+  return stored.current
+}
+
+function ViewportOverlays({
+  comparing,
+  beforeAfter,
+  dropping,
+  cropping,
+  masking,
+  retouching,
+  photoBox,
+  compareSplit,
+}: {
+  comparing: boolean
+  beforeAfter: BeforeAfter
+  dropping: boolean
+  cropping: boolean
+  masking: boolean
+  retouching: boolean
+  photoBox: { x: number; y: number; width: number; height: number }
+  compareSplit: number
+}) {
+  return (
+    <>
+      {comparing && isPairedCompare(beforeAfter) && (
+        <div
+          aria-hidden
+          className="pointer-events-none absolute bg-hairline"
+          style={
+            beforeAfter === 'sideBySide'
+              ? { left: '50%', top: 0, bottom: 0, width: 1 }
+              : { top: '50%', left: 0, right: 0, height: 1 }
+          }
+        />
+      )}
+      {dropping && <WbDropperOverlay frame={photoBox} />}
+      {cropping && <CropOverlay frame={photoBox} />}
+      {masking && <MaskOverlay frame={photoBox} />}
+      {retouching && <RetouchOverlay frame={photoBox} />}
+      {comparing && isSplitCompare(beforeAfter) && <CompareDivider mode={beforeAfter} />}
+      {comparing && <CompareLabels mode={beforeAfter} split={compareSplit} />}
+    </>
+  )
+}
+
+function ViewportContents({
+  standIn,
+  previewUrl,
+  thumbUrl,
+  photoBox,
+  canvasRef,
+  hasProxy,
+  loading,
+  detailBusy,
+  photo,
+  error,
+  overlays,
+}: {
+  standIn: boolean
+  previewUrl: string | null
+  thumbUrl: string | null
+  photoBox: { x: number; y: number; width: number; height: number }
+  canvasRef: RefObject<HTMLCanvasElement | null>
+  hasProxy: boolean
+  loading: boolean
+  detailBusy: boolean
+  photo: Photo | null
+  error: string | null
+  overlays: ReactNode
+}) {
+  const source = previewUrl ?? thumbUrl
+  return (
+    <>
+      {standIn && source && (
+        <ResolvingImage
+          src={source}
+          alt=""
+          className="pointer-events-none"
+          imageClassName="object-contain"
+          style={{
+            position: 'absolute',
+            left: photoBox.x,
+            top: photoBox.y,
+            width: photoBox.width,
+            height: photoBox.height,
+          }}
+        />
+      )}
+      <canvas
+        ref={canvasRef}
+        className="absolute inset-0 h-full w-full transition-opacity duration-[--duration-base] ease-[--ease-out]"
+        style={{ opacity: hasProxy ? 1 : 0 }}
+      />
+      {(loading || detailBusy) && (
+        <StatusPill>{photo?.isRaw ? 'Developing RAW' : 'Decoding'}</StatusPill>
+      )}
+      {error && (
+        <div className="pointer-events-none absolute inset-0 grid place-items-center px-8 text-center text-ui text-label-tertiary">
+          {error}
+        </div>
+      )}
+      {overlays}
+    </>
+  )
+}
+
 /**
  * The Develop canvas.
  *
@@ -221,19 +377,7 @@ export function Viewport({ photo }: Props) {
   const hdr = useUI((s) => s.hdr)
   const hdrHeadroom = useUI((s) => s.hdrHeadroom)
 
-  const coverageKeys = useMemo(() => [...new Set([
-    ...edits.masks,
-    ...(previewEdits?.masks ?? []),
-    ...(beforeAfter === 'off' ? [] : beforeMasks),
-  ].flatMap((mask) => mask.components.flatMap(({ geometry }) =>
-    isAiGeometry(geometry) && geometry.cacheKey ? [geometry.cacheKey] : [],
-  )))].sort(), [edits.masks, previewEdits?.masks, beforeMasks, beforeAfter])
-  const coverageRef = useRef(coverageKeys)
-  if (
-    coverageKeys.length !== coverageRef.current.length ||
-    coverageKeys.some((key, index) => key !== coverageRef.current[index])
-  ) coverageRef.current = coverageKeys
-  const storedCoverage = coverageRef.current
+  const storedCoverage = useStoredCoverage(edits, previewEdits, beforeMasks, beforeAfter)
   const warnedCoverage = useRef<string | null>(null)
 
   useEffect(() => {
@@ -263,11 +407,7 @@ export function Viewport({ photo }: Props) {
   // so swapping in a sharper proxy never moves the image.
   // Zoom and fit are about the *framed* photo, so a crop has to be folded in
   // here: without it the viewport would still lay out the uncropped rectangle.
-  const full = proxy
-    ? { width: proxy.fullWidth, height: proxy.fullHeight }
-    : photo
-      ? { width: photo.width, height: photo.height }
-      : { width: 0, height: 0 }
+  const full = sourceSize(photo, proxy)
   const developTool = useUI((s) => s.developTool)
   const cropping = developTool === 'crop'
   const masking = developTool === 'mask'
@@ -280,19 +420,10 @@ export function Viewport({ photo }: Props) {
   const selectedMaskId = useMasking((s) => s.selectedMaskId)
   // Only show the mask while the tool is open: a tint that stays on after you
   // leave masking makes every other panel look wrong.
-  const maskOverlay =
-    masking && selectedMaskId && maskOverlayMode !== 'off'
-      ? { maskId: selectedMaskId, mode: maskOverlayMode }
-      : null
+  const maskOverlay = selectedMaskOverlay(masking, selectedMaskId, maskOverlayMode)
   const shownEdits = retouching ? ungeometry(edits) : uncrop(edits, cropping)
   const framed = full.width ? geometryOutputSize(full.width, full.height, shownEdits) : full
-  // A new object every render would restart the zoom animation, so the identity
-  // only changes when the numbers do.
-  const sizeRef = useRef(framed)
-  if (sizeRef.current.width !== framed.width || sizeRef.current.height !== framed.height) {
-    sizeRef.current = framed
-  }
-  const imageSize = sizeRef.current
+  const imageSize = useStableImageSize(framed)
 
   const pane = useMemo(
     () => paneViewport(beforeAfter, size.width, size.height),
@@ -769,64 +900,31 @@ export function Viewport({ photo }: Props) {
         open(e, items)
       }}
     >
-      {/*
-        Behind the canvas on purpose: the render dissolves in over the camera's
-        own picture of the same frame, which is what keeps the photo continuously
-        on screen through a load instead of blinking through the surround.
-      */}
-      {standIn && (previewUrl || thumbUrl) && (
-        <ResolvingImage
-          src={previewUrl ?? thumbUrl}
-          alt=""
-          className="pointer-events-none"
-          // The box comes from the proxy once one exists and from the catalog
-          // row before that; if the row is the odd one out, letterbox the
-          // camera's picture rather than stretch it.
-          imageClassName="object-contain"
-          style={{
-            position: 'absolute',
-            left: photoBox.x,
-            top: photoBox.y,
-            width: photoBox.width,
-            height: photoBox.height,
-          }}
-        />
-      )}
-
-      <canvas
-        ref={canvasRef}
-        className="absolute inset-0 h-full w-full transition-opacity duration-[--duration-base] ease-[--ease-out]"
-        style={{ opacity: proxy ? 1 : 0 }}
+      <ViewportContents
+        standIn={standIn}
+        previewUrl={previewUrl}
+        thumbUrl={thumbUrl}
+        photoBox={photoBox}
+        canvasRef={canvasRef}
+        // React dev tracing expands changed props, so keep the proxy's pixel buffer above this boundary.
+        hasProxy={!!proxy}
+        loading={loading}
+        detailBusy={detailBusy}
+        photo={photo}
+        error={error}
+        overlays={(
+          <ViewportOverlays
+            comparing={comparing}
+            beforeAfter={beforeAfter}
+            dropping={dropping}
+            cropping={cropping}
+            masking={masking}
+            retouching={retouching}
+            photoBox={photoBox}
+            compareSplit={compareSplit}
+          />
+        )}
       />
-
-      {(loading || detailBusy) && (
-        <StatusPill>{photo?.isRaw ? 'Developing RAW' : 'Decoding'}</StatusPill>
-      )}
-
-      {error && (
-        <div className="pointer-events-none absolute inset-0 grid place-items-center px-8 text-center text-ui text-label-tertiary">
-          {error}
-        </div>
-      )}
-
-      {comparing && isPairedCompare(beforeAfter) && (
-        <div
-          aria-hidden
-          className="pointer-events-none absolute bg-hairline"
-          style={
-            beforeAfter === 'sideBySide'
-              ? { left: '50%', top: 0, bottom: 0, width: 1 }
-              : { top: '50%', left: 0, right: 0, height: 1 }
-          }
-        />
-      )}
-      {dropping && <WbDropperOverlay frame={photoBox} />}
-      {cropping && <CropOverlay frame={photoBox} />}
-      {masking && <MaskOverlay frame={photoBox} />}
-      {retouching && <RetouchOverlay frame={photoBox} />}
-      {comparing && isSplitCompare(beforeAfter) && <CompareDivider mode={beforeAfter} />}
-      {comparing && <CompareLabels mode={beforeAfter} split={compareSplit} />}
-
       {menu}
     </div>
   )

@@ -65,6 +65,23 @@ function sidecarXmp(photo: Photo, settings: ExportSettings, filename: string): s
 const sidecarFor = (photo: Photo, settings: ExportSettings, filename: string) =>
   settings.writeSidecar ? sidecarXmp(photo, settings, filename) : null
 
+async function exportOriginal(
+  photo: Photo,
+  settings: ExportSettings,
+  name: string,
+): Promise<ExportOutput> {
+  const file = await loadPhotoFile(photo.masterId ?? photo.id)
+  if (!file) throw new Error('The original file could not be found.')
+  const filename = withExtension(name, photo.ext, settings.extensionCase)
+  return {
+    blob: file,
+    filename,
+    width: photo.width,
+    height: photo.height,
+    sidecar: sidecarFor(photo, settings, filename),
+  }
+}
+
 export async function exportPhoto(
   photo: Photo,
   settings: ExportSettings,
@@ -75,16 +92,7 @@ export async function exportPhoto(
   const name = outputName(photo, settings, sequence)
 
   if (settings.format === 'original') {
-    const file = await loadPhotoFile(photo.masterId ?? photo.id)
-    if (!file) throw new Error('The original file could not be found.')
-    const filename = withExtension(name, photo.ext, settings.extensionCase)
-    return {
-      blob: file,
-      filename,
-      width: photo.width,
-      height: photo.height,
-      sidecar: sidecarFor(photo, settings, filename),
-    }
+    return exportOriginal(photo, settings, name)
   }
 
   // --- decode ---------------------------------------------------------------

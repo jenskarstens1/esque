@@ -17,6 +17,8 @@ import { RENDERED_WHITE_POINT, type SourceImage } from '../core/workingImage'
 import { createDemandQueue } from '../lib/demandQueue'
 import { readProxyCache, writeProxyCache } from './proxyCache'
 import { useUI, type PreviewQuality } from '../state/ui'
+import type { Photo } from '../core/types'
+import type { DecodedMeta, LinearImage, RawCrop } from '../raw/decoded'
 
 export interface Proxy extends SourceImage {
   photoId: string
@@ -91,62 +93,77 @@ function remember(proxy: Proxy) {
   evict()
 }
 
-async function decode(
-  photoId: string,
+type WorkingProxyQuality = 'interactive' | 'full'
+
+function decodeQuality(
+  photo: Photo,
   maxEdge: number,
+  standard: number,
+): WorkingProxyQuality {
+  const nativeEdge = Math.max(photo.width, photo.height)
+  return maxEdge > standard || (nativeEdge > 0 && nativeEdge <= standard)
+    ? 'full'
+    : 'interactive'
+}
+
+function cachedProxySatisfies(
+  cached: Proxy,
+  maxEdge: number,
+  quality: WorkingProxyQuality,
+): boolean {
+  const largeEnough =
+    cached.scale >= 1 || Math.max(cached.width, cached.height) >= maxEdge
+  const detailedEnough = quality === 'interactive' || cached.quality === 'full'
+  return largeEnough && detailedEnough
+}
+
+async function cachedRawProxy(
+  photo: Photo,
+  maxEdge: number,
+  standard: number,
+  quality: WorkingProxyQuality,
   signal: AbortSignal,
 ): Promise<Proxy | null> {
-  const photo = await db.photos.get(photoId)
-  if (!photo) return null
-  signal.throwIfAborted()
-  // A small RAW reaches 1:1 in the standard tier, so there is no later zoom
-  // escalation that could replace its working interpolation with the final one.
-  const standard = proxyEdge()
-  const nativeEdge = Math.max(photo.width, photo.height)
-  const quality =
-    maxEdge > standard || (nativeEdge > 0 && nativeEdge <= standard)
-      ? 'full'
-      : 'interactive'
-  if (photo.isRaw && maxEdge <= standard) {
-    const cached = await readProxyCache(photo, standard, signal)
-    if (
-      cached &&
-      (cached.scale >= 1 || Math.max(cached.width, cached.height) >= maxEdge) &&
-      (quality === 'interactive' || cached.quality === 'full')
-    ) {
-      return cached
-    }
-  }
-  // Virtual copies share the master's pixels; only the edits differ.
-  const sourceId = photo.masterId ?? photo.id
-  const file = await loadPhotoFile(sourceId)
-  if (!file) return null
+  if (!(photo.isRaw && maxEdge <= standard)) return null
+  const cached = await readProxyCache(photo, standard, signal)
+  if (!cached || !cachedProxySatisfies(cached, maxEdge, quality)) return null
+  return cached
+}
 
-  const buffer = await file.arrayBuffer()
-  signal.throwIfAborted()
-  let rawCrop = photo.meta.rawCrop
-  if (photo.isRaw && rawCrop === undefined) {
-    const probed = await rawPool.readMeta(buffer.slice(0), true)
-    signal.throwIfAborted()
-    rawCrop = probed?.rawCrop ?? null
-    if (probed) {
-      await db.photos.update(photoId, {
-        width: probed.width,
-        height: probed.height,
-        meta: {
-          ...photo.meta,
-          rawCrop,
-          embeddedWidth: probed.thumbWidth,
-          embeddedHeight: probed.thumbHeight,
-        },
-      })
-    }
-  }
+async function resolveRawCrop(
+  photo: Photo,
+  photoId: string,
+  buffer: ArrayBuffer,
+  signal: AbortSignal,
+): Promise<RawCrop | null | undefined> {
+  if (!photo.isRaw || photo.meta.rawCrop !== undefined) return photo.meta.rawCrop
 
-  // The camera JPEG is already on screen while this runs. The editable tier
-  // always uses a proper native-resolution demosaic before downsampling; direct
-  // CFA binning was faster but produced visible false colour on large Bayer and
-  // X-Trans files.
+  const probed = await rawPool.readMeta(buffer.slice(0), true)
+  signal.throwIfAborted()
+  const rawCrop = probed?.rawCrop ?? null
+  if (probed) {
+    await db.photos.update(photoId, {
+      width: probed.width,
+      height: probed.height,
+      meta: {
+        ...photo.meta,
+        rawCrop,
+        embeddedWidth: probed.thumbWidth,
+        embeddedHeight: probed.thumbHeight,
+      },
+    })
+  }
+  return rawCrop
+}
+
+async function decodeWorkingImage(
+  photo: Photo,
+  buffer: ArrayBuffer,
+  maxEdge: number,
+  rawCrop: RawCrop | null | undefined,
+  quality: WorkingProxyQuality,
+  signal: AbortSignal,
+): Promise<LinearImage> {
   const linear = await rawPool
     .decodeLinear(
       buffer,
@@ -158,45 +175,80 @@ async function decode(
       'foreground',
       signal,
     )
-    .catch((err: unknown) => {
-      if (err instanceof DOMException && err.name === 'AbortError') throw err
-      throw new ProxyError(rawFailure(err).reason)
+    .catch((error: unknown) => {
+      if (error instanceof DOMException && error.name === 'AbortError') throw error
+      throw new ProxyError(rawFailure(error).reason)
     })
   if (!linear) throw new ProxyError("This file couldn't be read")
   signal.throwIfAborted()
+  return linear
+}
 
-  if (
-    linear.fromRaw &&
-    linear.meta &&
-    (photo.width !== linear.meta.width ||
-      photo.height !== linear.meta.height ||
-      photo.meta.rawCrop === undefined)
-  ) {
-    // Repairs rows imported by the old double-orientation path as soon as the
-    // real pixels are decoded.
-    await db.photos.update(photoId, {
-      width: linear.meta.width,
-      height: linear.meta.height,
-      meta: {
-        ...photo.meta,
-        rawCrop: linear.meta.rawCrop,
-        embeddedWidth: linear.meta.thumbWidth,
-        embeddedHeight: linear.meta.thumbHeight,
-      },
-    })
-  } else if (
+function rawDimensionsChanged(photo: Photo, meta: DecodedMeta): boolean {
+  return (
+    photo.width !== meta.width ||
+    photo.height !== meta.height ||
+    photo.meta.rawCrop === undefined
+  )
+}
+
+function renderedDimensionsChanged(photo: Photo, linear: LinearImage): boolean {
+  return (
     !photo.isRaw &&
     linear.fullWidth > 0 &&
     linear.fullHeight > 0 &&
     (photo.width !== linear.fullWidth || photo.height !== linear.fullHeight)
-  ) {
-    // And rows imported from an EXIF header alone, which describes a rendered
-    // file's frame *before* its orientation tag is applied. These are the
-    // pixels after it, which is the photograph every view lays out against.
-    await db.photos.update(photoId, { width: linear.fullWidth, height: linear.fullHeight })
+  )
+}
+
+async function repairCatalogDimensions(
+  photo: Photo,
+  photoId: string,
+  linear: LinearImage,
+): Promise<void> {
+  const meta = linear.meta
+  if (linear.fromRaw && meta && rawDimensionsChanged(photo, meta)) {
+    // Repairs rows imported by the old double-orientation path as soon as the
+    // real pixels are decoded.
+    await db.photos.update(photoId, {
+      width: meta.width,
+      height: meta.height,
+      meta: {
+        ...photo.meta,
+        rawCrop: meta.rawCrop,
+        embeddedWidth: meta.thumbWidth,
+        embeddedHeight: meta.thumbHeight,
+      },
+    })
+    return
   }
 
-  const proxy: Proxy = {
+  if (renderedDimensionsChanged(photo, linear)) {
+    // Rows imported from an EXIF header alone describe the frame before its
+    // orientation tag is applied. These are the pixels after it.
+    await db.photos.update(photoId, {
+      width: linear.fullWidth,
+      height: linear.fullHeight,
+    })
+  }
+}
+
+function proxyAsShot(linear: LinearImage) {
+  if (!linear.fromRaw) return RENDERED_WHITE_POINT
+  return decodedAsShotTempTint(
+    linear.meta?.camMul ?? null,
+    linear.meta?.preMul ?? null,
+    linear.meta?.camXyz ?? null,
+  )
+}
+
+function proxyFrom(
+  photo: Photo,
+  photoId: string,
+  linear: LinearImage,
+  quality: WorkingProxyQuality,
+): Proxy {
+  return {
     photoId,
     width: linear.width,
     height: linear.height,
@@ -204,13 +256,7 @@ async function decode(
     // Camera-rendered fallback pixels already have a tone curve baked in, so
     // the RAW base curve must not be applied a second time.
     isRaw: photo.isRaw && linear.fromRaw,
-    asShot: linear.fromRaw
-      ? decodedAsShotTempTint(
-          linear.meta?.camMul ?? null,
-          linear.meta?.preMul ?? null,
-          linear.meta?.camXyz ?? null,
-        )
-      : RENDERED_WHITE_POINT,
+    asShot: proxyAsShot(linear),
     whiteLevel: linear.whiteLevel,
     scale: linear.scale,
     fullWidth: linear.fullWidth,
@@ -219,6 +265,14 @@ async function decode(
     preview: false,
     quality: linear.fromRaw ? quality : 'preview',
   }
+}
+
+function persistStandardProxy(
+  photo: Photo,
+  proxy: Proxy,
+  maxEdge: number,
+  standard: number,
+): void {
   if (
     photo.isRaw &&
     proxy.quality !== 'preview' &&
@@ -229,6 +283,48 @@ async function decode(
       console.warn('[esque] Could not persist the RAW working proxy.', error)
     })
   }
+}
+
+async function decode(
+  photoId: string,
+  maxEdge: number,
+  signal: AbortSignal,
+): Promise<Proxy | null> {
+  const photo = await db.photos.get(photoId)
+  if (!photo) return null
+  signal.throwIfAborted()
+  // A small RAW reaches 1:1 in the standard tier, so there is no later zoom
+  // escalation that could replace its working interpolation with the final one.
+  const standard = proxyEdge()
+  const quality = decodeQuality(photo, maxEdge, standard)
+  const cached = await cachedRawProxy(photo, maxEdge, standard, quality, signal)
+  if (cached) return cached
+
+  // Virtual copies share the master's pixels; only the edits differ.
+  const sourceId = photo.masterId ?? photo.id
+  const file = await loadPhotoFile(sourceId)
+  if (!file) return null
+
+  const buffer = await file.arrayBuffer()
+  signal.throwIfAborted()
+  const rawCrop = await resolveRawCrop(photo, photoId, buffer, signal)
+
+  // The camera JPEG is already on screen while this runs. The editable tier
+  // always uses a proper native-resolution demosaic before downsampling; direct
+  // CFA binning was faster but produced visible false colour on large Bayer and
+  // X-Trans files.
+  const linear = await decodeWorkingImage(
+    photo,
+    buffer,
+    maxEdge,
+    rawCrop,
+    quality,
+    signal,
+  )
+  await repairCatalogDimensions(photo, photoId, linear)
+
+  const proxy = proxyFrom(photo, photoId, linear, quality)
+  persistStandardProxy(photo, proxy, maxEdge, standard)
   return proxy
 }
 

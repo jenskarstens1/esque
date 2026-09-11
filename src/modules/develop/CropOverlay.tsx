@@ -28,6 +28,13 @@ type Handle =
   | 'se'
   | 'rotate'
 
+interface CropDrag {
+  handle: Handle
+  startX: number
+  startY: number
+  from: CropEdits
+}
+
 /** The photo's on-screen box, in CSS pixels relative to the viewport. */
 export interface FrameBox {
   x: number
@@ -59,6 +66,102 @@ function lockedRatio(crop: CropEdits, frameAspect: number): number | null {
   return r ? r[0] / r[1] : null
 }
 
+function resizedEdges(from: CropEdits, handle: Handle, dx: number, dy: number) {
+  let { left, top, right, bottom } = from
+  if (handle.includes('w')) left = Math.min(Math.max(from.left + dx, 0), from.right - MIN_SIZE)
+  if (handle.includes('e')) right = Math.max(Math.min(from.right + dx, 1), from.left + MIN_SIZE)
+  if (handle.includes('n')) top = Math.min(Math.max(from.top + dy, 0), from.bottom - MIN_SIZE)
+  if (handle.includes('s')) bottom = Math.max(Math.min(from.bottom + dy, 1), from.top + MIN_SIZE)
+  return { left, top, right, bottom }
+}
+
+function constrainRatio(
+  rect: Pick<CropEdits, 'left' | 'top' | 'right' | 'bottom'>,
+  handle: Handle,
+  ratio: number,
+  frameAspect: number,
+  dx: number,
+  dy: number,
+) {
+  let { left, top, right, bottom } = rect
+  const wantWidth = ((bottom - top) * ratio) / frameAspect
+  const wantHeight = ((right - left) * frameAspect) / ratio
+  const horizontal = ['e', 'w'].includes(handle)
+    ? true
+    : ['n', 's'].includes(handle)
+      ? false
+      : Math.abs(dx) * frameAspect >= Math.abs(dy)
+
+  if (horizontal) {
+    if (handle.includes('n')) top = bottom - wantHeight
+    else bottom = top + wantHeight
+  } else if (handle.includes('w')) {
+    left = right - wantWidth
+  } else {
+    right = left + wantWidth
+  }
+
+  const anchorX = handle.includes('w') ? right : left
+  const anchorY = handle.includes('n') ? bottom : top
+  const fit = Math.min(1, 1 / (right - left), 1 / (bottom - top))
+  if (fit < 1) {
+    left = anchorX + (left - anchorX) * fit
+    right = anchorX + (right - anchorX) * fit
+    top = anchorY + (top - anchorY) * fit
+    bottom = anchorY + (bottom - anchorY) * fit
+  }
+  if (left < 0) {
+    right -= left
+    left = 0
+  }
+  if (top < 0) {
+    bottom -= top
+    top = 0
+  }
+  if (right > 1) {
+    left -= right - 1
+    right = 1
+  }
+  if (bottom > 1) {
+    top -= bottom - 1
+    bottom = 1
+  }
+  return { left, top, right, bottom }
+}
+
+function cropForDrag(drag: CropDrag, dx: number, dy: number, frameAspect: number) {
+  const { from, handle } = drag
+  if (handle === 'rotate') {
+    return {
+      next: { angle: Math.max(-45, Math.min(45, from.angle + dx * 60)) },
+      label: 'Straighten',
+    }
+  }
+  if (handle === 'move') {
+    const width = from.right - from.left
+    const height = from.bottom - from.top
+    const left = Math.min(Math.max(from.left + dx, 0), 1 - width)
+    const top = Math.min(Math.max(from.top + dy, 0), 1 - height)
+    return {
+      next: { left, top, right: left + width, bottom: top + height },
+      label: 'Move Crop',
+    }
+  }
+
+  let rect = resizedEdges(from, handle, dx, dy)
+  const ratio = lockedRatio(from, frameAspect)
+  if (ratio) rect = constrainRatio(rect, handle, ratio, frameAspect, dx, dy)
+  return {
+    next: {
+      left: Math.max(0, rect.left),
+      top: Math.max(0, rect.top),
+      right: Math.min(1, rect.right),
+      bottom: Math.min(1, rect.bottom),
+    },
+    label: 'Crop',
+  }
+}
+
 export function CropOverlay({ frame }: { frame: FrameBox }) {
   const tool = useUI((s) => s.developTool)
   const crop = useDevelop((s) => s.edits.crop)
@@ -67,12 +170,7 @@ export function CropOverlay({ frame }: { frame: FrameBox }) {
   const [dragging, setDragging] = useState<Handle | null>(null)
 
   // The live rect during a drag, so React state updates never lag the pointer.
-  const drag = useRef<{
-    handle: Handle
-    startX: number
-    startY: number
-    from: CropEdits
-  } | null>(null)
+  const drag = useRef<CropDrag | null>(null)
 
   const frameAspect = frame.height > 0 ? frame.width / frame.height : 1
 
@@ -107,97 +205,8 @@ export function CropOverlay({ frame }: { frame: FrameBox }) {
       if (!d || frame.width <= 0 || frame.height <= 0) return
       const dx = (e.clientX - d.startX) / frame.width
       const dy = (e.clientY - d.startY) / frame.height
-      const f = d.from
-
-      if (d.handle === 'rotate') {
-        // Straightening by dragging reads the horizontal sweep, which is what
-        // the eye is doing anyway: line the horizon up with the grid.
-        const angle = Math.max(-45, Math.min(45, f.angle + dx * 60))
-        apply({ angle }, 'Straighten')
-        return
-      }
-
-      if (d.handle === 'move') {
-        const w = f.right - f.left
-        const h = f.bottom - f.top
-        const left = Math.min(Math.max(f.left + dx, 0), 1 - w)
-        const top = Math.min(Math.max(f.top + dy, 0), 1 - h)
-        apply({ left, top, right: left + w, bottom: top + h }, 'Move Crop')
-        return
-      }
-
-      let { left, top, right, bottom } = f
-      if (d.handle.includes('w')) left = Math.min(Math.max(f.left + dx, 0), f.right - MIN_SIZE)
-      if (d.handle.includes('e')) right = Math.max(Math.min(f.right + dx, 1), f.left + MIN_SIZE)
-      if (d.handle.includes('n')) top = Math.min(Math.max(f.top + dy, 0), f.bottom - MIN_SIZE)
-      if (d.handle.includes('s')) bottom = Math.max(Math.min(f.bottom + dy, 1), f.top + MIN_SIZE)
-
-      const ratio = lockedRatio(f, frameAspect)
-      if (ratio) {
-        // Hold the ratio by driving the other axis from the one being dragged,
-        // anchored on the corner opposite the handle so it stays put.
-        const wantW = ((bottom - top) * ratio) / frameAspect
-        const wantH = ((right - left) * frameAspect) / ratio
-        const horizontal =
-          d.handle === 'e' || d.handle === 'w'
-            ? true
-            : d.handle === 'n' || d.handle === 's'
-              ? false
-              : Math.abs(dx) * frameAspect >= Math.abs(dy)
-        if (horizontal) {
-          if (d.handle.includes('n')) top = bottom - wantH
-          else bottom = top + wantH
-        } else {
-          if (d.handle.includes('w')) left = right - wantW
-          else right = left + wantW
-        }
-        // The edge the drag is not moving. Everything below grows or shrinks
-        // around it, so it stays where the user put it.
-        const anchorX = d.handle.includes('w') ? right : left
-        const anchorY = d.handle.includes('n') ? bottom : top
-
-        // Sliding back only works while the rect still fits inside the frame.
-        // Once the drag has grown it past an edge the shape has to shrink
-        // around the anchor instead, because clamping the edges independently
-        // — which is what the final write does — silently abandons the ratio
-        // the lock exists to hold.
-        const fit = Math.min(1, 1 / (right - left), 1 / (bottom - top))
-        if (fit < 1) {
-          left = anchorX + (left - anchorX) * fit
-          right = anchorX + (right - anchorX) * fit
-          top = anchorY + (top - anchorY) * fit
-          bottom = anchorY + (bottom - anchorY) * fit
-        }
-
-        // A ratio drag can push past an edge; slide it back rather than
-        // silently changing the shape the user asked for.
-        if (left < 0) {
-          right -= left
-          left = 0
-        }
-        if (top < 0) {
-          bottom -= top
-          top = 0
-        }
-        if (right > 1) {
-          left -= right - 1
-          right = 1
-        }
-        if (bottom > 1) {
-          top -= bottom - 1
-          bottom = 1
-        }
-      }
-
-      apply(
-        {
-          left: Math.max(0, left),
-          top: Math.max(0, top),
-          right: Math.min(1, right),
-          bottom: Math.min(1, bottom),
-        },
-        'Crop',
-      )
+      const change = cropForDrag(d, dx, dy, frameAspect)
+      apply(change.next, change.label)
     }
 
     const up = () => {

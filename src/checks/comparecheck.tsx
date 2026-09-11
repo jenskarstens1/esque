@@ -152,8 +152,13 @@ async function run() {
 
   const full = { x: 0, y: 0, width: CW, height: CH }
   const out: Record<string, unknown> = {}
+  const failures: string[] = []
+  const check = (name: string, passed: boolean, detail = '') => {
+    if (!passed) failures.push(`${name}${detail ? `(${detail})` : ''}`)
+  }
 
   // -- single pane ----------------------------------------------------------
+  function checkPaneLayouts() {
   renderer.render(before, { rect: full })
   const singleBefore = pixelAt(canvas, CW / 2, CH / 2)
   renderer.render(after, { rect: full })
@@ -234,11 +239,16 @@ async function run() {
   out.clipDoesNotShiftImage = Math.abs(clipped[0] - reference[0]) <= 1
   out.outsideClipIsBlack = pixelAt(canvas, 100, 100)[0] <= 2
 
-  const failures = Object.entries(out)
-    .filter(([, v]) => v === false)
-    .map(([k]) => k)
+    failures.push(
+      ...Object.entries(out)
+        .filter(([, value]) => value === false)
+        .map(([key]) => key),
+    )
+  }
+  checkPaneLayouts()
 
   // -- every pass compiles and runs -----------------------------------------
+  function checkFeaturePasses() {
   // Each new feature is switched on one at a time so a shader that fails to
   // compile names itself instead of hiding in a pile of enabled options.
   const features: Record<string, (e: Edits) => void> = {
@@ -343,11 +353,6 @@ async function run() {
     },
   }
 
-  /** Records a named assertion, so a failure says which one and by how much. */
-  const check = (name: string, ok: boolean, detail = '') => {
-    if (!ok) failures.push(`${name}${detail ? `(${detail})` : ''}`)
-  }
-
   const passes: Record<string, boolean> = {}
   for (const [name, apply] of Object.entries(features)) {
     const e = defaultEdits()
@@ -370,8 +375,11 @@ async function run() {
   out.allFeatures = Number.isFinite(allPx[0])
   if (!out.allFeatures) failures.push('allFeatures')
   out.allFeaturesPixel = allPx
+  }
+  checkFeaturePasses()
 
   // -- the geometry map, read off the pixels ---------------------------------
+  async function checkGeometry() {
   // With a position-encoding source, the rendered byte says where in the source
   // each output pixel came from — so the map can be checked, not just run.
   renderer.setImage(ramped(129, 97))
@@ -492,11 +500,13 @@ async function run() {
   const halfSize = geometryOutputSize(600, 400, halfCrop)
   out.cropShrinksSize = halfSize.width === 300 && halfSize.height === 400
   if (!out.cropShrinksSize) failures.push('cropShrinksSize')
+  }
+  await checkGeometry()
 
   // -- masks, read off the pixels -------------------------------------------
   // A mask that only sets exposure turns coverage into brightness, so the
   // rendered frame *is* the mask and every shape can be measured directly.
-  {
+  function checkMasks() {
     const flat = solid(80, 60, [0.18, 0.18, 0.18])
     renderer.setImage(flat)
 
@@ -818,9 +828,10 @@ async function run() {
 
     out.masks = masks
   }
+  checkMasks()
 
   // -- Retouch: spots and red-eye ---------------------------------------------
-  {
+  function checkRetouch() {
     const retouch: Record<string, unknown> = {}
 
     // A two-tone image: a dark blob on the left half, clean mid-grey on the
@@ -980,6 +991,7 @@ async function run() {
     renderer.setImage(solid(80, 60, [0.18, 0.18, 0.18]))
     out.retouch = retouch
   }
+  checkRetouch()
 
   // -- HDR presentation ------------------------------------------------------
   // The whole reason the pipeline moved to WebGPU. `toneMapping: extended` and
@@ -987,7 +999,7 @@ async function run() {
   // route existed in neither, so this is the check that the port paid for
   // itself. Values in range must survive the round trip unchanged: an extended
   // surface widens the headroom above white, it does not rescale what is below.
-  {
+  function checkHdrPresentation() {
     renderer.setImage(solid(80, 60, [0.18, 0.18, 0.18]))
     const flat = defaultEdits()
     const hdr: Record<string, unknown> = { capable: renderer.hdrCapable }
@@ -1017,6 +1029,7 @@ async function run() {
     hdr.pixels = [sdrPx[0], hdrPx[0], backPx[0]]
     out.hdr = hdr
   }
+  checkHdrPresentation()
 
   out.failures = failures
   out.pass = failures.length === 0

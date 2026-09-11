@@ -181,6 +181,16 @@ function aspectVec(width: number, height: number): [number, number] {
   return [width / long, height / long]
 }
 
+type GraphState = {
+  chain: PingPong
+  active: PingPong
+  input: Tex
+  width: number
+  height: number
+  texel: [number, number]
+  pass: (program: Pass, setup: (program: Pass) => void) => void
+}
+
 // ---------------------------------------------------------------------------
 // Renderer
 // ---------------------------------------------------------------------------
@@ -459,467 +469,437 @@ export class Renderer {
       return src
     }
 
-    let w = chain.width
-    let h = chain.height
-    let texel: [number, number] = [1 / w, 1 / h]
-
-    // Geometry resizes the image mid-graph, so the passes after it write into a
-    // second chain. Everything else just uses whichever is current.
-    let active = chain
-    let input: Tex = src
-    const pass = (program: Pass, setup: (p: Pass) => void) => {
+    const state: GraphState = {
+      chain,
+      active: chain,
+      input: src,
+      width: chain.width,
+      height: chain.height,
+      texel: [1 / chain.width, 1 / chain.height] as [number, number],
+      pass: () => {},
+    }
+    state.pass = (program, setup) => {
       program.use()
-      program.tex('uImage', input)
+      program.tex('uImage', state.input)
       setup(program)
-      drawPass(this.enc!, active.write, program)
-      input = active.write
-      active.swap()
+      drawPass(this.enc!, state.active.write, program)
+      state.input = state.active.write
+      state.active.swap()
     }
 
+    this.runUngradedStages(edits, state)
+    this.runCreativeStages(edits, state)
+    this.runRetouchStages(edits, state)
+    this.runGeometryStage(edits, state)
+    this.runLocalAdjustments(edits, state)
+    this.runEffects(edits, state)
+
+    this.lastClean = state.input
+    this.runMaskOverlay(edits, overlay, state)
+
+    this.lastResult = state.input
+    this.lastMipped = false
+    this.lastSize = { width: state.width, height: state.height }
+    return state.input
+  }
+
+  private runUngradedStages(edits: Edits, state: GraphState) {
+    if (this.graded) return
+    this.runHighlightRecovery(edits, state)
+    this.runSceneInput(edits, state)
+    this.runCaptureCleanup(edits, state)
+    this.runSceneRendering(edits, state)
+  }
+
+  private runHighlightRecovery(edits: Edits, state: GraphState) {
+    const RECOVERY_MODE: Record<string, number> = { clip: 1, blend: 2, propagate: 3 }
+    const mode = RECOVERY_MODE[edits.tone.recovery] ?? 0
+    if (!this.sourceInfo?.isRaw || mode === 0) return
+
+    const blurred = mode === 3 ? this.blur(state.input, 2.0, 4) : state.input
+    state.pass(this.cache.get('recover', RECOVER_FS), (program) => {
+      program.tex('uBlur', blurred)
+        .set('uMode', mode)
+        .set('uThreshold', edits.tone.recoveryThreshold / 100)
+        .set('uWhiteLevel', Math.max(this.sourceInfo?.whiteLevel ?? 1, 1e-6))
+    })
+  }
+
+  private runSceneInput(edits: Edits, state: GraphState) {
     const b = edits.basic
-    const tone = edits.tone
-    const d = edits.detail
-    const lens = edits.lens
-    const isRaw = !!this.sourceInfo?.isRaw
-    const profile = cameraProfile(edits.profile)
     const gain =
       b.wbMode === 'asShot'
         ? ([1, 1, 1] as [number, number, number])
         : whiteBalanceGain(this.asShot, { temp: b.temp, tint: b.tint })
     const cal = edits.calibration
     const calMat = calibrationMatrix(cal)
+    state.pass(this.cache.get('sceneInput', SCENE_INPUT_FS), (program) => {
+      program.set('uWbGain', gain)
+        .set('uCalibration', toGl(calMat))
+        .set('uShadowTint', cal.shadowTint / 100)
+    })
+  }
 
-    // The tiled export's assembled texture has already passed through these
-    // source-to-display stages. It re-enters at retouch/framing below.
-    if (!this.graded) {
-      // --- 1. Highlight reconstruction ---------------------------------------
-      // LibRaw has already applied the as-shot balance. Reconstruction still
-      // runs before the user's WB delta, against the decoder's retained ceiling.
-      const RECOVERY_MODE: Record<string, number> = { clip: 1, blend: 2, propagate: 3 }
-      const recoveryMode = RECOVERY_MODE[tone.recovery] ?? 0
-      if (isRaw && recoveryMode > 0) {
-        const nb = recoveryMode === 3 ? this.blur(input, 2.0, 4) : input
-        pass(this.cache.get('recover', RECOVER_FS), (p) => {
-          p.tex('uBlur', nb)
-            .set('uMode', recoveryMode)
-            .set('uThreshold', tone.recoveryThreshold / 100)
-            .set('uWhiteLevel', Math.max(this.sourceInfo?.whiteLevel ?? 1, 1e-6))
-        })
-      }
+  private runCaptureCleanup(edits: Edits, state: GraphState) {
+    this.runImpulseDenoise(edits, state)
+    this.runDenoise(edits, state)
+    this.runSharpen(edits, state)
+    this.runDefringe(edits, state)
+  }
 
-      // --- 2. Scene preparation ----------------------------------------------
-      pass(this.cache.get('sceneInput', SCENE_INPUT_FS), (p) => {
-        p.set('uWbGain', gain)
-          .set('uCalibration', toGl(calMat))
-          .set('uShadowTint', cal.shadowTint / 100)
-      })
+  private runImpulseDenoise(edits: Edits, state: GraphState) {
+    if (edits.detail.impulseNR <= 0) return
+    state.pass(this.cache.get('impulse', IMPULSE_FS), (program) => {
+      program.set('uTexel', state.texel).set('uAmount', edits.detail.impulseNR / 100)
+    })
+  }
 
-      // --- 3. Capture cleanup -------------------------------------------------
-      // These passes use an extended, reversible tone encoding internally and
-      // never clamp the RAW upper range. Their thresholds therefore stay
-      // independent of the user's exposure and profile choices.
-      if (d.impulseNR > 0) {
-        pass(this.cache.get('impulse', IMPULSE_FS), (p) => {
-          p.set('uTexel', texel).set('uAmount', d.impulseNR / 100)
-        })
-      }
-      if (d.luminanceNR > 0 || d.colorNR > 0) {
-        const denoise = this.cache.get('denoise', DENOISE_FS)
-        const runDenoise = (amount = 1) => pass(denoise, (p) => {
-          p.set('uTexel', texel)
-            .set('uLuminance', (d.luminanceNR / 100) * amount)
-            .set('uLumaDetail', d.luminanceNRDetail / 100)
-            .set('uLumaContrast', d.luminanceNRContrast / 100)
-            .set('uColor', (d.colorNR / 100) * amount)
-            .set('uColorDetail', d.colorNRDetail / 100)
-            .set('uColorSmoothness', d.colorNRSmoothness / 100)
-        })
-        runDenoise()
-        const extra = Math.max(
-          (d.luminanceNR - 55) / 45,
-          (d.colorNR - 60) / 40,
-        )
-        if (extra > 0) runDenoise(Math.min(1, extra))
-      }
-      if (d.sharpenAmount > 0) {
-        const radius = Math.max(0.5, d.sharpenRadius)
-        const blurred = this.blur(input, radius, 1)
-        pass(this.cache.get('sharpen', SHARPEN_FS), (p) => {
-          p.tex('uBlur', blurred)
-            .set('uTexel', texel)
-            .set('uAmount', (d.sharpenAmount / 100) * 1.5)
-            .set('uDetail', d.sharpenDetail / 100)
-            .set('uMasking', d.sharpenMasking / 100)
-        })
-      }
+  private runDenoise(edits: Edits, state: GraphState) {
+    const detail = edits.detail
+    if (detail.luminanceNR <= 0 && detail.colorNR <= 0) return
+    const denoise = this.cache.get('denoise', DENOISE_FS)
+    const apply = (amount = 1) => state.pass(denoise, (program) => {
+      program.set('uTexel', state.texel)
+        .set('uLuminance', (detail.luminanceNR / 100) * amount)
+        .set('uLumaDetail', detail.luminanceNRDetail / 100)
+        .set('uLumaContrast', detail.luminanceNRContrast / 100)
+        .set('uColor', (detail.colorNR / 100) * amount)
+        .set('uColorDetail', detail.colorNRDetail / 100)
+        .set('uColorSmoothness', detail.colorNRSmoothness / 100)
+    })
+    apply()
+    const extra = Math.max((detail.luminanceNR - 55) / 45, (detail.colorNR - 60) / 40)
+    if (extra > 0) apply(Math.min(1, extra))
+  }
 
-      // Defringe follows capture sharpening so residual chroma haloes are not
-      // made crisper by the sharpener.
-      if (lens.defringePurpleAmount > 0 || lens.defringeGreenAmount > 0) {
-        const window = (lo: number, hi: number, from: number, to: number): [number, number] => {
-          const a = from + (to - from) * (Math.min(lo, hi) / 100)
-          const b = from + (to - from) * (Math.max(lo, hi) / 100)
-          return [a, Math.max(b, a + 0.01)]
-        }
-        pass(this.cache.get('defringe', DEFRINGE_FS), (p) => {
-          p.set('uTexel', texel)
-            .set('uPurple', lens.defringePurpleAmount / 20)
-            .set('uPurpleHue', window(lens.defringePurpleHueLo, lens.defringePurpleHueHi, 0.63, 0.97))
-            .set('uGreen', lens.defringeGreenAmount / 20)
-            .set('uGreenHue', window(lens.defringeGreenHueLo, lens.defringeGreenHueHi, 0.2, 0.45))
-        })
-      }
+  private runSharpen(edits: Edits, state: GraphState) {
+    const detail = edits.detail
+    if (detail.sharpenAmount <= 0) return
+    const blurred = this.blur(state.input, Math.max(0.5, detail.sharpenRadius), 1)
+    state.pass(this.cache.get('sharpen', SHARPEN_FS), (program) => {
+      program.tex('uBlur', blurred)
+        .set('uTexel', state.texel)
+        .set('uAmount', (detail.sharpenAmount / 100) * 1.5)
+        .set('uDetail', detail.sharpenDetail / 100)
+        .set('uMasking', detail.sharpenMasking / 100)
+    })
+  }
 
-      // --- 4. Scene-to-display rendering -------------------------------------
-      pass(this.cache.get('render', RENDER_FS), (p) => {
-        p.set('uExposure', b.exposure)
-          .set('uContrast', b.contrast / 100)
-          .set('uHighlights', b.highlights / 100)
-          .set('uShadows', b.shadows / 100)
-          .set('uWhites', b.whites / 100)
-          .set('uBlacks', b.blacks / 100)
-          .set('uVibrance', b.vibrance / 100)
-          .set('uSaturation', b.saturation / 100)
-          .set('uProtectSkin', b.protectSkin ? 1 : 0)
-          .set('uAvoidShift', b.avoidColorShift ? 1 : 0)
-          .set('uProfileCurve', isRaw ? profile.curve : 0)
-          .set('uProfileSat', isRaw ? profile.saturation : 0)
-          .set('uShoulder', isRaw ? profile.shoulder : 1)
-      })
+  private runDefringe(edits: Edits, state: GraphState) {
+    const lens = edits.lens
+    if (lens.defringePurpleAmount <= 0 && lens.defringeGreenAmount <= 0) return
+    const window = (lo: number, hi: number, from: number, to: number): [number, number] => {
+      const low = from + (to - from) * (Math.min(lo, hi) / 100)
+      const high = from + (to - from) * (Math.max(lo, hi) / 100)
+      return [low, Math.max(high, low + 0.01)]
     }
+    state.pass(this.cache.get('defringe', DEFRINGE_FS), (program) => {
+      program.set('uTexel', state.texel)
+        .set('uPurple', lens.defringePurpleAmount / 20)
+        .set('uPurpleHue', window(lens.defringePurpleHueLo, lens.defringePurpleHueHi, 0.63, 0.97))
+        .set('uGreen', lens.defringeGreenAmount / 20)
+        .set('uGreenHue', window(lens.defringeGreenHueLo, lens.defringeGreenHueHi, 0.2, 0.45))
+    })
+  }
 
-    // --- 5. Creative tone and colour -----------------------------------------
-    // --- Local shadows/highlights + dynamic range compression ----------------
-    if (tone.shHighlights || tone.shShadows || tone.drcAmount) {
-      // Radius maps to a downscale so a wide setting stays cheap: an eighth-res
-      // blur covers eight times the ground at the same kernel cost.
-      const downscale = tone.shRadius > 60 ? 16 : tone.shRadius > 25 ? 8 : 4
-      const local = this.blur(input, 1.5 + tone.shRadius / 22, downscale)
-      pass(this.cache.get('tonemap', TONEMAP_FS), (p) => {
-        p.tex('uBlur', local)
-          .set('uHighlights', tone.shHighlights / 100)
-          .set('uShadows', tone.shShadows / 100)
-          .set('uWidth', Math.max(0.1, tone.shTonalWidth / 100))
-          .set('uDrc', tone.drcAmount / 100)
-          .set('uDrcDetail', tone.drcDetail / 100)
-      })
-    }
+  private runSceneRendering(edits: Edits, state: GraphState) {
+    const basic = edits.basic
+    const profile = cameraProfile(edits.profile)
+    const isRaw = !!this.sourceInfo?.isRaw
+    state.pass(this.cache.get('render', RENDER_FS), (program) => {
+      program.set('uExposure', basic.exposure)
+        .set('uContrast', basic.contrast / 100)
+        .set('uHighlights', basic.highlights / 100)
+        .set('uShadows', basic.shadows / 100)
+        .set('uWhites', basic.whites / 100)
+        .set('uBlacks', basic.blacks / 100)
+        .set('uVibrance', basic.vibrance / 100)
+        .set('uSaturation', basic.saturation / 100)
+        .set('uProtectSkin', basic.protectSkin ? 1 : 0)
+        .set('uAvoidShift', basic.avoidColorShift ? 1 : 0)
+        .set('uProfileCurve', isRaw ? profile.curve : 0)
+        .set('uProfileSat', isRaw ? profile.saturation : 0)
+        .set('uShoulder', isRaw ? profile.shoulder : 1)
+    })
+  }
 
-    // --- Contrast by detail levels -------------------------------------------
-    if (tone.detailFinest || tone.detailFine || tone.detailCoarse || tone.detailCoarsest) {
-      // A four-octave pyramid, each level blurring the one above it so the
-      // bands really are successive frequency slices rather than four
-      // independent blurs of the original.
-      const l0 = this.blur(input, 1.2, 1)
-      const l1 = this.blur(l0, 1.6, 2)
-      const l2 = this.blur(l1, 1.8, 4)
-      const l3 = this.blur(l2, 2.0, 8)
-      pass(this.cache.get('detailbands', DETAILBANDS_FS), (p) => {
-        p.tex('uL0', l0)
-          .tex('uL1', l1)
-          .tex('uL2', l2)
-          .tex('uL3', l3)
-          .set('uGain', [
-            tone.detailFinest / 100,
-            tone.detailFine / 100,
-            tone.detailCoarse / 100,
-            tone.detailCoarsest / 100,
-          ] as [number, number, number, number])
-          .set('uThresh', tone.detailThreshold / 100)
-      })
-    }
+  private runCreativeStages(edits: Edits, state: GraphState) {
+    this.runToneMapping(edits, state)
+    this.runDetailBands(edits, state)
+    this.runTextureAdjustments(edits, state)
+    this.runToneCurve(edits, state)
+    this.runColorMixer(edits, state)
+    this.runBlackAndWhite(edits, state)
+    this.runColorGrading(edits, state)
+  }
 
-    // --- Texture / Clarity / Dehaze -------------------------------------------
-    if (b.texture || b.clarity || b.dehaze) {
-      const fine = this.blur(input, 1.6, 1)
-      const coarse = this.blur(input, 2.4, 8)
-      pass(this.cache.get('local', LOCAL_FS), (p) => {
-        p.tex('uFine', fine)
-          .tex('uCoarse', coarse)
-          .set('uTexture', b.texture / 100)
-          .set('uClarity', b.clarity / 100)
-          .set('uDehaze', b.dehaze / 100)
-      })
-    }
+  private runToneMapping(edits: Edits, state: GraphState) {
+    const tone = edits.tone
+    if (!tone.shHighlights && !tone.shShadows && !tone.drcAmount) return
+    const downscale = tone.shRadius > 60 ? 16 : tone.shRadius > 25 ? 8 : 4
+    const local = this.blur(state.input, 1.5 + tone.shRadius / 22, downscale)
+    state.pass(this.cache.get('tonemap', TONEMAP_FS), (program) => {
+      program.tex('uBlur', local)
+        .set('uHighlights', tone.shHighlights / 100)
+        .set('uShadows', tone.shShadows / 100)
+        .set('uWidth', Math.max(0.1, tone.shTonalWidth / 100))
+        .set('uDrc', tone.drcAmount / 100)
+        .set('uDrcDetail', tone.drcDetail / 100)
+    })
+  }
 
-    // --- Tone curve -----------------------------------------------------------
-    const tc = edits.curve
-    const hasRgb = !isIdentityParametric(tc.parametric) || !isIdentityPoints(tc.rgb)
+  private runDetailBands(edits: Edits, state: GraphState) {
+    const tone = edits.tone
+    if (!tone.detailFinest && !tone.detailFine && !tone.detailCoarse && !tone.detailCoarsest) return
+    const l0 = this.blur(state.input, 1.2, 1)
+    const l1 = this.blur(l0, 1.6, 2)
+    const l2 = this.blur(l1, 1.8, 4)
+    const l3 = this.blur(l2, 2.0, 8)
+    state.pass(this.cache.get('detailbands', DETAILBANDS_FS), (program) => {
+      program.tex('uL0', l0)
+        .tex('uL1', l1)
+        .tex('uL2', l2)
+        .tex('uL3', l3)
+        .set('uGain', [
+          tone.detailFinest / 100,
+          tone.detailFine / 100,
+          tone.detailCoarse / 100,
+          tone.detailCoarsest / 100,
+        ] as [number, number, number, number])
+        .set('uThresh', tone.detailThreshold / 100)
+    })
+  }
+
+  private runTextureAdjustments(edits: Edits, state: GraphState) {
+    const basic = edits.basic
+    if (!basic.texture && !basic.clarity && !basic.dehaze) return
+    const fine = this.blur(state.input, 1.6, 1)
+    const coarse = this.blur(state.input, 2.4, 8)
+    state.pass(this.cache.get('local', LOCAL_FS), (program) => {
+      program.tex('uFine', fine)
+        .tex('uCoarse', coarse)
+        .set('uTexture', basic.texture / 100)
+        .set('uClarity', basic.clarity / 100)
+        .set('uDehaze', basic.dehaze / 100)
+    })
+  }
+
+  private runToneCurve(edits: Edits, state: GraphState) {
+    const curve = edits.curve
+    const hasRgb = !isIdentityParametric(curve.parametric) || !isIdentityPoints(curve.rgb)
     const hasChannels =
-      !isIdentityPoints(tc.red) || !isIdentityPoints(tc.green) || !isIdentityPoints(tc.blue)
-
-    if (hasRgb || hasChannels) {
-      const lut = this.uploadLut(tc)
-      const CURVE_MODE: Record<string, number> = {
-        standard: 0,
-        weighted: 1,
-        filmLike: 2,
-        saturationAndValue: 3,
-        luminance: 4,
-        perceptual: 5,
-      }
-      pass(this.cache.get('curve', CURVE_FS), (p) => {
-        p.tex('uLut', lut)
-          .set('uHasRgb', hasRgb ? 1 : 0)
-          .set('uHasChannels', hasChannels ? 1 : 0)
-          .set('uMode', CURVE_MODE[tc.rgbMode] ?? 0)
-      })
+      !isIdentityPoints(curve.red) || !isIdentityPoints(curve.green) || !isIdentityPoints(curve.blue)
+    if (!hasRgb && !hasChannels) return
+    const CURVE_MODE: Record<string, number> = {
+      standard: 0, weighted: 1, filmLike: 2, saturationAndValue: 3, luminance: 4, perceptual: 5,
     }
+    state.pass(this.cache.get('curve', CURVE_FS), (program) => {
+      program.tex('uLut', this.uploadLut(curve))
+        .set('uHasRgb', hasRgb ? 1 : 0)
+        .set('uHasChannels', hasChannels ? 1 : 0)
+        .set('uMode', CURVE_MODE[curve.rgbMode] ?? 0)
+    })
+  }
 
-    // --- Colour mixer ---------------------------------------------------------
+  private runColorMixer(edits: Edits, state: GraphState) {
     const mix = edits.colorMixer
-    const isBw = b.treatment === 'bw'
-    const anyBand =
-      !isBw &&
-      COLOR_BANDS.some((band) => mix.hue[band] || mix.saturation[band] || mix.luminance[band])
-    if (anyBand) {
-      const hue = new Float32Array(8)
-      const sat = new Float32Array(8)
-      const lum = new Float32Array(8)
-      COLOR_BANDS.forEach((band, i) => {
-        hue[i] = mix.hue[band] / 100
-        sat[i] = mix.saturation[band] / 100
-        lum[i] = mix.luminance[band] / 100
+    if (edits.basic.treatment === 'bw') return
+    if (!COLOR_BANDS.some((band) => mix.hue[band] || mix.saturation[band] || mix.luminance[band])) return
+    const hue = new Float32Array(8)
+    const sat = new Float32Array(8)
+    const lum = new Float32Array(8)
+    COLOR_BANDS.forEach((band, index) => {
+      hue[index] = mix.hue[band] / 100
+      sat[index] = mix.saturation[band] / 100
+      lum[index] = mix.luminance[band] / 100
+    })
+    state.pass(this.cache.get('colormix', COLORMIX_FS), (program) => {
+      program.set('uHue', hue).set('uSat', sat).set('uLum', lum)
+    })
+  }
+
+  private runBlackAndWhite(edits: Edits, state: GraphState) {
+    if (edits.basic.treatment !== 'bw') return
+    const bw = new Float32Array(8)
+    COLOR_BANDS.forEach((band, index) => { bw[index] = edits.colorMixer.bw[band] / 100 })
+    state.pass(this.cache.get('bw', BW_FS), (program) => { program.set('uMix', bw) })
+  }
+
+  private runColorGrading(edits: Edits, state: GraphState) {
+    const grading = edits.colorGrading
+    const wheels = [grading.shadows, grading.midtones, grading.highlights, grading.global]
+    if (!wheels.some((wheel) => wheel.saturation || wheel.luminance)) return
+    const asVector = (wheel: (typeof wheels)[number]): [number, number, number] => [
+      wheel.hue / 360, wheel.saturation / 100, wheel.luminance / 100,
+    ]
+    state.pass(this.cache.get('grading', GRADING_FS), (program) => {
+      program.set('uShadow', asVector(grading.shadows))
+        .set('uMidtone', asVector(grading.midtones))
+        .set('uHighlight', asVector(grading.highlights))
+        .set('uGlobal', asVector(grading.global))
+        .set('uBlending', grading.blending / 100)
+        .set('uBalance', grading.balance / 100)
+    })
+  }
+
+  private runRetouchStages(edits: Edits, state: GraphState) {
+    this.runSpotRetouch(edits, state)
+    this.runRedEyeRetouch(edits, state)
+  }
+
+  private runSpotRetouch(edits: Edits, state: GraphState) {
+    const spots = edits.spots.filter((spot) => spot.opacity > 0 && spot.radius > 0)
+    if (!spots.length) return
+    const low = this.blurAt(state.input, state.width, state.height, 6, 8)
+    const aspect = aspectVec(state.width, state.height)
+    const program = this.cache.get('spot', SPOT_FS)
+    for (let i = 0; i < spots.length; i += MAX_SPOTS) {
+      const batch = spots.slice(i, i + MAX_SPOTS)
+      const positions = new Float32Array(MAX_SPOTS * 4)
+      const parameters = new Float32Array(MAX_SPOTS * 4)
+      batch.forEach((spot, index) => {
+        positions.set([spot.target.x, spot.target.y, spot.source.x, spot.source.y], index * 4)
+        parameters.set([spot.radius, spot.feather / 100, spot.opacity, spot.mode === 'clone' ? 1 : 0], index * 4)
       })
-      pass(this.cache.get('colormix', COLORMIX_FS), (p) => {
-        p.set('uHue', hue).set('uSat', sat).set('uLum', lum)
+      state.pass(program, (pass) => {
+        pass.tex('uBlur', low).set('uCount', batch.length)
+          .setVectors('uSpots', positions, 4).setVectors('uParams', parameters, 4).set('uAspect', aspect)
       })
     }
+  }
 
-    // --- Black & white --------------------------------------------------------
-    if (isBw) {
-      const bw = new Float32Array(8)
-      COLOR_BANDS.forEach((band, i) => {
-        bw[i] = mix.bw[band] / 100
+  private runRedEyeRetouch(edits: Edits, state: GraphState) {
+    const eyes = edits.redEye.filter((eye) => eye.radius > 0)
+    if (!eyes.length) return
+    const aspect = aspectVec(state.width, state.height)
+    const program = this.cache.get('redEye', RED_EYE_FS)
+    for (let i = 0; i < eyes.length; i += MAX_EYES) {
+      const batch = eyes.slice(i, i + MAX_EYES)
+      const values = new Float32Array(MAX_EYES * 4)
+      const metadata = new Float32Array(MAX_EYES * 4)
+      batch.forEach((eye, index) => {
+        values.set([eye.center.x, eye.center.y, eye.radius, eye.darken / 100], index * 4)
+        metadata.set([eye.kind === 'pet' ? 1 : 0, 0, 0, 0], index * 4)
       })
-      pass(this.cache.get('bw', BW_FS), (p) => {
-        p.set('uMix', bw)
-      })
-    }
-
-    // --- Colour grading -------------------------------------------------------
-    const cg = edits.colorGrading
-    const wheels = [cg.shadows, cg.midtones, cg.highlights, cg.global]
-    if (wheels.some((x) => x.saturation || x.luminance)) {
-      const asVec = (x: (typeof wheels)[number]): [number, number, number] => [
-        x.hue / 360,
-        x.saturation / 100,
-        x.luminance / 100,
-      ]
-      pass(this.cache.get('grading', GRADING_FS), (p) => {
-        p.set('uShadow', asVec(cg.shadows))
-          .set('uMidtone', asVec(cg.midtones))
-          .set('uHighlight', asVec(cg.highlights))
-          .set('uGlobal', asVec(cg.global))
-          .set('uBlending', cg.blending / 100)
-          .set('uBalance', cg.balance / 100)
+      state.pass(program, (pass) => {
+        pass.set('uCount', batch.length).setVectors('uEyes', values, 4)
+          .setVectors('uMeta', metadata, 4).set('uAspect', aspect)
       })
     }
+  }
 
-    // --- 6. Retouch: spots and red-eye ----------------------------------------
-    // Before geometry, because a spot is pinned to the thing it covers: crop or
-    // straighten afterwards and it travels with the blemish rather than with
-    // the frame.
-    const spots = edits.spots.filter((sp) => sp.opacity > 0 && sp.radius > 0)
-    if (spots.length) {
-      // A heal needs the image's low frequencies. One blur serves every spot.
-      const low = this.blurAt(input, w, h, 6, 8)
-      const aspect = aspectVec(w, h)
-      const prog = this.cache.get('spot', SPOT_FS)
-      for (let i = 0; i < spots.length; i += MAX_SPOTS) {
-        const batch = spots.slice(i, i + MAX_SPOTS)
-        const pos = new Float32Array(MAX_SPOTS * 4)
-        const par = new Float32Array(MAX_SPOTS * 4)
-        batch.forEach((sp, k) => {
-          pos.set([sp.target.x, sp.target.y, sp.source.x, sp.source.y], k * 4)
-          par.set(
-            [sp.radius, sp.feather / 100, sp.opacity, sp.mode === 'clone' ? 1 : 0],
-            k * 4,
-          )
-        })
-        pass(prog, (p) => {
-          p.tex('uBlur', low)
-            .set('uCount', batch.length)
-            .setVectors('uSpots', pos, 4)
-            .setVectors('uParams', par, 4)
-            .set('uAspect', aspect)
-        })
-      }
-    }
-
-    const eyes = edits.redEye.filter((r) => r.radius > 0)
-    if (eyes.length) {
-      const aspect = aspectVec(w, h)
-      const prog = this.cache.get('redEye', RED_EYE_FS)
-      for (let i = 0; i < eyes.length; i += MAX_EYES) {
-        const batch = eyes.slice(i, i + MAX_EYES)
-        const arr = new Float32Array(MAX_EYES * 4)
-        const meta = new Float32Array(MAX_EYES * 4)
-        batch.forEach((r, k) => {
-          arr.set([r.center.x, r.center.y, r.radius, r.darken / 100], k * 4)
-          meta.set([r.kind === 'pet' ? 1 : 0, 0, 0, 0], k * 4)
-        })
-        pass(prog, (p) => {
-          p.set('uCount', batch.length)
-            .setVectors('uEyes', arr, 4)
-            .setVectors('uMeta', meta, 4)
-            .set('uAspect', aspect)
-        })
-      }
-    }
-
-    // --- Geometry & optics ----------------------------------------------------
-    // Last of the pixel-moving work and first of the framing: everything above
-    // reads neighbours, so it has to happen while the pixels are still on the
-    // sensor grid. Vignette and grain come after, because a post-crop vignette
-    // is defined on the crop.
-    if (!isIdentityGeometry(edits)) {
-      const out = geometryOutputSize(chain.width, chain.height, edits)
-      const geom = this.geometryChain(out.width, out.height)
-      const c = edits.crop
-      const t = edits.transform
-      const lensG = lens
-
-      const turned = c.quarterTurns % 2 === 1
-
-      // Kept so AI coverage can be replayed through the identical mapping
-      // below. Chromatic aberration and lens vignetting are excluded when it
-      // is: both are optical corrections on colour, and coverage has none.
-      const uniforms: Record<string, number | number[]> = {
-        uInAspect: aspectVec(chain.width, chain.height),
-        uFrameAspect: aspectVec(
-          turned ? chain.height : chain.width,
-          turned ? chain.width : chain.height,
-        ),
-        uCrop: [c.left, c.top, c.right, c.bottom],
-        uAngle: ((c.angle + t.rotate) * Math.PI) / 180,
-        uQuarter: c.quarterTurns & 3,
-        uFlip: [c.flipH ? -1 : 1, c.flipV ? -1 : 1],
-        // Lightroom's ±100 keystone is roughly a half-frame shift at the edge.
-        uPerspective: [t.horizontal / 220, t.vertical / 220],
-        uAspectStretch: [
-          t.aspect > 0 ? 1 + t.aspect / 100 : 1,
-          t.aspect < 0 ? 1 - t.aspect / 100 : 1,
-        ],
-        uScale: Math.max(0.05, t.scale / 100),
-        uOffset: [t.offsetX / 100, -t.offsetY / 100],
-        uDistortion: [-lensG.distortion / 100, 0],
-        uEdgeFill: 0,
-      }
-      this.frameGeom = uniforms
-
-      const prog = this.cache.get('geometry', GEOMETRY_FS)
-      prog.use()
-      prog.tex('uImage', input)
-      for (const [name, value] of Object.entries(uniforms)) prog.set(name, value)
-      prog.set('uCa', [lensG.caRed / 2000, lensG.caBlue / 2000])
-      prog.set('uLensVignette', lensG.vignetting / 100)
-      drawPass(this.enc!, geom.write, prog)
-
-      input = geom.write
-      geom.swap()
-      active = geom
-      w = out.width
-      h = out.height
-      texel = [1 / w, 1 / h]
-    } else {
+  private runGeometryStage(edits: Edits, state: GraphState) {
+    if (isIdentityGeometry(edits)) {
       this.frameGeom = null
+      return
     }
+    const out = geometryOutputSize(state.chain.width, state.chain.height, edits)
+    const geom = this.geometryChain(out.width, out.height)
+    const uniforms = this.geometryUniforms(edits, state.chain)
+    this.frameGeom = uniforms
 
-    // --- Local adjustments ----------------------------------------------------
-    // After geometry, because a mask is drawn on the photo the user can see:
-    // its coordinates are the cropped, straightened frame's, not the sensor's.
-    const masks = edits.masks.filter((m) => m.visible && m.components.length > 0)
-    if (masks.length) {
-      const apply = this.cache.get('maskApply', MASK_APPLY_FS)
-      for (const mask of masks) {
-        const cov = this.buildMask(mask, input, w, h)
-        if (!cov) continue
-        const a = mask.adjustments
-        // Recomputed per mask: the previous mask may have changed the pixels
-        // these are measured against.
-        const fine = this.blurAt(input, w, h, 1.6, 2)
-        const coarse = this.blurAt(input, w, h, 3.0, 8)
-        const hasCurve = a.curve.length > 0 && !isIdentityPoints(a.curve)
-        const maskLut = hasCurve ? this.uploadMaskLut(a.curve) : null
+    const lens = edits.lens
+    const program = this.cache.get('geometry', GEOMETRY_FS)
+    program.use()
+    program.tex('uImage', state.input)
+    for (const [name, value] of Object.entries(uniforms)) program.set(name, value)
+    program.set('uCa', [lens.caRed / 2000, lens.caBlue / 2000])
+    program.set('uLensVignette', lens.vignetting / 100)
+    drawPass(this.enc!, geom.write, program)
 
-        pass(apply, (p) => {
-          p.tex('uMask', cov)
-            .tex('uFine', fine)
-            .tex('uCoarse', coarse)
-            .tex('uLut', maskLut)
-            .set('uHasCurve', hasCurve ? 1 : 0)
-            .set('uLutSize', LUT_SIZE)
-            .set('uOpacity', mask.opacity)
-            .set('uExposure', a.exposure)
-            .set('uContrast', a.contrast / 100)
-            .set('uHighlights', a.highlights / 100)
-            .set('uShadows', a.shadows / 100)
-            .set('uWhites', a.whites / 100)
-            .set('uBlacks', a.blacks / 100)
-            .set('uTexture', a.texture / 100)
-            .set('uClarity', a.clarity / 100)
-            .set('uDehaze', a.dehaze / 100)
-            .set('uTemp', a.temp / 100)
-            .set('uTint', a.tint / 100)
-            .set('uSaturation', a.saturation / 100)
-            .set('uHue', a.hue)
-            .set('uHueStrength', a.hueStrength / 100)
-            .set('uColorize', a.colorize / 100)
-            .set('uSharpness', a.sharpness / 100)
-            .set('uNoise', a.noise / 100)
-            .set('uMoire', a.moire / 100)
-            .set('uDefringe', a.defringe / 100)
-        })
-      }
+    state.input = geom.write
+    geom.swap()
+    state.active = geom
+    state.width = out.width
+    state.height = out.height
+    state.texel = [1 / out.width, 1 / out.height]
+  }
+
+  private geometryUniforms(edits: Edits, chain: PingPong): Record<string, number | number[]> {
+    const crop = edits.crop
+    const transform = edits.transform
+    const lens = edits.lens
+    const turned = crop.quarterTurns % 2 === 1
+    return {
+      uInAspect: aspectVec(chain.width, chain.height),
+      uFrameAspect: aspectVec(
+        turned ? chain.height : chain.width,
+        turned ? chain.width : chain.height,
+      ),
+      uCrop: [crop.left, crop.top, crop.right, crop.bottom],
+      uAngle: ((crop.angle + transform.rotate) * Math.PI) / 180,
+      uQuarter: crop.quarterTurns & 3,
+      uFlip: [crop.flipH ? -1 : 1, crop.flipV ? -1 : 1],
+      uPerspective: [transform.horizontal / 220, transform.vertical / 220],
+      uAspectStretch: [
+        transform.aspect > 0 ? 1 + transform.aspect / 100 : 1,
+        transform.aspect < 0 ? 1 - transform.aspect / 100 : 1,
+      ],
+      uScale: Math.max(0.05, transform.scale / 100),
+      uOffset: [transform.offsetX / 100, -transform.offsetY / 100],
+      uDistortion: [-lens.distortion / 100, 0],
+      uEdgeFill: 0,
     }
+  }
 
-    // --- Effects --------------------------------------------------------------
-    const fx = edits.effects
-    if (fx.vignetteAmount || fx.grainAmount) {
-      const f = active === chain ? this.frame : { resolution: [w, h] as [number, number], offset: [0, 0] as [number, number], scale: [1, 1] as [number, number] }
-      pass(this.cache.get('effects', EFFECTS_FS), (p) => {
-        p.set('uVignette', fx.vignetteAmount / 100)
-          .set('uMidpoint', fx.vignetteMidpoint / 100)
-          .set('uRoundness', fx.vignetteRoundness / 100)
-          .set('uFeather', fx.vignetteFeather / 100)
-          .set('uVignetteHighlights', fx.vignetteHighlights / 100)
-          .set('uGrain', fx.grainAmount / 100)
-          .set('uGrainSize', fx.grainSize / 100)
-          .set('uGrainRough', fx.grainRoughness / 100)
-          .set('uResolution', f.resolution)
-          .set('uFrameOffset', f.offset)
-          .set('uFrameScale', f.scale)
-          .set('uSeed', 0)
-      })
-    }
+  private runLocalAdjustments(edits: Edits, state: GraphState) {
+    const masks = edits.masks.filter((mask) => mask.visible && mask.components.length > 0)
+    if (!masks.length) return
+    const apply = this.cache.get('maskApply', MASK_APPLY_FS)
+    for (const mask of masks) this.applyMask(mask, apply, state)
+  }
 
-    // --- Mask overlay ---------------------------------------------------------
-    // Last of all, so what you see tinted is the finished picture.
-    //
-    // Kept separately because the colour-range picker must sample the picture,
-    // not the tint drawn over it: re-picking a covered pixel would otherwise
-    // store the overlay's colour and throw the selection away. The chain has
-    // ping-ponged past this texture, so it stays intact until the next frame
-    // writes it — exactly as long as `lastResult` does.
-    this.lastClean = input
-    if (overlay) {
-      const mask = edits.masks.find((m) => m.id === overlay.maskId)
-      const cov = mask ? this.buildMask(mask, input, w, h) : null
-      if (cov) {
-        pass(this.cache.get('maskShow', MASK_SHOW_FS), (p) => {
-          p.tex('uMask', cov)
-            .set('uTint', overlay.tint ?? [0.95, 0.25, 0.3])
-            .set('uAmount', overlay.amount ?? 0.55)
-            .set('uMode', overlay.mode === 'coverage' ? 1 : 0)
-        })
-      }
-    }
+  private applyMask(mask: Mask, apply: Pass, state: GraphState) {
+    const coverage = this.buildMask(mask, state.input, state.width, state.height)
+    if (!coverage) return
+    const adjustments = mask.adjustments
+    const fine = this.blurAt(state.input, state.width, state.height, 1.6, 2)
+    const coarse = this.blurAt(state.input, state.width, state.height, 3.0, 8)
+    const hasCurve = adjustments.curve.length > 0 && !isIdentityPoints(adjustments.curve)
+    const lut = hasCurve ? this.uploadMaskLut(adjustments.curve) : null
+    state.pass(apply, (program) => {
+      program.tex('uMask', coverage).tex('uFine', fine).tex('uCoarse', coarse).tex('uLut', lut)
+        .set('uHasCurve', hasCurve ? 1 : 0).set('uLutSize', LUT_SIZE).set('uOpacity', mask.opacity)
+        .set('uExposure', adjustments.exposure).set('uContrast', adjustments.contrast / 100)
+        .set('uHighlights', adjustments.highlights / 100).set('uShadows', adjustments.shadows / 100)
+        .set('uWhites', adjustments.whites / 100).set('uBlacks', adjustments.blacks / 100)
+        .set('uTexture', adjustments.texture / 100).set('uClarity', adjustments.clarity / 100)
+        .set('uDehaze', adjustments.dehaze / 100).set('uTemp', adjustments.temp / 100)
+        .set('uTint', adjustments.tint / 100).set('uSaturation', adjustments.saturation / 100)
+        .set('uHue', adjustments.hue).set('uHueStrength', adjustments.hueStrength / 100)
+        .set('uColorize', adjustments.colorize / 100).set('uSharpness', adjustments.sharpness / 100)
+        .set('uNoise', adjustments.noise / 100).set('uMoire', adjustments.moire / 100)
+        .set('uDefringe', adjustments.defringe / 100)
+    })
+  }
 
-    this.lastResult = input
-    this.lastMipped = false
-    this.lastSize = { width: w, height: h }
-    return input
+  private runEffects(edits: Edits, state: GraphState) {
+    const effects = edits.effects
+    if (!effects.vignetteAmount && !effects.grainAmount) return
+    const frame = state.active === state.chain
+      ? this.frame
+      : { resolution: [state.width, state.height] as [number, number], offset: [0, 0] as [number, number], scale: [1, 1] as [number, number] }
+    state.pass(this.cache.get('effects', EFFECTS_FS), (program) => {
+      program.set('uVignette', effects.vignetteAmount / 100).set('uMidpoint', effects.vignetteMidpoint / 100)
+        .set('uRoundness', effects.vignetteRoundness / 100).set('uFeather', effects.vignetteFeather / 100)
+        .set('uVignetteHighlights', effects.vignetteHighlights / 100).set('uGrain', effects.grainAmount / 100)
+        .set('uGrainSize', effects.grainSize / 100).set('uGrainRough', effects.grainRoughness / 100)
+        .set('uResolution', frame.resolution).set('uFrameOffset', frame.offset).set('uFrameScale', frame.scale)
+        .set('uSeed', 0)
+    })
+  }
+
+  private runMaskOverlay(edits: Edits, overlay: MaskOverlay | null, state: GraphState) {
+    if (!overlay) return
+    const mask = edits.masks.find((candidate) => candidate.id === overlay.maskId)
+    const coverage = mask ? this.buildMask(mask, state.input, state.width, state.height) : null
+    if (!coverage) return
+    state.pass(this.cache.get('maskShow', MASK_SHOW_FS), (program) => {
+      program.tex('uMask', coverage)
+        .set('uTint', overlay.tint ?? [0.95, 0.25, 0.3])
+        .set('uAmount', overlay.amount ?? 0.55)
+        .set('uMode', overlay.mode === 'coverage' ? 1 : 0)
+    })
   }
 
   // -------------------------------------------------------------------------
@@ -940,138 +920,174 @@ export class Renderer {
     width: number,
     height: number,
   ): Tex | null {
-    // An AI component with no coverage yet is dropped rather than rasterised
-    // as empty. Detection is asynchronous, and a mask that briefly reads as
-    // "everything is selected" would flash the whole photo's adjustments on
-    // screen in the second before the network answers.
-    const parts = mask.components.filter(
-      (c) => c.geometry.kind in MASK_KIND && (!isAiGeometry(c.geometry) || this.aiCoverage(c.geometry.cacheKey)),
-    )
+    const parts = this.rasterizableMaskParts(mask)
     if (!parts.length) return null
+    const { acc, scratch } = this.maskTargets(width, height)
+    const aspect = aspectVec(width, height)
+    const raster = this.cache.get('mask', MASK_FS)
+    const merge = this.cache.get('maskMerge', MASK_MERGE_FS)
+    let coverage: Tex = acc.read
+    let first = true
 
+    for (const part of parts) {
+      if (!this.rasterMaskPart(part, image, width, height, aspect, scratch, raster)) continue
+      coverage = this.mergeMaskPart(part, coverage, first, acc, scratch, merge)
+      first = false
+    }
+    if (first) return null
+    return mask.inverted ? this.invertMask(coverage, acc, merge) : coverage
+  }
+
+  private rasterizableMaskParts(mask: Mask) {
+    return mask.components.filter((component) => {
+      const geometry = component.geometry
+      return geometry.kind in MASK_KIND && (!isAiGeometry(geometry) || this.aiCoverage(geometry.cacheKey))
+    })
+  }
+
+  private maskTargets(width: number, height: number) {
     if (!this.maskAcc || this.maskAcc.width !== width || this.maskAcc.height !== height) {
       this.retire(this.maskAcc)
       this.retire(this.maskScratch)
       this.maskAcc = new PingPong(this.ctx, width, height)
       this.maskScratch = new PingPong(this.ctx, width, height)
     }
-    const acc = this.maskAcc
-    const scratch = this.maskScratch!
-    const aspect = aspectVec(width, height)
+    return { acc: this.maskAcc, scratch: this.maskScratch! }
+  }
 
-    const raster = this.cache.get('mask', MASK_FS)
-    const merge = this.cache.get('maskMerge', MASK_MERGE_FS)
-
-    let cov: Tex = acc.read
-    let first = true
-
-    for (const part of parts) {
-      const g = part.geometry
-      const kind = MASK_KIND[g.kind as keyof typeof MASK_KIND]
-
-      // -- rasterise into scratch --------------------------------------------
-      if (g.kind === 'brush') {
-        const dabs = g.dabs
-        if (!dabs.length) continue
-        const buf = new Float32Array(MAX_DABS * 4)
-        for (let i = 0; i < dabs.length; i += MAX_DABS) {
-          const chunk = dabs.slice(i, i + MAX_DABS)
-          buf.fill(0)
-          chunk.forEach((d, j) => {
-            buf[j * 4] = d.x
-            buf[j * 4 + 1] = d.y
-            buf[j * 4 + 2] = d.radius
-            // Erase rides in as a negative flow, so the shader needs no branch
-            // on a second array.
-            buf[j * 4 + 3] = d.erase ? -Math.max(d.flow, 0.001) : Math.max(d.flow, 0.001)
-          })
-          raster.use()
-          raster.tex('uImage', image).tex('uPrev', scratch.read)
-          // Bound for the same reason the other kinds bind it below: `uAlpha`
-          // is declared unconditionally, and a declared texture that is never
-          // bound is an error rather than an empty read.
-          raster.tex('uAlpha', null)
-          raster.setVectors('uDabs', buf, 4)
-          raster
-            .set('uKind', kind)
-            .set('uAspect', aspect)
-            .set('uDabCount', chunk.length)
-            .set('uBrushFeather', g.feather)
-            .set('uFirstChunk', i === 0 ? 1 : 0)
-          drawPass(this.enc!, scratch.write, raster)
-          scratch.swap()
-        }
-      } else {
-        // Coverage arrives on the sensor grid, so it is walked through the
-        // frame's own geometry before anything samples it. Resolved before the
-        // raster pass is configured because it draws a pass of its own.
-        const ai = isAiGeometry(g) ? g : null
-        const alpha = ai ? this.framedAlpha(ai.cacheKey, width, height) : null
-
-        raster.use()
-        raster.tex('uImage', image).tex('uPrev', scratch.read)
-        // Bound for every kind, not just the detected ones. The shader declares
-        // `uAlpha` unconditionally, and a declared texture that is never bound
-        // is an error rather than a placeholder — so a gradient drawn while an
-        // AI kind exists in the same build would take the whole mask down.
-        raster.tex('uAlpha', alpha)
-        raster.set('uKind', kind).set('uAspect', aspect)
-        if (g.kind === 'linear') {
-          raster.set('uP0', [g.start.x, g.start.y]).set('uP1', [g.end.x, g.end.y])
-        } else if (g.kind === 'radial') {
-          raster
-            .set('uCenter', [g.center.x, g.center.y])
-            .set('uRadius', [g.radiusX, g.radiusY])
-            .set('uRotation', g.rotation)
-            .set('uFeather', g.feather)
-        } else if (g.kind === 'colorRange') {
-          const buf = new Float32Array(MAX_SAMPLES * 3)
-          const n = Math.min(g.samples.length, MAX_SAMPLES)
-          for (let i = 0; i < n; i++) {
-            buf[i * 3] = g.samples[i].r
-            buf[i * 3 + 1] = g.samples[i].g
-            buf[i * 3 + 2] = g.samples[i].b
-          }
-          raster.setVectors('uSamples', buf, 3)
-          raster.set('uSampleCount', n).set('uRefine', g.refine)
-        } else if (g.kind === 'luminanceRange') {
-          raster.set('uRange', g.range).set('uSmoothness', g.smoothness)
-        } else if (ai && alpha) {
-          raster
-            .set('uRefine', ai.refine)
-            .set('uTexel', [1 / width, 1 / height])
-            .set('uAiInvert', ai.kind === 'aiBackground' ? 1 : 0)
-        }
-        drawPass(this.enc!, scratch.write, raster)
-        scratch.swap()
-      }
-
-      // -- fold into the accumulator -----------------------------------------
-      merge.use()
-      merge.tex('uPrev', cov).tex('uCov', scratch.read)
-      merge
-        .set('uBlend', MASK_BLEND[part.blend as keyof typeof MASK_BLEND] ?? 0)
-        .set('uInvert', part.invert ? 1 : 0)
-        .set('uFirst', first ? 1 : 0)
-      drawPass(this.enc!, acc.write, merge)
-      cov = acc.write
-      acc.swap()
-      first = false
+  private rasterMaskPart(
+    part: Mask['components'][number],
+    image: Tex,
+    width: number,
+    height: number,
+    aspect: [number, number],
+    scratch: PingPong,
+    raster: Pass,
+  ) {
+    const geometry = part.geometry
+    const kind = MASK_KIND[geometry.kind as keyof typeof MASK_KIND]
+    if (geometry.kind === 'brush') {
+      return this.rasterBrush(geometry, image, aspect, scratch, raster, kind)
     }
+    this.rasterNonBrush(geometry, image, width, height, aspect, scratch, raster, kind)
+    return true
+  }
 
-    if (first) return null
-
-    // The whole-mask invert comes last, so it flips the finished shape rather
-    // than each component in turn.
-    if (mask.inverted) {
-      merge.use()
-      merge.tex('uPrev', cov).tex('uCov', cov)
-      merge.set('uBlend', 0).set('uInvert', 1).set('uFirst', 1)
-      drawPass(this.enc!, acc.write, merge)
-      cov = acc.write
-      acc.swap()
+  private rasterBrush(
+    geometry: Extract<Mask['components'][number]['geometry'], { kind: 'brush' }>,
+    image: Tex,
+    aspect: [number, number],
+    scratch: PingPong,
+    raster: Pass,
+    kind: number,
+  ) {
+    if (!geometry.dabs.length) return false
+    const values = new Float32Array(MAX_DABS * 4)
+    for (let i = 0; i < geometry.dabs.length; i += MAX_DABS) {
+      const dabs = geometry.dabs.slice(i, i + MAX_DABS)
+      values.fill(0)
+      dabs.forEach((dab, index) => {
+        values[index * 4] = dab.x
+        values[index * 4 + 1] = dab.y
+        values[index * 4 + 2] = dab.radius
+        values[index * 4 + 3] = dab.erase ? -Math.max(dab.flow, 0.001) : Math.max(dab.flow, 0.001)
+      })
+      raster.use()
+      raster.tex('uImage', image).tex('uPrev', scratch.read).tex('uAlpha', null)
+      raster.setVectors('uDabs', values, 4)
+      raster.set('uKind', kind).set('uAspect', aspect).set('uDabCount', dabs.length)
+        .set('uBrushFeather', geometry.feather).set('uFirstChunk', i === 0 ? 1 : 0)
+      drawPass(this.enc!, scratch.write, raster)
+      scratch.swap()
     }
-    return cov
+    return true
+  }
+
+  private rasterNonBrush(
+    geometry: Exclude<Mask['components'][number]['geometry'], { kind: 'brush' }>,
+    image: Tex,
+    width: number,
+    height: number,
+    aspect: [number, number],
+    scratch: PingPong,
+    raster: Pass,
+    kind: number,
+  ) {
+    const ai = isAiGeometry(geometry) ? geometry : null
+    const alpha = ai ? this.framedAlpha(ai.cacheKey, width, height) : null
+    raster.use()
+    raster.tex('uImage', image).tex('uPrev', scratch.read).tex('uAlpha', alpha)
+    raster.set('uKind', kind).set('uAspect', aspect)
+    this.configureMaskRaster(geometry, ai, alpha, width, height, raster)
+    drawPass(this.enc!, scratch.write, raster)
+    scratch.swap()
+  }
+
+  private configureMaskRaster(
+    geometry: Exclude<Mask['components'][number]['geometry'], { kind: 'brush' }>,
+    ai: Extract<Mask['components'][number]['geometry'], { kind: `ai${string}` }> | null,
+    alpha: Tex | null,
+    width: number,
+    height: number,
+    raster: Pass,
+  ) {
+    if (geometry.kind === 'linear') {
+      raster.set('uP0', [geometry.start.x, geometry.start.y]).set('uP1', [geometry.end.x, geometry.end.y])
+    } else if (geometry.kind === 'radial') {
+      raster.set('uCenter', [geometry.center.x, geometry.center.y])
+        .set('uRadius', [geometry.radiusX, geometry.radiusY])
+        .set('uRotation', geometry.rotation).set('uFeather', geometry.feather)
+    } else if (geometry.kind === 'colorRange') {
+      this.setColorRangeSamples(geometry, raster)
+    } else if (geometry.kind === 'luminanceRange') {
+      raster.set('uRange', geometry.range).set('uSmoothness', geometry.smoothness)
+    } else if (ai && alpha) {
+      raster.set('uRefine', ai.refine).set('uTexel', [1 / width, 1 / height])
+        .set('uAiInvert', ai.kind === 'aiBackground' ? 1 : 0)
+    }
+  }
+
+  private setColorRangeSamples(
+    geometry: Extract<Mask['components'][number]['geometry'], { kind: 'colorRange' }>,
+    raster: Pass,
+  ) {
+    const values = new Float32Array(MAX_SAMPLES * 3)
+    const count = Math.min(geometry.samples.length, MAX_SAMPLES)
+    for (let i = 0; i < count; i++) {
+      values[i * 3] = geometry.samples[i].r
+      values[i * 3 + 1] = geometry.samples[i].g
+      values[i * 3 + 2] = geometry.samples[i].b
+    }
+    raster.setVectors('uSamples', values, 3)
+    raster.set('uSampleCount', count).set('uRefine', geometry.refine)
+  }
+
+  private mergeMaskPart(
+    part: Mask['components'][number],
+    previous: Tex,
+    first: boolean,
+    acc: PingPong,
+    scratch: PingPong,
+    merge: Pass,
+  ) {
+    merge.use()
+    merge.tex('uPrev', previous).tex('uCov', scratch.read)
+    merge.set('uBlend', MASK_BLEND[part.blend as keyof typeof MASK_BLEND] ?? 0)
+      .set('uInvert', part.invert ? 1 : 0).set('uFirst', first ? 1 : 0)
+    drawPass(this.enc!, acc.write, merge)
+    const coverage = acc.write
+    acc.swap()
+    return coverage
+  }
+
+  private invertMask(coverage: Tex, acc: PingPong, merge: Pass) {
+    merge.use()
+    merge.tex('uPrev', coverage).tex('uCov', coverage)
+    merge.set('uBlend', 0).set('uInvert', 1).set('uFirst', 1)
+    drawPass(this.enc!, acc.write, merge)
+    const inverted = acc.write
+    acc.swap()
+    return inverted
   }
 
   /**

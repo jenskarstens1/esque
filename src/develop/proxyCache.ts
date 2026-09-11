@@ -44,6 +44,58 @@ async function clearStaleKey(photo: Photo, expected: string) {
   await db.photos.update(photo.id, { proxyKey: null })
 }
 
+interface ProxyHeader {
+  width: number
+  height: number
+  fullWidth: number
+  fullHeight: number
+  modifiedAt: number
+  fileSize: number
+  scale: number
+  whiteLevel: number
+  temp: number
+  tint: number
+  qualityCode: number
+  dataBytes: number
+}
+
+function readHeader(view: DataView): ProxyHeader {
+  return {
+    width: view.getUint32(8, true),
+    height: view.getUint32(12, true),
+    fullWidth: view.getUint32(16, true),
+    fullHeight: view.getUint32(20, true),
+    scale: view.getFloat32(24, true),
+    whiteLevel: view.getFloat32(28, true),
+    temp: view.getFloat32(32, true),
+    tint: view.getFloat32(36, true),
+    modifiedAt: view.getFloat64(40, true),
+    fileSize: view.getFloat64(48, true),
+    qualityCode: view.getUint32(56, true),
+    dataBytes: view.getUint32(60, true),
+  }
+}
+
+function validHeader(
+  view: DataView,
+  header: ProxyHeader,
+  photo: Photo,
+  bufferBytes: number,
+) {
+  const { width, height, fullWidth, fullHeight, scale, whiteLevel, temp, tint } = header
+  if (view.getUint32(0, true) !== MAGIC || view.getUint32(4, true) !== VERSION) return false
+  if (width <= 0 || height <= 0 || fullWidth < width || fullHeight < height) return false
+  if (header.modifiedAt !== photo.modifiedAt || header.fileSize !== photo.fileSize) return false
+  if (!Number.isFinite(scale) || scale <= 0 || scale > 1) return false
+  if (!Number.isFinite(whiteLevel) || whiteLevel <= 0) return false
+  if (!Number.isFinite(temp) || !Number.isFinite(tint)) return false
+  if (header.qualityCode !== QUALITY_CODE.interactive && header.qualityCode !== QUALITY_CODE.full) {
+    return false
+  }
+  if (header.dataBytes !== width * height * 8) return false
+  return bufferBytes === HEADER_BYTES + header.dataBytes
+}
+
 /**
  * Reads a standard linear proxy and verifies it against the source fingerprint.
  * A truncated OPFS write or a changed original is a cache miss, never a decoder
@@ -72,44 +124,25 @@ export async function readProxyCache(
   }
 
   const header = new DataView(buffer, 0, HEADER_BYTES)
-  const width = header.getUint32(8, true)
-  const height = header.getUint32(12, true)
-  const fullWidth = header.getUint32(16, true)
-  const fullHeight = header.getUint32(20, true)
-  const modifiedAt = header.getFloat64(40, true)
-  const fileSize = header.getFloat64(48, true)
-  const scale = header.getFloat32(24, true)
-  const whiteLevel = header.getFloat32(28, true)
-  const temp = header.getFloat32(32, true)
-  const tint = header.getFloat32(36, true)
-  const qualityCode = header.getUint32(56, true)
-  const dataBytes = header.getUint32(60, true)
-  const valid =
-    header.getUint32(0, true) === MAGIC &&
-    header.getUint32(4, true) === VERSION &&
-    width > 0 &&
-    height > 0 &&
-    fullWidth >= width &&
-    fullHeight >= height &&
-    modifiedAt === photo.modifiedAt &&
-    fileSize === photo.fileSize &&
-    Number.isFinite(scale) &&
-    scale > 0 &&
-    scale <= 1 &&
-    Number.isFinite(whiteLevel) &&
-    whiteLevel > 0 &&
-    Number.isFinite(temp) &&
-    Number.isFinite(tint) &&
-    (qualityCode === QUALITY_CODE.interactive || qualityCode === QUALITY_CODE.full) &&
-    dataBytes === width * height * 8 &&
-    buffer.byteLength === HEADER_BYTES + dataBytes
-
-  if (!valid) {
+  const values = readHeader(header)
+  if (!validHeader(header, values, photo, buffer.byteLength)) {
     await cacheDelete(key)
     if (photo.proxyKey === key) await db.photos.update(photo.id, { proxyKey: null })
     return null
   }
 
+  const {
+    width,
+    height,
+    fullWidth,
+    fullHeight,
+    scale,
+    whiteLevel,
+    temp,
+    tint,
+    qualityCode,
+    dataBytes,
+  } = values
   const quality = qualityCode === QUALITY_CODE.full ? 'full' : 'interactive'
   return {
     photoId: photo.id,

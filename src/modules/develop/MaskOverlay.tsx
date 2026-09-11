@@ -3,7 +3,7 @@ import { useDevelop } from '../../develop/session'
 import { useMasking } from '../../develop/masking'
 import { useUI } from '../../state/ui'
 import type { FrameBox } from './CropOverlay'
-import type { BrushDab, MaskComponent, Point2 } from '../../core/types'
+import type { BrushDab, Mask, MaskComponent, Point2 } from '../../core/types'
 import { activeRenderer } from './activeRenderer'
 import { SRGB_D65_TO_PROPHOTO_D50 } from '../../core/color'
 
@@ -30,6 +30,51 @@ type Drag =
 
 /** Dabs are laid along a stroke at this fraction of the radius. */
 const DAB_SPACING = 0.25
+
+function PlacementHint({
+  pendingKind,
+  dragging,
+}: {
+  pendingKind: ReturnType<typeof useMasking.getState>['pendingKind']
+  dragging: boolean
+}) {
+  if (!pendingKind || dragging) return null
+  return (
+    <div className="material pointer-events-none absolute left-1/2 top-4 -translate-x-1/2 rounded-full px-2.5 py-1 text-mini text-label-secondary shadow-hud">
+      {pendingKind === 'brush' ? 'Paint on the photo' : 'Drag on the photo to place'}
+    </div>
+  )
+}
+
+function MaskPicker({
+  masks,
+  selectedMaskId,
+  select,
+}: {
+  masks: Mask[]
+  selectedMaskId: string | null
+  select: (maskId: string | null, componentId: string | null) => void
+}) {
+  if (masks.length <= 1) return null
+  return (
+    <div className="absolute left-3 top-3 flex flex-col gap-1">
+      {masks.map((mask) => (
+        <button
+          key={mask.id}
+          type="button"
+          onClick={() => select(mask.id, mask.components[0]?.id ?? null)}
+          className={`rounded-full px-2 py-0.5 text-mini shadow-hud transition-colors duration-[--duration-fast] ${
+            mask.id === selectedMaskId
+              ? 'bg-accent text-(--accent-ink)'
+              : 'material text-label-secondary hover:text-label'
+          }`}
+        >
+          {mask.name}
+        </button>
+      ))}
+    </div>
+  )
+}
 
 export function MaskOverlay({ frame }: { frame: FrameBox }) {
   const tool = useUI((s) => s.developTool)
@@ -339,30 +384,8 @@ export function MaskOverlay({ frame }: { frame: FrameBox }) {
         />
       )}
 
-      {pendingKind && !drag && (
-        <div className="material pointer-events-none absolute left-1/2 top-4 -translate-x-1/2 rounded-full px-2.5 py-1 text-mini text-label-secondary shadow-hud">
-          {pendingKind === 'brush' ? 'Paint on the photo' : 'Drag on the photo to place'}
-        </div>
-      )}
-
-      {masks.length > 1 && (
-        <div className="absolute left-3 top-3 flex flex-col gap-1">
-          {masks.map((m) => (
-            <button
-              key={m.id}
-              type="button"
-              onClick={() => select(m.id, m.components[0]?.id ?? null)}
-              className={`rounded-full px-2 py-0.5 text-mini shadow-hud transition-colors duration-[--duration-fast] ${
-                m.id === selectedMaskId
-                  ? 'bg-accent text-(--accent-ink)'
-                  : 'material text-label-secondary hover:text-label'
-              }`}
-            >
-              {m.name}
-            </button>
-          ))}
-        </div>
-      )}
+      <PlacementHint pendingKind={pendingKind} dragging={!!drag} />
+      <MaskPicker masks={masks} selectedMaskId={selectedMaskId} select={select} />
     </div>
   )
 }

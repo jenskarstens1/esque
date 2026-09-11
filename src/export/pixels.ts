@@ -229,6 +229,26 @@ const FONT_STACK: Record<WatermarkFont, string> = {
   mono: 'ui-monospace, "SF Mono", Menlo, monospace',
 }
 
+function watermarkPlacement(
+  width: number,
+  height: number,
+  mark: WatermarkSettings,
+) {
+  const longEdge = Math.max(width, height)
+  const fontSize = Math.max(10, (mark.size / 100) * longEdge)
+  const inset = (mark.inset / 100) * longEdge
+  const font = `500 ${fontSize}px ${FONT_STACK[mark.font] ?? FONT_STACK.sans}`
+  const [vertical, horizontal] = mark.position.split('-') as [string, string]
+  const baseline: CanvasTextBaseline = vertical === 'top' ? 'top' : 'alphabetic'
+  const align: CanvasTextAlign =
+    horizontal === 'left' ? 'left' : horizontal === 'right' ? 'right' : 'center'
+  const x = horizontal === 'left' ? inset : horizontal === 'right' ? width - inset : width / 2
+  const y = vertical === 'top' ? inset : height - inset
+  const blur = mark.shadow ? fontSize * 0.18 : 0
+  const offsetY = mark.shadow ? fontSize * 0.04 : 0
+  return { font, baseline, align, x, y, blur, offsetY }
+}
+
 /**
  * Draws the text watermark.
  *
@@ -246,20 +266,8 @@ export function watermark(plane: Plane, mark: WatermarkSettings): Plane {
   if (!mark.enabled || !mark.text.trim()) return plane
 
   const { width, height, data } = plane
-  const longEdge = Math.max(width, height)
-  const fontSize = Math.max(10, (mark.size / 100) * longEdge)
-  const inset = (mark.inset / 100) * longEdge
-  const font = `500 ${fontSize}px ${FONT_STACK[mark.font] ?? FONT_STACK.sans}`
-
-  const [vertical, horizontal] = mark.position.split('-') as [string, string]
-  const baseline: CanvasTextBaseline = vertical === 'top' ? 'top' : 'alphabetic'
-  const align: CanvasTextAlign =
-    horizontal === 'left' ? 'left' : horizontal === 'right' ? 'right' : 'center'
-  const x = horizontal === 'left' ? inset : horizontal === 'right' ? width - inset : width / 2
-  const y = vertical === 'top' ? inset : height - inset
-
-  const blur = mark.shadow ? fontSize * 0.18 : 0
-  const offsetY = mark.shadow ? fontSize * 0.04 : 0
+  const { font, baseline, align, x, y, blur, offsetY } =
+    watermarkPlacement(width, height, mark)
 
   const measure = new OffscreenCanvas(1, 1).getContext('2d')
   if (!measure) return plane
