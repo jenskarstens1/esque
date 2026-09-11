@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { PanelSection, MiniAction } from '../../../design/Panel'
 import { panelMenuItems } from '../../../shell/appMenus'
-import { SegmentedControl } from '../../../design/Controls'
+import { ControlField, SegmentedControl } from '../../../design/Controls'
 import { EditSlider } from '../EditSlider'
 import { isSectionModified } from '../../../develop/modified'
 import { useDevelop } from '../../../develop/session'
@@ -107,14 +107,11 @@ export function ColorMixerPanel() {
       </div>
 
       {channel === 'all' ? (
-        <div className="space-y-3">
+        <div className="space-y-1">
           {(['hue', 'saturation', 'luminance'] as Channel[]).map((ch) => (
-            <div key={ch}>
-              <div className="mb-0.5 text-micro tracking-[0.06em] text-label-quaternary uppercase">
-                {ch}
-              </div>
+            <ControlField key={ch} label={ch.charAt(0).toUpperCase() + ch.slice(1)}>
               {rows(ch)}
-            </div>
+            </ControlField>
           ))}
         </div>
       ) : (

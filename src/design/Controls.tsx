@@ -444,6 +444,82 @@ export function Checkbox({
 // Select
 // ---------------------------------------------------------------------------
 
+/**
+ * The caption above a control that isn't a slider.
+ *
+ * A panel reads as one column when every control names itself the same way, so
+ * this matches a slider's label exactly — same size, same colour, same place.
+ *
+ * The 2px below is leading, not spacing: a slider's label shares a baseline
+ * grid with its number, which is the taller of the two and so leaves a sliver
+ * of space under the label. A caption with nothing beside it has no such
+ * sliver, and without this would sit measurably closer to its control.
+ */
+export function FieldLabel({ children }: { children: ReactNode }) {
+  return <div className="mb-0.5 truncate text-mini text-label-secondary">{children}</div>
+}
+
+/**
+ * A dropdown labelled the way a slider is: name above, control below.
+ *
+ * A label set beside its dropdown put the name on a different axis from every
+ * slider under it, and cost the dropdown a fixed column of width it needed for
+ * its longest option. Above, the two read as one list.
+ *
+ * The row carries the same 8px of air above and below the control that a
+ * slider gives its track, so a label sits the same distance from the thing it
+ * names whether that thing is a dropdown or a slider. Children share the row,
+ * which is how a dropper or any other affordance sits beside its dropdown.
+ */
+export function SelectField({
+  label,
+  children,
+  className,
+}: {
+  label: ReactNode
+  children: ReactNode
+  className?: string
+}) {
+  return (
+    <div className={className}>
+      <FieldLabel>{label}</FieldLabel>
+      <div className="flex h-10 items-center gap-1.5">{children}</div>
+    </div>
+  )
+}
+
+/**
+ * Anything else that needs naming above it: a grid of chips, a pair of
+ * buttons, a block of rows.
+ *
+ * The label is the same one a slider and a dropdown use — sentence case, the
+ * panel's own text size, secondary colour — because a tracked-caps eyebrow in
+ * the middle of a panel body reads as a heading for the rest of the panel
+ * rather than a caption for the thing underneath it. Eyebrows belong to panel
+ * titles and menu group headers; inside a body, name a group the way every
+ * other control in the column is named.
+ *
+ * The 8px of air above and below matches `SelectField`'s row and a slider's
+ * track, so a labelled group drops into the column without breaking its
+ * rhythm.
+ */
+export function ControlField({
+  label,
+  children,
+  className,
+}: {
+  label: ReactNode
+  children: ReactNode
+  className?: string
+}) {
+  return (
+    <div className={className}>
+      <FieldLabel>{label}</FieldLabel>
+      <div className="py-2">{children}</div>
+    </div>
+  )
+}
+
 export function Select<T extends string>({
   value,
   onChange,

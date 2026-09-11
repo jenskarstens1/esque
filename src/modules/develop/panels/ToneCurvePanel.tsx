@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { PanelSection, MiniAction } from '../../../design/Panel'
 import { panelMenuItems } from '../../../shell/appMenus'
-import { SegmentedControl, Select } from '../../../design/Controls'
+import { SegmentedControl, Select, SelectField } from '../../../design/Controls'
 import { CurveEditor, type CurveChannel } from '../CurveEditor'
 import { EditSlider } from '../EditSlider'
 import { isSectionModified } from '../../../develop/modified'
@@ -123,9 +123,9 @@ export function ToneCurvePanel() {
       {/* The composite curve's mode decides what the shape is applied to, and
           changes the result far more than any tweak to the shape itself. */}
       {(mode === 'parametric' || channel === 'rgb') && (
-        <div className="mt-2 flex items-center gap-2">
-          <span className="shrink-0 text-mini text-label-tertiary">Apply to</span>
+        <SelectField label="Apply to">
           <Select
+            size="sm"
             value={curve.rgbMode}
             options={CURVE_MODES}
             onChange={(m) =>
@@ -140,7 +140,7 @@ export function ToneCurvePanel() {
             }
             className="min-w-0 flex-1"
           />
-        </div>
+        </SelectField>
       )}
     </PanelSection>
   )

@@ -1,6 +1,6 @@
 import { PanelSection, MiniAction } from '../../../design/Panel'
 import { panelMenuItems } from '../../../shell/appMenus'
-import { Select } from '../../../design/Controls'
+import { Select, SelectField } from '../../../design/Controls'
 import { EditSlider } from '../EditSlider'
 import { isSectionModified } from '../../../develop/modified'
 import { useDevelop } from '../../../develop/session'
@@ -46,15 +46,15 @@ export function TonePanel() {
     >
       {isRaw && (
         <>
-          <div className="mb-1 flex items-center gap-2">
-            <span className="w-[44px] shrink-0 text-mini text-label-tertiary">Recovery</span>
+          <SelectField label="Recovery">
             <Select
+              size="sm"
               value={recovery}
               options={RECOVERY_OPTIONS}
               onChange={setRecovery}
               className="min-w-0 flex-1"
             />
-          </div>
+          </SelectField>
           <EditSlider
             path="tone.recoveryThreshold"
             label="Recovery Threshold"

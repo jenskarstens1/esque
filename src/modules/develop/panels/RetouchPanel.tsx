@@ -3,7 +3,7 @@ import { cn } from '../../../lib/cn'
 import { CloseIcon, HealIcon, TrashIcon } from '../../../design/icons'
 import { MENU_ICON } from '../../../design/Menu'
 import { PanelSection, MiniAction } from '../../../design/Panel'
-import { Button, Select } from '../../../design/Controls'
+import { Button, Select, SelectField } from '../../../design/Controls'
 import { SliderRow } from '../../../design/Slider'
 import { useMenu } from '../../../design/useMenu'
 import { panelMenuItems } from '../../../shell/appMenus'
@@ -50,9 +50,10 @@ function SpotControls({
 }) {
   return (
     <div className="mt-2.5">
-      <div className="mb-1.5 flex items-center gap-1.5">
-        <span className="w-[44px] shrink-0 text-mini text-label-tertiary">Spot</span>
+      <SelectField label="Spot">
         <Select
+          size="sm"
+          className="min-w-0 flex-1"
           value={spot ? spot.mode : retouch.spotMode}
           onChange={(value) => {
             const mode = value as SpotEdit['mode']
@@ -64,7 +65,7 @@ function SpotControls({
             label: SPOT_MODE_LABELS[mode],
           }))}
         />
-      </div>
+      </SelectField>
       <SliderRow
         label="Spot Size"
         min={0.005}
@@ -188,9 +189,10 @@ function EyeControls({
 }) {
   return (
     <div className="mt-2.5">
-      <div className="mb-1.5 flex items-center gap-1.5">
-        <span className="w-[44px] shrink-0 text-mini text-label-tertiary">Eye</span>
+      <SelectField label="Eye">
         <Select
+          size="sm"
+          className="min-w-0 flex-1"
           value={eye ? eye.kind : retouch.eyeKind}
           onChange={(value) => {
             const kind = value as RedEyeEdit['kind']
@@ -202,7 +204,7 @@ function EyeControls({
             label: EYE_KIND_LABELS[kind],
           }))}
         />
-      </div>
+      </SelectField>
       <SliderRow
         label="Pupil Size"
         min={0.005}

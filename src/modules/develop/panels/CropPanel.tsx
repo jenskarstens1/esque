@@ -1,5 +1,5 @@
 import { PanelSection, MiniAction } from '../../../design/Panel'
-import { Button, Checkbox, Select } from '../../../design/Controls'
+import { Button, Checkbox, Select, SelectField } from '../../../design/Controls'
 import {
   FlipHorizontalIcon,
   FlipVerticalIcon,
@@ -80,15 +80,15 @@ export function CropPanel() {
         <span className="ml-1.5 text-label-tertiary">R</span>
       </Button>
 
-      <div className="mb-1.5 flex items-center gap-2">
-        <span className="w-[44px] shrink-0 text-mini text-label-tertiary">Aspect</span>
+      <SelectField label="Aspect">
         <Select
+          size="sm"
           value={crop.aspect}
           onChange={setAspect}
           options={ASPECTS.map((a) => ({ value: a, label: ASPECT_LABELS[a] }))}
           className="min-w-0 flex-1"
         />
-      </div>
+      </SelectField>
       <div className="mb-2">
         <Checkbox
           label="Lock aspect"

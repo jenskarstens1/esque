@@ -153,19 +153,17 @@ export function Toolbar() {
               onChange={setGridLayout}
             />
             {roomy && (
-              <div className="flex w-[110px] items-center gap-2">
-                <span className="text-micro text-label-quaternary">Size</span>
-                <Slider
-                  value={thumbSize}
-                  min={96}
-                  max={360}
-                  step={4}
-                  origin={96}
-                  size="S"
-                  onChange={setThumbSize}
-                  aria-label="Thumbnail size"
-                />
-              </div>
+              <Slider
+                value={thumbSize}
+                min={96}
+                max={360}
+                step={4}
+                origin={96}
+                size="S"
+                onChange={setThumbSize}
+                aria-label="Thumbnail size"
+                className="w-[92px]"
+              />
             )}
           </>
         )}

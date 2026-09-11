@@ -1,6 +1,6 @@
 import { PanelSection, MiniAction } from '../../../design/Panel'
 import { panelMenuItems } from '../../../shell/appMenus'
-import { Checkbox, IconButton, SegmentedControl, Select } from '../../../design/Controls'
+import { Checkbox, IconButton, SegmentedControl, Select, SelectField } from '../../../design/Controls'
 import { DropperIcon, ExposureIcon } from '../../../design/icons'
 import { MENU_ICON } from '../../../design/Menu'
 import { EditSlider } from '../EditSlider'
@@ -145,22 +145,24 @@ export function BasicPanel() {
             { value: 'bw' as const, label: 'B&W' },
           ]}
           onChange={setTreatment}
-          className="mb-1.5"
+          className="mb-2"
         />
         {isRaw && (
-          <div className="mb-1 flex items-center gap-2">
-            <span className="w-[44px] shrink-0 text-mini text-label-tertiary">Profile</span>
+          <SelectField label="Profile">
             <Select
+              size="sm"
               value={profile}
               options={PROFILE_OPTIONS}
               onChange={setProfile}
-              className="min-w-0 flex-1"
+              className="w-full"
             />
-          </div>
+          </SelectField>
         )}
-        <div className="mb-1 flex items-center gap-2">
-          <span className="w-[44px] shrink-0 text-mini text-label-tertiary">WB</span>
+        {/* The dropdown names the light and the two sliders describe it, so the
+            three are spaced as one group rather than as three unrelated rows. */}
+        <SelectField label="White balance">
           <Select
+            size="sm"
             value={wbMode}
             options={WB_OPTIONS}
             onChange={(m) => void setMode(m)}
@@ -176,7 +178,7 @@ export function BasicPanel() {
           >
             <DropperIcon size={13} />
           </IconButton>
-        </div>
+        </SelectField>
         <EditSlider
           path="basic.temp"
           label="Temp"
