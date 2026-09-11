@@ -45,7 +45,13 @@ try {
   await page.setViewport({ width: 1440, height: 900, deviceScaleFactor: 1 })
   page.on('pageerror', (error) => errors.push(error.message))
   await page.goto(ORIGIN, { waitUntil: 'networkidle2' })
-  assert.equal((await page.title()).toLowerCase(), 'esque', 'Refusing to seed a different application.')
+  // Identity guard before anything seeds IndexedDB. Matched on the wordmark
+  // rather than the whole title, which is marketing copy and changes.
+  assert.match(
+    (await page.title()).toLowerCase(),
+    /^esque\b/,
+    'Refusing to seed a different application.',
+  )
   await page.waitForFunction(() => !!window.__esque?.useCatalog, { timeout: 10000 })
   // The development annotation launcher overlaps the phone's navigation.
   // Exclude that dev-only layer, not any part of the interface being tested.
@@ -460,7 +466,7 @@ try {
 } catch (error) {
   check('Workflow drive completed', false, error.stack ?? error.message)
   try {
-    if (page && (await page.title()).toLowerCase() === 'esque') {
+    if (page && /^esque\b/.test((await page.title()).toLowerCase())) {
       const diagnostic = await page.evaluate(() => {
         const ui = window.__esque?.useUI.getState()
         const catalog = window.__esque?.useCatalog.getState()

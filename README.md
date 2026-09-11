@@ -30,6 +30,31 @@ npm run dev
 | `npm run preview` | Serve the production build locally |
 | `npm run lint` | oxlint |
 
+## Search and sharing
+
+The public site is [esque.dev](https://esque.dev/). Search descriptions, the
+canonical URL, Open Graph / Twitter cards and `WebSite` / `WebApplication`
+structured data are in `index.html`, so crawlers do not need to run the editor
+to read them. The initial HTML also provides a readable product summary and
+browser requirements; React replaces it when the editor starts.
+
+`public/robots.txt` points to `public/sitemap.xml`, which lists the one public
+page. Catalogs and individual photos are local browser data, not public pages.
+The social preview is a 1200 × 630 JPEG cropped from the Develop screenshot in
+`docs/screenshots.jpg`. Keep its dimensions and alt text in sync with the
+metadata when replacing it.
+
+For a public deployment on a different domain, update the absolute URLs in
+`index.html`, `public/robots.txt` and `public/sitemap.xml` together. Preserve the
+cross-origin isolation headers in `vercel.json` or `public/_headers`; RAW
+decoding needs them.
+
+With `npm run preview` running after a build, run
+`node tools/seocheck.mjs http://localhost:4173/`. It covers static metadata,
+crawl-discovery files, the share image, the no-JavaScript page and editor
+startup. An optional second argument sets the expected canonical URL for a
+self-hosted deployment.
+
 ## What it does
 
 - **Import.** Every stills RAW format LibRaw can open (Canon, Nikon, Sony,
@@ -39,8 +64,9 @@ npm run dev
   IndexedDB with previews cached in OPFS.
 - **Develop.** A WebGPU pipeline covering white balance, tone, curves, colour
   mixing and grading, detail, effects, lens, transform and crop, plus masking
-  and retouching. Edits are non-destructive data, with history and presets, and
-  they round-trip through Lightroom's XMP `crs:` namespace.
+  and retouching. Edits are stored as data rather than pixels, so every step is
+  reversible, with history and presets, and they round-trip through Lightroom's
+  XMP `crs:` namespace.
 - **Detected masks.** Subject, background and people masks run a segmentation
   network in the browser, on WebGPU where it is available. Nothing is uploaded:
   the weights are fetched once, cached in OPFS, and everything after that works

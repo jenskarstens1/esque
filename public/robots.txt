@@ -1,0 +1,7 @@
+User-agent: *
+Allow: /
+Disallow: /checks/
+Disallow: /raw-fixtures/
+Disallow: /models/
+
+Sitemap: https://esque.dev/sitemap.xml

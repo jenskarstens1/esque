@@ -48,7 +48,7 @@ for (const name of browserNames()) {
     page.on('pageerror', (error) => errors.push(error.message))
     page.setDefaultTimeout(20000)
     await page.goto(origin)
-    assert.equal((await page.title()).toLowerCase(), 'esque')
+    assert.match((await page.title()).toLowerCase(), /^esque\b/)
     await page.waitForFunction(() => !!window.__esque)
     await dismissWelcome(page)
     await page.addStyleTag({ content: '[data-agentation-root], [data-agentation-toolbar] { display: none !important; }' })

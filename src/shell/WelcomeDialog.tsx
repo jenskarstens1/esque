@@ -27,10 +27,10 @@ import {
  * been here before and only wants to know what moved.
  *
  * Deliberately not a tour and not a feature list. `EmptyLibrary` already says
- * the one thing that has to happen next, and everything this app promises about
- * your files is better learned by using it. So About says the three things that
+ * the one thing that has to happen next, so About says the three things that
  * are true of every session — where the files live, what an edit is, what does
- * the work — and then gets out of the way behind a button that starts an import.
+ * the work — and then gets out of the way behind a button that starts an
+ * import.
  *
  * Both faces read down the same left edge: a fixed column carrying a term on
  * one face and a release number on the other, against text in the second
@@ -192,29 +192,29 @@ function Prose({ children }: { children: ReactNode }) {
 // About
 // ---------------------------------------------------------------------------
 
-/*
- * Three facts, not three features: each answers a question a photographer has
- * about a photo editor that arrived through a browser, and the answers are the
- * reason the rest of the app is worth the trouble.
- */
+/* The three questions a photo editor reached through a browser has to answer. */
 const FACTS: Array<[string, string]> = [
   [
-    'Your files',
-    'Photos stay in the folder you point at, under their own names. Nothing is uploaded. The catalog and its previews stay in this browser.',
+    'Files',
+    'Photos stay in the folder you choose, under their own names. Nothing is uploaded, and the catalog and its previews are kept in this browser.',
   ],
   [
-    'Your edits',
-    'Nothing is written over an original. Every adjustment is stored as data, so it stays reversible, keeps its history, saves as a preset, and reads back into Lightroom through XMP.',
+    'Edits',
+    'Originals are never changed. Adjustments are saved separately, so any step can be undone, kept as a preset, or opened in Lightroom through XMP.',
   ],
   [
-    'Your hardware',
-    'RAW files are decoded by LibRaw compiled to WebAssembly, and develop renders on your own GPU through WebGPU.',
+    'Rendering',
+    'RAW files are decoded by LibRaw compiled to WebAssembly, and edits render on your GPU through WebGPU.',
   ],
 ]
 
 function AboutFace({ phone }: { phone: boolean }) {
   return (
     <div className="flex flex-col gap-3.5">
+      <Prose>
+        A free, open-source photo editor that runs in your browser. An alternative to Lightroom for
+        organising and editing your photos.
+      </Prose>
       {FACTS.map(([term, text]) => (
         <Row key={term} term={<Term>{term}</Term>} phone={phone}>
           <Prose>{text}</Prose>
@@ -229,8 +229,8 @@ function AboutFace({ phone }: { phone: boolean }) {
        */}
       <div className="hairline-t flex flex-col gap-2.5 pt-3.5">
         <SmallRow term="Early days" phone={phone}>
-          esque is still in development, and things move between releases. Each one is written down
-          here.
+          esque is still in development and things change between releases. Every one is listed
+          under What's new.
         </SmallRow>
 
         <SmallRow term="Requirements" phone={phone}>
@@ -239,7 +239,7 @@ function AboutFace({ phone }: { phone: boolean }) {
         </SmallRow>
 
         <SmallRow term="Licence" phone={phone}>
-          Free software under the AGPL-3.0, which asks a build served over a network to offer its
+          Free software under the AGPL-3.0. Anyone serving a copy over a network has to offer its
           source to the people using it.
           <a
             href={REPO_URL}
