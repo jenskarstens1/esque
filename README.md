@@ -76,6 +76,14 @@ self-hosted deployment.
 - **Catalog backup.** Download a portable local catalog and merge it back without
   replacing existing photos or edits, then explicitly reconnect the originals.
 
+## Badges
+
+Status badges, comparison captions, tool readouts, thumbnail markers and library
+tags share the compact `Badge` components in `src/design/Badge.tsx`. They use
+small rectangular corners, optional icons and divided metadata instead of pill
+shapes or dot separators. Image markers keep a dark surface for contrast;
+overlay and inline badges follow the app's appearance.
+
 ## Catalog backup and restore
 
 Open **Settings → Files → Catalog backup**. **Save backup…** first waits for

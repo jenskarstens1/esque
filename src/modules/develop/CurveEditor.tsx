@@ -4,6 +4,7 @@ import { useHistogram } from '../../develop/histogramStore'
 import type { CurvePoint, ParametricCurve } from '../../core/types'
 import { cn } from '../../lib/cn'
 import { clamp } from '../../lib/math'
+import { Badge } from '../../design/Badge'
 
 export type CurveChannel = 'rgb' | 'red' | 'green' | 'blue'
 
@@ -334,22 +335,24 @@ function PointTag({
   corner: 'top-left' | 'bottom-right'
 }) {
   return (
-    <div
+    <Badge
       aria-hidden
+      surface="image"
+      size="sm"
       className={cn(
-        'pointer-events-none absolute flex items-baseline gap-1 rounded-xs bg-black/70 px-1.5 py-px',
+        'pointer-events-none absolute',
         corner === 'top-left' ? 'top-1.5 left-1.5' : 'right-1.5 bottom-1.5',
       )}
     >
-      <span className="esq-section-title">In</span>
-      <span className="w-[22px] text-right font-mono text-micro tnum text-label">
+      <span>In</span>
+      <span className="w-[22px] text-right font-mono">
         {Math.round(input * 100)}
       </span>
-      <span className="esq-section-title ml-0.5">Out</span>
-      <span className="w-[22px] text-right font-mono text-micro tnum text-label">
+      <span>Out</span>
+      <span className="w-[22px] text-right font-mono">
         {Math.round(output * 100)}
       </span>
-    </div>
+    </Badge>
   )
 }
 

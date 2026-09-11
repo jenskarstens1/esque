@@ -1,6 +1,7 @@
 import { useMemo } from 'react'
 import { cn } from '../../lib/cn'
 import { TextField } from '../../design/Controls'
+import { Badge } from '../../design/Badge'
 import { useMenu } from '../../design/useMenu'
 import type { MenuItem } from '../../design/Menu'
 import {
@@ -359,7 +360,7 @@ function Dropdown({
   onClick: (e: React.MouseEvent) => void
 }) {
   const on = chosen.length > 0
-  const text = !on ? label : chosen.length === 1 ? chosen[0] : `${label} · ${chosen.length}`
+  const text = !on ? label : chosen.length === 1 ? chosen[0] : `${label} (${chosen.length})`
   return (
     <button
       type="button"
@@ -379,7 +380,7 @@ function Dropdown({
 
 function Pill({ children, onClear }: { children: React.ReactNode; onClear: () => void }) {
   return (
-    <span className="flex h-[19px] items-center gap-1 rounded-[5px] bg-control px-1.5 text-micro text-label">
+    <Badge surface="inline" size="sm">
       {children}
       <button
         type="button"
@@ -389,6 +390,6 @@ function Pill({ children, onClear }: { children: React.ReactNode; onClear: () =>
       >
         <CloseIcon size={9} />
       </button>
-    </span>
+    </Badge>
   )
 }

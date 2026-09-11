@@ -556,8 +556,8 @@
 }
 
 /*
- * A status pill surfacing over the photo it is describing. Rises on `transform`
- * rather than `translate` because the pill is centred with `-translate-x-1/2`,
+ * A status badge surfacing over the photo it is describing. Rises on `transform`
+ * rather than `translate` because the badge is centred with `-translate-x-1/2`,
  * which owns that property.
  */
 @keyframes esq-hud-in {

@@ -5,6 +5,8 @@ import { useCatalog } from '../../state/catalog'
 import { usePhotos, useCollections, usePhotoCount } from '../../catalog/hooks'
 import { Thumbnail } from './Thumbnail'
 import { Scroller } from '../../design/Scroller'
+import { Badge, BadgeDetail } from '../../design/Badge'
+import { GridIcon, SelectAllIcon } from '../../design/icons'
 import { LoupeView } from './LoupeView'
 import { EmptyLibrary } from './EmptyLibrary'
 import { FilterBar } from './FilterBar'
@@ -167,7 +169,7 @@ function PhotoGrid({ photos }: { photos: Photo[] }) {
 /**
  * The photo count, on the same terms as the scrollbar it sits beside.
  *
- * A pill parked permanently over the bottom row would put chrome on top of the
+ * A badge parked permanently over the bottom row would put chrome on top of the
  * one thing this view exists to show. It surfaces while the field is moving or
  * the selection changes, then withdraws — except while a multiple selection is
  * live, which is a state worth keeping in sight.
@@ -191,10 +193,10 @@ function GridStatus({ count, selected, at }: { count: number; selected: number; 
         visible || pinned ? 'opacity-100' : 'opacity-0',
       )}
     >
-      <span className="material rounded-full px-2.5 py-1 shadow-hud">
+      <Badge icon={<GridIcon size={12} />}>
         {count.toLocaleString()} photo{count === 1 ? '' : 's'}
-        {pinned && ` · ${selected.toLocaleString()} selected`}
-      </span>
+        {pinned && <BadgeDetail><SelectAllIcon size={12} aria-hidden />{selected.toLocaleString()} selected</BadgeDetail>}
+      </Badge>
     </div>
   )
 }

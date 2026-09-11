@@ -1,9 +1,10 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { cn } from '../lib/cn'
 import { Spinner } from './Spinner'
+import { Badge } from './Badge'
 
 /**
- * The pill that floats over a photo while esque is still resolving it.
+ * The status badge that floats over a photo while esque is still resolving it.
  *
  * Deliberately late. Nearly every open is answered from cache inside a frame or
  * two, and an indicator that appears and vanishes faster than it can be read
@@ -31,17 +32,16 @@ export function StatusPill({
   if (!due) return null
 
   return (
-    <div
+    <Badge
       role="status"
+      icon={<Spinner size={12} />}
       className={cn(
-        'material pointer-events-none absolute bottom-4 left-1/2 flex -translate-x-1/2',
-        'items-center gap-2 rounded-full px-3 py-1.5 text-mini text-label-secondary shadow-hud',
-        'animate-[esq-hud-in_var(--duration-base)_var(--ease-out)_both]',
+        'pointer-events-none absolute bottom-4 left-1/2 -translate-x-1/2',
+        'animate-[esq-hud-in_var(--duration-base)_var(--ease-out)_both] motion-reduce:animate-none',
         className,
       )}
     >
-      <Spinner size={12} />
       {children}
-    </div>
+    </Badge>
   )
 }

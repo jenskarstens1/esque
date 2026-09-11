@@ -3,6 +3,8 @@ import { useDevelop } from '../../develop/session'
 import { useUI } from '../../state/ui'
 import { ASPECT_RATIOS } from '../../gpu/geometry'
 import type { CropEdits } from '../../core/types'
+import { Badge } from '../../design/Badge'
+import { RotateRightIcon } from '../../design/icons'
 
 /**
  * The crop rectangle, drawn over the uncropped photo.
@@ -340,10 +342,10 @@ export function CropOverlay({ frame }: { frame: FrameBox }) {
       {corner('se', { left: box.left + box.width - 13, top: box.top + box.height - 13 })}
 
       {dragging === 'rotate' && (
-        <div className="material pointer-events-none absolute left-1/2 top-4 -translate-x-1/2 rounded-full px-2.5 py-1 text-mini tabular-nums text-label-secondary shadow-hud">
+        <Badge icon={<RotateRightIcon size={12} />} className="pointer-events-none absolute left-1/2 top-4 -translate-x-1/2">
           {crop.angle > 0 ? '+' : ''}
           {crop.angle.toFixed(1)}°
-        </div>
+        </Badge>
       )}
     </div>
   )

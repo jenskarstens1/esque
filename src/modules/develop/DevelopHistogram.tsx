@@ -8,6 +8,7 @@ import { clamp, formatAperture, formatFocal, formatShutter, quantize } from '../
 import { cn } from '../../lib/cn'
 import { useMenu } from '../../design/useMenu'
 import { histogramMenuItems } from '../../shell/appMenus'
+import { Badge } from '../../design/Badge'
 
 const H = 78
 
@@ -325,7 +326,7 @@ export function DevelopHistogram() {
  */
 function ZoneTag({ zone, width }: { zone: Zone | null; width: number }) {
   const value = useDevelop((s) => (zone ? s.edits.basic[zone.field] : 0))
-  const ref = useRef<HTMLDivElement>(null)
+  const ref = useRef<HTMLSpanElement>(null)
   const [half, setHalf] = useState(0)
 
   // Held so the tag fades out with its own text rather than blanking first.
@@ -345,23 +346,24 @@ function ZoneTag({ zone, width }: { zone: Zone | null; width: number }) {
   const inset = Math.min(half, width / 2)
 
   return (
-    <div
+    <Badge
       ref={ref}
       aria-hidden
+      surface="image"
+      size="sm"
       className={cn(
-        'pointer-events-none absolute top-1.5 flex -translate-x-1/2 items-baseline gap-1.5',
-        'rounded-xs bg-black/70 py-px pr-1 pl-1.5',
+        'pointer-events-none absolute top-1.5 -translate-x-1/2',
         'transition-opacity duration-[--duration-fast] ease-[--ease-out]',
         zone ? 'opacity-100' : 'opacity-0',
       )}
       style={{ left: clamp(((shown.from + shown.to) / 2) * width, inset, width - inset) }}
     >
-      <span className="esq-section-title text-label-secondary">{shown.label}</span>
-      <span className="w-[30px] text-right font-mono text-micro tnum text-label">
+      <span>{shown.label}</span>
+      <span className="w-[30px] text-right font-mono">
         {value > 0 ? '+' : ''}
         {value.toFixed(shown.precision)}
       </span>
-    </div>
+    </Badge>
   )
 }
 

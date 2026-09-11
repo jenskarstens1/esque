@@ -6,6 +6,7 @@ import { PROPHOTO_D50_TO_SRGB_D65, apply3 } from '../../core/color'
 import type { FrameBox } from './CropOverlay'
 import type { SourceImage } from '../../core/workingImage'
 import type { Point2 } from '../../core/types'
+import { Badge } from '../../design/Badge'
 
 /**
  * The white-balance dropper's half of the viewport.
@@ -157,9 +158,9 @@ function Loupe({
   const top = y + LOUPE_OFFSET + LOUPE_H > h ? y - LOUPE_OFFSET - LOUPE_H : y + LOUPE_OFFSET
 
   return (
-    <div
+    <Badge
       aria-hidden
-      className="material pointer-events-none absolute flex items-center gap-2 rounded-lg px-2 py-1.5 shadow-hud"
+      className="pointer-events-none absolute"
       style={{ left, top, width: LOUPE_W }}
     >
       <span
@@ -174,7 +175,7 @@ function Loupe({
           {white ? `Tint ${white.tint > 0 ? '+' : ''}${white.tint}` : 'Not neutral'}
         </span>
       </span>
-    </div>
+    </Badge>
   )
 }
 

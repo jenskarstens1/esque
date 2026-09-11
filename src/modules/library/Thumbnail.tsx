@@ -2,7 +2,8 @@ import { memo } from 'react'
 import { cn } from '../../lib/cn'
 import { useThumbUrl } from '../../catalog/hooks'
 import { setFlag, setRating } from '../../catalog/actions'
-import { FlagIcon, PencilIcon, RejectIcon, StackIcon, StarIcon, WarningIcon } from '../../design/icons'
+import { FlagIcon, PencilIcon, RejectIcon, StackIcon, StarIcon, VirtualCopyIcon, WarningIcon } from '../../design/icons'
+import { Badge } from '../../design/Badge'
 import { ThumbImage } from './ThumbImage'
 import type { Photo } from '../../core/types'
 
@@ -96,28 +97,35 @@ function ThumbnailFacts({ photo, showExtras }: { photo: Photo; showExtras: boole
   return (
     <div className="absolute top-1.5 left-1.5 flex items-center gap-1">
       {showExtras && photo.stackId && (
-        <span
+        <Badge
           title="Stacked"
-          className="grid size-4 place-items-center rounded-full bg-black/55 text-white/85 backdrop-blur-sm"
-        >
-          <StackIcon size={9} />
-        </span>
+          role="img"
+          aria-label="Stacked"
+          surface="image"
+          size="sm"
+          icon={<StackIcon size={12} />}
+        />
       )}
       {showExtras && photo.masterId && (
-        <span
+        <Badge
           title="Virtual copy"
-          className="rounded-full bg-black/55 px-1 text-micro leading-4 text-white/85 backdrop-blur-sm"
-        >
-          VC
-        </span>
+          role="img"
+          aria-label="Virtual copy"
+          surface="image"
+          size="sm"
+          icon={<VirtualCopyIcon size={12} />}
+        />
       )}
       {photo.readError && (
-        <span
+        <Badge
           title={photo.readError}
-          className="grid size-4 place-items-center rounded-full bg-black/55 text-orange backdrop-blur-sm"
-        >
-          <WarningIcon size={9} />
-        </span>
+          role="img"
+          aria-label={photo.readError}
+          surface="image"
+          size="sm"
+          tone="warning"
+          icon={<WarningIcon size={12} />}
+        />
       )}
     </div>
   )

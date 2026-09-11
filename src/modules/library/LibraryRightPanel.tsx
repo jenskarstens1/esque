@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { cn } from '../../lib/cn'
 import { PanelSection } from '../../design/Panel'
 import { Scroller } from '../../design/Scroller'
+import { Badge } from '../../design/Badge'
 import { Histogram } from './Histogram'
 import { useCatalog } from '../../state/catalog'
 import { usePhoto, usePhotoSelection, usePreviewUrl, useThumbUrl } from '../../catalog/hooks'
@@ -186,19 +187,22 @@ function Keywording({ photos }: { photos: Photo[] }) {
     <div className="flex flex-col gap-2 px-3 pt-1 pb-3">
       <div className="flex flex-wrap gap-1">
         {shared.map((k) => (
-          <span
+          <Badge
             key={k}
-            className="group/kw flex h-[19px] items-center gap-1 rounded-sm bg-raised pr-1 pl-1.5 text-mini text-label-secondary"
+            surface="inline"
+            size="sm"
+            className="group/kw"
           >
-            {k}
+            <span className="truncate" title={k}>{k}</span>
             <button
               type="button"
+              aria-label={`Remove keyword ${k}`}
               onClick={() => removeKeyword(ids, k)}
-              className="text-icon-quaternary transition-colors hover:text-red"
+              className="shrink-0 text-icon-quaternary transition-colors hover:text-red"
             >
               <CloseIcon size={9} />
             </button>
-          </span>
+          </Badge>
         ))}
         {!shared.length && (
           <span className="text-mini text-label-quaternary">No shared keywords</span>

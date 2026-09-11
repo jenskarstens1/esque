@@ -1,6 +1,8 @@
 import { useCallback, useRef, useState } from 'react'
 import { cn } from '../../lib/cn'
 import { useUI, type BeforeAfter } from '../../state/ui'
+import { Badge } from '../../design/Badge'
+import { HistoryIcon, SlidersIcon } from '../../design/icons'
 
 /**
  * How far a caption is pushed off a horizontal seam.
@@ -212,13 +214,8 @@ export function CompareLabels({ mode, split }: { mode: BeforeAfter; split: numbe
 
 function Caption({ children, accent }: { children: React.ReactNode; accent?: boolean }) {
   return (
-    <span
-      className={cn(
-        'material rounded-full px-2.5 py-1 text-micro tracking-[0.08em] uppercase shadow-hud',
-        accent ? 'text-label' : 'text-label-secondary',
-      )}
-    >
-      {children}
-    </span>
+    <Badge icon={accent ? <SlidersIcon size={12} /> : <HistoryIcon size={12} />}>
+      <span className={accent ? 'text-label' : undefined}>{children}</span>
+    </Badge>
   )
 }
