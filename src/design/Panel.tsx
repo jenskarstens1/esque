@@ -219,3 +219,54 @@ export function MiniAction({
     </button>
   )
 }
+
+/**
+ * A collapsible cluster inside a section, for panels with too many controls.
+ *
+ * A mask carries the same nineteen sliders the global panels spread across
+ * four sections, and stacking them flat turns the one control you want into a
+ * scroll. The grouping is the same one the global panels already use, so the
+ * names are learned once; the header is quieter than a section's because it is
+ * subordinate to one, and it sits flush with the body it divides rather than
+ * indenting a second time.
+ */
+export function PanelSubSection({
+  title,
+  children,
+  defaultOpen = false,
+  modified,
+}: {
+  title: string
+  children: ReactNode
+  defaultOpen?: boolean
+  modified?: boolean
+}) {
+  const [open, setOpen] = useState(defaultOpen)
+  return (
+    <div className="[&:not(:first-child)]:hairline-t">
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        aria-expanded={open}
+        className="group/head flex h-7 coarse:h-9 w-full items-center gap-1.5 text-left"
+      >
+        <Chevron open={open} className="size-2" />
+        <span className="truncate text-mini text-label-secondary">{title}</span>
+        {modified && (
+          <span aria-label="modified" className="size-[4px] shrink-0 rounded-full bg-accent" />
+        )}
+      </button>
+      <div
+        inert={!open}
+        className={cn(
+          'grid transition-[grid-template-rows] duration-[--duration-base] ease-[--ease-out]',
+          open ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]',
+        )}
+      >
+        <div className="overflow-hidden">
+          <div className="pb-1.5">{children}</div>
+        </div>
+      </div>
+    </div>
+  )
+}

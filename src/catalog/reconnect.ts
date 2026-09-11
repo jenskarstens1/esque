@@ -71,7 +71,7 @@ export async function missingSources(database: CatalogDatabase = db): Promise<Mi
       originals,
       folderNames: new Map(folders.map((folder) => [folder.id, folder.name])),
       detectedMasks: photos.reduce((count, photo) => count +
-        (photo.edits?.masks ?? []).reduce((sum, mask) => sum + mask.components.filter((component) =>
+        (photo.edits?.layers ?? []).reduce((sum, mask) => sum + mask.components.filter((component) =>
           isAiGeometry(component.geometry) &&
           (!component.geometry.cacheKey || !getAlpha(component.geometry.cacheKey)),
         ).length, 0), 0),

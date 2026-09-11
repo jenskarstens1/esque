@@ -3,9 +3,11 @@ import { useDevelop } from '../../develop/session'
 import { useMasking } from '../../develop/masking'
 import { useUI } from '../../state/ui'
 import type { FrameBox } from './CropOverlay'
-import type { BrushDab, Mask, MaskComponent, Point2 } from '../../core/types'
+import type { BrushDab, Layer, MaskComponent, Point2 } from '../../core/types'
 import { activeRenderer } from './activeRenderer'
 import { SRGB_D65_TO_PROPHOTO_D50 } from '../../core/color'
+import { Badge, BadgeButton } from '../../design/Badge'
+import { MaskIcon, PencilIcon } from '../../design/icons'
 
 /**
  * The mask handles, drawn over the photo.
@@ -40,37 +42,35 @@ function PlacementHint({
 }) {
   if (!pendingKind || dragging) return null
   return (
-    <div className="material pointer-events-none absolute left-1/2 top-4 -translate-x-1/2 rounded-full px-2.5 py-1 text-mini text-label-secondary shadow-hud">
+    <Badge icon={pendingKind === 'brush' ? <PencilIcon size={12} /> : <MaskIcon size={12} />} className="pointer-events-none absolute left-1/2 top-4 -translate-x-1/2">
       {pendingKind === 'brush' ? 'Paint on the photo' : 'Drag on the photo to place'}
-    </div>
+    </Badge>
   )
 }
 
 function MaskPicker({
-  masks,
+  layers,
   selectedMaskId,
   select,
 }: {
-  masks: Mask[]
+  layers: Layer[]
   selectedMaskId: string | null
   select: (maskId: string | null, componentId: string | null) => void
 }) {
-  if (masks.length <= 1) return null
+  if (layers.length <= 1) return null
   return (
     <div className="absolute left-3 top-3 flex flex-col gap-1">
-      {masks.map((mask) => (
-        <button
+      {layers.map((mask) => (
+        <BadgeButton
           key={mask.id}
           type="button"
           onClick={() => select(mask.id, mask.components[0]?.id ?? null)}
-          className={`rounded-full px-2 py-0.5 text-mini shadow-hud transition-colors duration-[--duration-fast] ${
-            mask.id === selectedMaskId
-              ? 'bg-accent text-(--accent-ink)'
-              : 'material text-label-secondary hover:text-label'
-          }`}
+          aria-pressed={mask.id === selectedMaskId}
+          tone={mask.id === selectedMaskId ? 'accent' : 'neutral'}
+          icon={<MaskIcon size={12} />}
         >
           {mask.name}
-        </button>
+        </BadgeButton>
       ))}
     </div>
   )
@@ -78,7 +78,7 @@ function MaskPicker({
 
 export function MaskOverlay({ frame }: { frame: FrameBox }) {
   const tool = useUI((s) => s.developTool)
-  const masks = useDevelop((s) => s.edits.masks)
+  const layers = useDevelop((s) => s.edits.layers)
   const update = useDevelop((s) => s.update)
   const {
     selectedMaskId,
@@ -97,7 +97,7 @@ export function MaskOverlay({ frame }: { frame: FrameBox }) {
   const dragRef = useRef<Drag | null>(null)
   const hostRef = useRef<HTMLDivElement>(null)
 
-  const mask = masks.find((m) => m.id === selectedMaskId) ?? null
+  const mask = layers.find((m) => m.id === selectedMaskId) ?? null
   const comp: MaskComponent | null =
     mask?.components.find((c) => c.id === selectedComponentId) ?? mask?.components[0] ?? null
 
@@ -122,8 +122,8 @@ export function MaskOverlay({ frame }: { frame: FrameBox }) {
   const editComp = useCallback(
     (label: string, fn: (c: MaskComponent) => void, coalesce = true) => {
       if (!mask || !comp) return
-      update(`masks.geom.${comp.id}`, label, (e) => {
-        const m = e.masks.find((x) => x.id === mask.id)
+      update(`layers.geom.${comp.id}`, label, (e) => {
+        const m = e.layers.find((x) => x.id === mask.id)
         const c = m?.components.find((x) => x.id === comp.id)
         if (c) fn(c)
       }, coalesce)
@@ -385,7 +385,7 @@ export function MaskOverlay({ frame }: { frame: FrameBox }) {
       )}
 
       <PlacementHint pendingKind={pendingKind} dragging={!!drag} />
-      <MaskPicker masks={masks} selectedMaskId={selectedMaskId} select={select} />
+      <MaskPicker layers={layers} selectedMaskId={selectedMaskId} select={select} />
     </div>
   )
 }
@@ -395,7 +395,7 @@ export function MaskOverlay({ frame }: { frame: FrameBox }) {
 /**
  * Reads one rendered pixel, in linear light.
  *
- * Colour-range masks are picked off what is on screen, so the sample has to
+ * Colour-range layers are picked off what is on screen, so the sample has to
  * come from the same place the eye did — but it cannot come from the canvas.
  * A WebGPU surface releases its presented texture at the end of the task that
  * submitted the frame, and this runs from a pointer handler one task later, so

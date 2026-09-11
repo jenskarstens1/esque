@@ -102,7 +102,7 @@ async function state() {
     const d = useDevelop.getState()
     const m = useMasking.getState()
     return JSON.stringify({
-      masks: d.edits.masks,
+      masks: d.edits.layers,
       selectedMaskId: m.selectedMaskId,
       selectedComponentId: m.selectedComponentId,
       pendingKind: m.pendingKind,
@@ -162,11 +162,11 @@ async function drag(from, to, steps = 14) {
 
 const addMask = (kind) =>
   page.evaluate((k) => {
-    const { useDevelop, useMasking, useUI, masks } = window.__esque
-    const list = useDevelop.getState().edits.masks
-    const mask = masks.newMask(list, k)
-    useDevelop.getState().update('masks.add', 'Add Mask', (e) => {
-      e.masks.push(mask)
+    const { useDevelop, useMasking, useUI, layers } = window.__esque
+    const list = useDevelop.getState().edits.layers
+    const mask = layers.newMaskLayer(list, k)
+    useDevelop.getState().update('layers.add', 'Add Mask', (e) => {
+      e.layers.push(mask)
     }, false)
     useMasking.getState().select(mask.id, mask.components[0].id)
     useUI.getState().openDevelopTool('mask')
@@ -178,8 +178,8 @@ const addMask = (kind) =>
 const clearMasks = () =>
   page.evaluate(() => {
     const { useDevelop, useMasking } = window.__esque
-    useDevelop.getState().update('masks.clear', 'Clear', (e) => {
-      e.masks = []
+    useDevelop.getState().update('layers.clear', 'Clear', (e) => {
+      e.layers = []
     }, false)
     useMasking.getState().select(null)
   })
@@ -326,21 +326,21 @@ if (g.dabs?.length) {
   const inverted = await page.evaluate(() => {
     const items = window.__esque.menus.maskMenuItems()
     items.find((i) => i.label === 'Invert Mask').onSelect()
-    return window.__esque.useDevelop.getState().edits.masks[0].inverted
+    return window.__esque.useDevelop.getState().edits.layers[0].inverted
   })
   ok('menu Invert flips the mask', inverted === true)
 
   const count = await page.evaluate(() => {
     const items = window.__esque.menus.maskMenuItems()
     items.find((i) => i.label === 'Duplicate Mask').onSelect()
-    return window.__esque.useDevelop.getState().edits.masks.length
+    return window.__esque.useDevelop.getState().edits.layers.length
   })
   ok('menu Duplicate adds a mask', count === 2, `${count}`)
 
   const left = await page.evaluate(() => {
     const items = window.__esque.menus.maskMenuItems()
     items.find((i) => i.label === 'Delete All Masks').onSelect()
-    return window.__esque.useDevelop.getState().edits.masks.length
+    return window.__esque.useDevelop.getState().edits.layers.length
   })
   ok('menu Delete All clears', left === 0, `${left}`)
 }
@@ -359,33 +359,23 @@ if (g.dabs?.length) {
   ok('masking panel present', opened)
   await new Promise((r) => setTimeout(r, 300))
 
-  const clicked = await page.evaluate(() => {
-    const btn = [...document.querySelectorAll('button')].find(
-      (b) => b.textContent.trim() === 'Create Mask',
-    )
-    if (!btn) return false
-    btn.click()
-    return true
-  })
-  ok('panel offers Create Mask', clicked)
-  await new Promise((r) => setTimeout(r, 300))
-
+  // With no masks yet the panel offers every kind directly, one press each.
   const rows = await page.evaluate(() =>
-    [...document.querySelectorAll('[role="menu"] [role^="menuitem"]')].map((b) =>
-      b.textContent.trim(),
-    ),
+    [...document.querySelectorAll('#develop-mask-body button')].map((b) => b.textContent.trim()),
   )
-  ok('Create Mask lists every kind', rows.length >= 5, rows.join(', '))
-  ok('Create Mask lists Radial', rows.some((r) => /Radial/i.test(r)), rows.join(', '))
+  ok('panel lists every mask kind', rows.length >= 8, rows.join(', '))
+  ok('panel lists Radial', rows.some((r) => /Radial/i.test(r)), rows.join(', '))
+  ok('panel lists Subject', rows.some((r) => /Subject/i.test(r)), rows.join(', '))
 
   const made = await page.evaluate(() => {
-    const item = [...document.querySelectorAll('[role="menu"] [role^="menuitem"]')].find((b) =>
+    const chip = [...document.querySelectorAll('#develop-mask-body button')].find((b) =>
       /Radial/i.test(b.textContent),
     )
-    item?.click()
+    if (!chip) return false
+    chip.click()
     return true
   })
-  void made
+  ok('panel creates from a kind chip', made)
   await new Promise((r) => setTimeout(r, 400))
   s = await state()
   ok('panel creates a mask', s.masks.length === 1, `${s.masks.length}`)
@@ -397,13 +387,13 @@ if (g.dabs?.length) {
   const exposed = await page.evaluate(() => {
     const { useDevelop, useMasking } = window.__esque
     const id = useMasking.getState().selectedMaskId
-    useDevelop.getState().update('masks.adj.exposure', 'Exposure', (e) => {
-      const m = e.masks.find((x) => x.id === id)
+    useDevelop.getState().update('layers.adj.exposure', 'Exposure', (e) => {
+      const m = e.layers.find((x) => x.id === id)
       if (m) m.adjustments.exposure = 1.5
     })
     const st = useDevelop.getState()
     return JSON.stringify({
-      local: st.edits.masks[0].adjustments.exposure,
+      local: st.edits.layers[0].adjustments.exposure,
       global: st.edits.basic.exposure,
     })
   })
@@ -498,7 +488,8 @@ if (g.dabs?.length) {
 
     const cloned = await page.evaluate(() => {
       const items = window.__esque.menus.retouchMenuItems()
-      items.find((i) => i.label === 'New Spots Clone').onSelect()
+      const mode = items.find((i) => i.label === 'New Spot Mode')
+      mode.submenu.find((i) => i.label === 'Clone').onSelect()
       return window.__esque.useRetouch.getState().spotMode
     })
     ok('menu switches new spots to clone', cloned === 'clone', cloned)

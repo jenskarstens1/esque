@@ -20,7 +20,7 @@ import { COMMAND_BY_ID, chordsFor, formatChord } from '../shell/commands'
 import { useUI } from '../state/ui'
 import { useCatalog } from '../state/catalog'
 import { useDevelop } from '../develop/session'
-import { newMask } from '../develop/masks'
+import { newMaskLayer } from '../develop/layers'
 import { useMasking } from '../develop/masking'
 import '../styles/index.css'
 
@@ -198,8 +198,8 @@ const cropResets = built.get('crop panel')?.filter((item) => item.label === 'Res
 if (cropResets?.length !== 1) fail('crop panel: reset must appear exactly once')
 if (histogramMenuItems().some((item) => item.commandId))
   fail('histogram: individual clipping toggles must not advertise the combined-toggle shortcut')
-const overlayMask = newMask([], 'linear')
-useDevelop.setState({ edits: { ...defaultEdits(), masks: [overlayMask] } })
+const overlayMask = newMaskLayer([], 'linear')
+useDevelop.setState({ edits: { ...defaultEdits(), layers: [overlayMask] } })
 useMasking.setState({ selectedMaskId: overlayMask.id })
 built.set('mask with selection', maskMenuItems())
 const overlay = maskMenuItems().find((item) => item.label === 'Show Overlay')

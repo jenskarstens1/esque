@@ -1,6 +1,6 @@
 import Dexie, { type EntityTable } from 'dexie'
 import { createRoot } from 'react-dom/client'
-import { createModelCache, ModelConsentError, useModelDownloads } from '../ai/modelCache'
+import { createModelCache, ModelConsentError, modelCacheInfo, useModelDownloads } from '../ai/modelCache'
 import { consentKey, modelDownloadAllowed, setModelConsent, useAiPreferences } from '../ai/preferences'
 import { SEGMENT_MODELS, defaultModelFor, formatBytes, modelsFor, type SegmentModel, type SegmentModelId } from '../ai/models'
 import { createInference } from '../ai/inference'
@@ -11,7 +11,7 @@ import { detectKey, useDetect } from '../ai/detect'
 import { alphaKey, dropAlphasFor, loadAlpha, saveAlpha } from '../ai/alpha'
 import { cacheDelete } from '../catalog/opfs'
 import { useDevelop } from '../develop/session'
-import { newGeometry, newMask } from '../develop/masks'
+import { newGeometry, newMaskLayer } from '../develop/layers'
 import { MaskDetection } from '../modules/develop/panels/MaskDetection'
 import { runMaskDetection } from '../modules/develop/panels/maskDetectionActions'
 import { defaultEdits } from '../core/defaults'
@@ -332,15 +332,15 @@ async function inferenceChecks() {
 async function maskSwitchChecks() {
   const saved = useDevelop.getState()
   const photoId = `mask-switch-${crypto.randomUUID()}`
-  const mask = newMask([], 'aiPerson')
+  const mask = newMaskLayer([], 'aiPerson')
   const component = mask.components[0]
   const geometry: AiMaskGeometry = {
     kind: 'aiPerson', model: 'u2net-human', cacheKey: alphaKey(photoId, 'aiPerson', 'u2net-human'), refine: 50,
   }
   component.geometry = geometry
-  const original = { ...defaultEdits('rendered'), masks: [mask] }
+  const original = { ...defaultEdits('rendered'), layers: [mask] }
   const target = { photoId, maskId: mask.id, componentId: component.id, kind: 'aiPerson' as const, modelId: 'modnet' as const }
-  const current = () => useDevelop.getState().edits.masks[0].components[0].geometry as AiMaskGeometry
+  const current = () => useDevelop.getState().edits.layers[0].components[0].geometry as AiMaskGeometry
   const reset = () => useDevelop.setState({ photoId, edits: structuredClone(original) })
   let edits = 0
   useDevelop.setState({
@@ -360,14 +360,14 @@ async function maskSwitchChecks() {
     const pending = runMaskDetection(target, async () => { await held.promise; return true })
     await tick()
     ok(current().cacheKey === geometry.cacheKey && current().model === geometry.model,
-      'Existing masks remain active throughout replacement detection')
+      'Existing layers remain active throughout replacement detection')
     held.resolve()
     ok(await pending, 'Successful replacement commits')
     ok(current().model === 'modnet' && current().cacheKey === detectKey(target) && current().refine === 0 && edits === 1,
       'Coverage, model and default refinement switch atomically in one history step')
 
     reset()
-    useDevelop.getState().update('', '', (next) => { (next.masks[0].components[0].geometry as AiMaskGeometry).refine = 73 })
+    useDevelop.getState().update('', '', (next) => { (next.layers[0].components[0].geometry as AiMaskGeometry).refine = 73 })
     await runMaskDetection(target, async () => true)
     ok(current().refine === 73, 'Replacement preserves custom refinement')
 
@@ -381,7 +381,7 @@ async function maskSwitchChecks() {
     reset()
     const changed = deferred()
     const stale = runMaskDetection(target, async () => { await changed.promise; return true })
-    useDevelop.getState().update('', '', (next) => { (next.masks[0].components[0].geometry as AiMaskGeometry).cacheKey = 'changed' })
+    useDevelop.getState().update('', '', (next) => { (next.layers[0].components[0].geometry as AiMaskGeometry).cacheKey = 'changed' })
     changed.resolve()
     ok(!(await stale) && current().cacheKey === 'changed', 'A late result cannot overwrite a changed mask')
 
@@ -418,14 +418,14 @@ function outputChecks() {
 
 async function replacementChecks() {
   const portrait = SEGMENT_MODELS.modnet
-  ok(defaultModelFor('aiPerson') === 'modnet', 'New People masks use MODNet')
+  ok(defaultModelFor('aiPerson') === 'modnet', 'New People layers use MODNet')
   ok(defaultModelFor('aiSubject') === 'birefnet-lite-webgpu' && defaultModelFor('aiBackground') === 'birefnet-lite-webgpu',
-    'New Subject and Background masks use BiRefNet-lite')
+    'New Subject and Background layers use BiRefNet-lite')
   ok(modelsFor('aiPerson').length === 1 && modelsFor('aiPerson')[0].id === 'modnet',
-    'New People masks only offer person-specific inference')
+    'New People layers only offer person-specific inference')
   ok(modelsFor('aiPerson', 'u2net-human').some((item) => item.id === 'u2net-human') &&
     modelsFor('aiPerson', 'birefnet-lite').some((item) => item.id === 'birefnet-lite'),
-  'Saved People masks retain both historical model choices')
+  'Saved People layers retain both historical model choices')
   const geometry = newGeometry('aiPerson')
   ok('refine' in geometry && geometry.refine === 0, 'New portrait mattes are not contrast-hardened')
   const previous = useAiPreferences.getState()
@@ -550,7 +550,7 @@ async function legacyCoverageChecks() {
   const photoId = `ai-legacy-check-${crypto.randomUUID()}`
   const legacyKey = alphaKey(photoId, 'aiSubject', 'birefnet-lite')
   const geometry: AiMaskGeometry = { kind: 'aiSubject', model: 'birefnet-lite', cacheKey: legacyKey, refine: 50 }
-  const mask = newMask([], 'aiSubject')
+  const mask = newMaskLayer([], 'aiSubject')
   const component = { ...mask.components[0], geometry }
   mask.components = [component]
   const host = document.createElement('div')
@@ -592,6 +592,66 @@ async function legacyCoverageChecks() {
   }
 }
 
+/**
+ * A mask the user asked for should not need to be asked for again.
+ *
+ * The pre-permission state is the whole point: nothing may be fetched before
+ * consent, consent is offered where the mask is being made, and granting it is
+ * the click that starts detection. A developer who already installed the model
+ * exercises the other half — that an installed model simply runs.
+ */
+async function automaticDetectionChecks() {
+  const develop = useDevelop.getState()
+  const detection = useDetect.getState()
+  const preferences = useAiPreferences.getState()
+  const stored = localStorage.getItem('esque.ai')
+  const portrait = SEGMENT_MODELS.modnet
+  const photoId = `ai-auto-check-${crypto.randomUUID()}`
+  const mask = newMaskLayer([], 'aiPerson')
+  const component = mask.components[0]
+  const geometry = component.geometry as AiMaskGeometry
+  const host = document.createElement('div')
+  document.body.append(host)
+  const root = createRoot(host)
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 300))
+  try {
+    ok(geometry.cacheKey === null, 'A new detected mask starts without coverage')
+    const { cached } = await modelCacheInfo(portrait)
+    setModelConsent(portrait, false)
+    let updates = 0
+    useDevelop.setState({
+      photoId,
+      edits: { ...defaultEdits('rendered'), layers: [mask] },
+      update: () => { updates++ },
+    })
+    root.render(<MaskDetection mask={mask} component={component} geometry={geometry} />)
+    await settle()
+    ok(!host.querySelector('select[aria-label="Mask model"]'),
+      'A new mask does not ask the user to choose between one model')
+    if (cached) {
+      ok(updates > 0, 'An installed model detects without a second instruction')
+      return
+    }
+    ok(updates === 0, 'Nothing is downloaded or detected before permission is given')
+    const consent = Array.from(host.querySelectorAll<HTMLButtonElement>('[role="checkbox"]'))
+      .find((box) => box.closest('label')?.textContent?.includes(formatBytes(portrait.bytes)))
+    ok(!!consent, 'Permission is offered where the mask is made, not only in Settings')
+    consent?.click()
+    await settle()
+    ok(modelDownloadAllowed(portrait), 'The mask panel grants the same per-model permission as Settings')
+    ok(localStorage.getItem('esque.ai')?.includes(consentKey(portrait)), 'Permission granted in the panel persists')
+    ok(updates > 0, 'Granting permission starts detection without a second click')
+  } finally {
+    root.unmount()
+    host.remove()
+    useDevelop.setState(develop)
+    useDetect.setState(detection)
+    useAiPreferences.setState(preferences)
+    if (stored === null) localStorage.removeItem('esque.ai')
+    else localStorage.setItem('esque.ai', stored)
+  }
+}
+
 runCheck(async () => {
   await cacheChecks()
   await previewChecks()
@@ -600,6 +660,7 @@ runCheck(async () => {
   outputChecks()
   await replacementChecks()
   await legacyCoverageChecks()
+  await automaticDetectionChecks()
   await settingsChecks()
   return { pass: failures.length === 0, assertions, failures }
 })

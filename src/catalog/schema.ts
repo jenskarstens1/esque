@@ -10,7 +10,7 @@ import {
   type CurvePoint,
   type Edits,
   type EditSection,
-  type Mask,
+  type Layer,
   type MaskAdjustments,
   type MaskComponent,
   type MaskGeometry,
@@ -19,15 +19,22 @@ import {
   type Preset,
   type SmartRule,
   type Snapshot,
+  type LayerBlend,
+  type LayerContent,
+  type LayerTransform,
 } from '../core/types'
+import { BLEND_MODE_LABELS } from '../develop/layers'
 
 export const CATALOG_ARCHIVE_VERSION = 1
 export const MAX_ARCHIVE_BYTES = 64 * 1024 * 1024
 
 export type PortableGeometry = Exclude<MaskGeometry, AiMaskGeometry> | Omit<AiMaskGeometry, 'cacheKey'>
 export type PortableComponent = Omit<MaskComponent, 'geometry'> & { geometry: PortableGeometry }
-export type PortableMask = Omit<Mask, 'components'> & { components: PortableComponent[] }
-export type PortableEdits = Omit<Edits, 'masks'> & { masks: PortableMask[] }
+export type PortableMask = Omit<Layer, 'components' | 'children'> & {
+  components: PortableComponent[]
+  children: PortableMask[] | null
+}
+export type PortableEdits = Omit<Edits, 'layers'> & { layers: PortableMask[] }
 export type PortablePhoto = Omit<
   Photo, 'fileHandle' | 'thumbKey' | 'thumbRev' | 'previewRev' | 'proxyKey' | 'readError' | 'edits'
 > & { edits: PortableEdits | null }
@@ -239,18 +246,76 @@ const geometry: Parser<PortableGeometry> = (value, path) => {
   }
 }
 
-const masks: Parser<PortableMask[]> = (value, path) => {
-  const parsed = array(object<PortableMask>({
-    id, name: text(4096, 1), visible: boolean, inverted: boolean, opacity: unit,
-    components: array(object<PortableComponent>({
-      id, blend: oneOf('add', 'subtract', 'intersect'), invert: boolean, geometry,
-    }), 4096),
-    adjustments: maskAdjustments,
-  }), 4096)(value, path)
-  unique(parsed, (mask) => mask.id, path)
+const BLEND_MODE_IDS = Object.keys(BLEND_MODE_LABELS) as [LayerBlend, ...LayerBlend[]]
+
+function three<T>(parse: Parser<T>): Parser<[T, T, T]> {
+  return (value, path) => {
+    const entries = array(parse, 3, 3)(value, path)
+    return [entries[0], entries[1], entries[2]]
+  }
+}
+
+const layerTransform = object<LayerTransform>({
+  offsetX: number(-400, 400), offsetY: number(-400, 400),
+  scale: number(1, 1000), rotate: number(-360, 360),
+  flipH: boolean, flipV: boolean,
+})
+
+const layerContent: Parser<LayerContent> = (value, path) => {
+  if (!isRecord(value)) return invalid(path, 'expected an object')
+  switch (value.kind) {
+    case 'fill':
+      return object<Extract<LayerContent, { kind: 'fill' }>>({
+        kind: oneOf('fill'), color: three(unit),
+      })(value, path)
+    case 'image':
+      // `source` names a cache entry, not a file: pixels live in local storage,
+      // so an archive opened elsewhere renders the layer as nothing until the
+      // image is imported again.
+      return object<Extract<LayerContent, { kind: 'image' }>>({
+        kind: oneOf('image'), source: text(1024, 1), width: dimension, height: dimension,
+      })(value, path)
+    default:
+      return object<Extract<LayerContent, { kind: 'adjust' }>>({ kind: oneOf('adjust') })(value, path)
+  }
+}
+
+/** Deep enough for any stack a person builds, shallow enough to bound the parse. */
+const MAX_LAYER_DEPTH = 8
+
+function layerAt(depth: number): Parser<PortableMask> {
+  return (value, path) => {
+    if (depth > MAX_LAYER_DEPTH) invalid(path, 'layer groups are nested too deeply')
+    return object<PortableMask>({
+      id, name: text(4096, 1), visible: boolean, inverted: boolean, opacity: unit,
+      blend: oneOf(...BLEND_MODE_IDS),
+      components: array(object<PortableComponent>({
+        id, blend: oneOf('add', 'subtract', 'intersect'), invert: boolean, geometry,
+      }), 4096),
+      content: layerContent,
+      adjustments: maskAdjustments,
+      transform: layerTransform,
+      clipped: boolean,
+      children: nullable(array(layerAt(depth + 1), 4096)),
+      isolate: boolean,
+    })(value, path)
+  }
+}
+
+const layers: Parser<PortableMask[]> = (value, path) => {
+  const parsed = array(layerAt(0), 4096)(value, path)
+  const flat: PortableMask[] = []
+  const walk = (list: PortableMask[]) => {
+    for (const layer of list) {
+      flat.push(layer)
+      if (layer.children) walk(layer.children)
+    }
+  }
+  walk(parsed)
+  unique(flat, (layer) => layer.id, path)
   const components = new Set<string>()
-  for (const mask of parsed) {
-    for (const component of mask.components) {
+  for (const layer of flat) {
+    for (const component of layer.components) {
       if (components.has(component.id)) invalid(`${path}.components`, 'component identities must be unique within the edit stack')
       components.add(component.id)
     }
@@ -323,7 +388,7 @@ const editShape: Shape<PortableEdits> = {
     shadowTint: signedPercent, redHue: signedPercent, redSaturation: signedPercent,
     greenHue: signedPercent, greenSaturation: signedPercent, blueHue: signedPercent, blueSaturation: signedPercent,
   }),
-  masks,
+  layers,
   spots: array(object<Edits['spots'][number]>({
     id, mode: oneOf('heal', 'clone'), target: point, source: point,
     radius: positiveRadius, feather: percent, opacity: unit,
@@ -360,7 +425,7 @@ const partialEditParser: Parser<Partial<PortableEdits>> = (value, path) => {
     colorMixer: optional(editShape.colorMixer), colorGrading: optional(editShape.colorGrading),
     detail: optional(editShape.detail), lens: optional(editShape.lens), transform: optional(editShape.transform),
     crop: optional(editShape.crop), effects: optional(editShape.effects), calibration: optional(editShape.calibration),
-    masks: optional(editShape.masks), spots: optional(editShape.spots), redEye: optional(editShape.redEye),
+    layers: optional(editShape.layers), spots: optional(editShape.spots), redEye: optional(editShape.redEye),
   })(value, path)
   validateEditRelations(parsed, path)
   return migratePartialEdits(parsed as unknown as Partial<Edits>) as unknown as Partial<PortableEdits>
@@ -462,7 +527,7 @@ const collectionParser = object<Collection>({
 
 const section: Parser<EditSection> = oneOf(
   'profile', 'basic', 'tone', 'curve', 'colorMixer', 'colorGrading', 'detail',
-  'lens', 'transform', 'crop', 'effects', 'calibration', 'masks', 'spots', 'redEye',
+  'lens', 'transform', 'crop', 'effects', 'calibration', 'layers', 'spots', 'redEye',
 )
 const presetPaths = new Set(leafPaths(defaultEdits()).filter((path) => path !== 'version'))
 const presetParser: Parser<PortablePreset> = (value, path) => {

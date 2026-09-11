@@ -23,7 +23,7 @@ import { geometryOutputSize, isIdentityFraming, splitAtGeometry } from '../gpu/g
 import type { OutputSpace } from '../gpu/colorspace'
 import { isAiGeometry, type Edits } from '../core/types'
 import { loadAlpha } from '../ai/alpha'
-import { isNeutralMask } from '../develop/masks'
+import { isNeutralLayer } from '../develop/layers'
 import type { Plane } from './pixels'
 
 /**
@@ -63,8 +63,8 @@ class Cancelled extends Error {
 }
 
 async function ensureDetectedMasks(edits: Edits, signal?: { cancelled: boolean }) {
-  for (const mask of edits.masks) {
-    if (!mask.visible || mask.opacity === 0 || isNeutralMask(mask)) continue
+  for (const mask of edits.layers) {
+    if (!mask.visible || mask.opacity === 0 || isNeutralLayer(mask)) continue
     for (const { geometry } of mask.components) {
       if (!isAiGeometry(geometry)) continue
       check(signal)

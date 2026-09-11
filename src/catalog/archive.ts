@@ -26,19 +26,25 @@ export interface CatalogDatabase extends CatalogTables {
 export const catalogTables = (database: CatalogDatabase) =>
   [database.photos, database.folders, database.collections, database.presets, database.snapshots]
 
-function portableMasks(masks: Edits['masks']): PortableMask[] {
-  return masks.map((mask) => ({
-    ...mask,
-    components: mask.components.map((component) => {
+/**
+ * Strips the cached-alpha pointers on the way into an archive, all the way
+ * down through groups: a cache key names local storage on the machine that
+ * detected it and means nothing anywhere else.
+ */
+function portableLayers(layers: Edits['layers']): PortableMask[] {
+  return layers.map((layer) => ({
+    ...layer,
+    components: layer.components.map((component) => {
       if (!isAiGeometry(component.geometry)) return component
       const { cacheKey: _cacheKey, ...geometry } = component.geometry
       return { ...component, geometry }
     }),
+    children: layer.children ? portableLayers(layer.children) : null,
   }))
 }
 
 export function portableEdits(edits: Edits): PortableEdits {
-  return { ...edits, masks: portableMasks(edits.masks) }
+  return { ...edits, layers: portableLayers(edits.layers) }
 }
 
 function localGeometry(geometry: PortableGeometry): MaskGeometry {
@@ -54,17 +60,20 @@ function localGeometry(geometry: PortableGeometry): MaskGeometry {
   }
 }
 
-export function localEdits(edits: PortableEdits): Edits {
-  return {
-    ...edits,
-    masks: edits.masks.map((mask) => ({
-      ...mask,
-      components: mask.components.map((component) => ({
-        ...component,
-        geometry: localGeometry(component.geometry),
-      })),
+/** The reverse: every detected component comes back needing detection again. */
+function localLayers(layers: PortableMask[]): Edits['layers'] {
+  return layers.map((layer) => ({
+    ...layer,
+    components: layer.components.map((component) => ({
+      ...component,
+      geometry: localGeometry(component.geometry),
     })),
-  }
+    children: layer.children ? localLayers(layer.children) : null,
+  }))
+}
+
+export function localEdits(edits: PortableEdits): Edits {
+  return { ...edits, layers: localLayers(edits.layers) }
 }
 
 export function portablePhoto(photo: Photo): PortablePhoto {
@@ -97,28 +106,19 @@ export function portableFolder(folder: CatalogFolder): PortableFolder {
 }
 
 export function portablePreset(preset: Preset): PortablePreset {
-  const { masks, ...edits } = preset.edits
+  const { layers, ...edits } = preset.edits
   return {
     id: preset.id, name: preset.name, group: preset.group, builtin: preset.builtin,
     sections: preset.sections, paths: preset.paths, createdAt: preset.createdAt,
-    edits: masks === undefined ? edits : { ...edits, masks: portableMasks(masks) },
+    edits: layers === undefined ? edits : { ...edits, layers: portableLayers(layers) },
   }
 }
 
 export function localPreset(preset: PortablePreset): Preset {
-  const { masks, ...edits } = preset.edits
+  const { layers, ...edits } = preset.edits
   return {
     ...preset,
-    edits: masks === undefined ? edits : {
-      ...edits,
-      masks: masks.map((mask) => ({
-        ...mask,
-        components: mask.components.map((component) => ({
-          ...component,
-          geometry: localGeometry(component.geometry),
-        })),
-      })),
-    },
+    edits: layers === undefined ? edits : { ...edits, layers: localLayers(layers) },
   }
 }
 
@@ -176,10 +176,10 @@ export function archiveFilename(at = new Date()): string {
   return `esque-catalog-${at.toISOString().replaceAll(':', '-').replace(/\.\d+Z$/, 'Z')}.esque.json`
 }
 
-/** Counts masks that must be detected again; cache pixels are not catalog data. */
+/** Counts layers that must be detected again; cache pixels are not catalog data. */
 export function archiveDetectionCount(archive: CatalogArchive): number {
   const count = (edits: Partial<PortableEdits> | null) =>
-    edits?.masks?.reduce((sum, mask) => sum +
+    edits?.layers?.reduce((sum, mask) => sum +
       mask.components.filter((component) => component.geometry.kind.startsWith('ai')).length, 0) ?? 0
   return archive.photos.reduce((sum, photo) => sum + count(photo.edits), 0) +
     archive.snapshots.reduce((sum, snapshot) => sum + count(snapshot.edits), 0) +

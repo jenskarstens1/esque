@@ -35,11 +35,13 @@ import { SPOT_FS, RED_EYE_FS, MAX_SPOTS, MAX_EYES } from './wgsl/retouch'
 import { OUTPUT_FS } from './wgsl/output'
 import { DETAILBANDS_FS, RECOVER_FS, TONEMAP_FS } from './wgsl/tone'
 import {
+  apply3,
   calibrationMatrix,
   outputGamma,
   outputLuma,
   outputMatrix,
   outputToOutputMatrix,
+  SRGB_D65_TO_PROPHOTO_D50,
   toGl,
   whiteBalanceGain,
   type OutputSpace,
@@ -58,12 +60,16 @@ import {
   isAiGeometry,
   type CurvePoint,
   type Edits,
-  type Mask,
+  type Layer,
+  type LayerTransform,
 } from '../core/types'
 import { cameraProfile } from '../core/profiles'
 import type { SourceImage } from '../core/workingImage'
 import { floatToHalf, halfToFloat } from '../core/half'
 import { getAlpha } from '../ai/alpha'
+import { BLEND_MODE_INDEX } from './wgsl/blend'
+import { getLayerPixels } from '../develop/layerPixels'
+import { findLayer } from '../develop/layers'
 
 export type { SourceImage } from '../core/workingImage'
 
@@ -181,6 +187,71 @@ function aspectVec(width: number, height: number): [number, number] {
   return [width / long, height / long]
 }
 
+/** The sRGB transfer function, for artwork authored in display values. */
+function srgbToLinear(v: number): number {
+  return v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4)
+}
+
+/** A fill colour as the working space sees it: linear ProPhoto. */
+function linearFill(color: [number, number, number]): [number, number, number] {
+  const linear: [number, number, number] = [
+    srgbToLinear(color[0]),
+    srgbToLinear(color[1]),
+    srgbToLinear(color[2]),
+  ]
+  return apply3(SRGB_D65_TO_PROPHOTO_D50, linear)
+}
+
+/**
+ * An imported picture's scale, fitted inside the frame without cropping it.
+ *
+ * The factor is the reciprocal of the drawn size because the shader samples
+ * backwards: it asks which pixel of the import lands here, not where this
+ * pixel of the import goes.
+ */
+function containFit(
+  imageW: number,
+  imageH: number,
+  frameW: number,
+  frameH: number,
+): [number, number] {
+  if (imageW <= 0 || imageH <= 0) return [1, 1]
+  const frame = aspectVec(frameW, frameH)
+  const image = aspectVec(imageW, imageH)
+  const scale = Math.min(frame[0] / image[0], frame[1] / image[1])
+  return [1 / (image[0] * scale), 1 / (image[1] * scale)]
+}
+
+/**
+ * A layer transform, inverted, in the form the shader wants.
+ *
+ * The pass runs per destination pixel and has to find the source, so what goes
+ * to the GPU is the inverse of what the user set: undo the move, undo the
+ * scale, undo the rotation, undo the flips. Offsets are a percentage of the
+ * long edge so a nudge means the same thing on any crop.
+ */
+function inverseLayerTransform(
+  t: LayerTransform,
+  aspect: [number, number],
+): { matrix: [number, number, number, number]; offset: [number, number] } {
+  const scale = t.scale > 0 ? t.scale / 100 : 1
+  const theta = (-t.rotate * Math.PI) / 180
+  const cos = Math.cos(theta)
+  const sin = Math.sin(theta)
+  const fx = t.flipH ? -1 : 1
+  const fy = t.flipV ? -1 : 1
+  // Row-major F * (1/s) * R(-theta).
+  return {
+    matrix: [
+      (fx * cos) / scale,
+      (fx * -sin) / scale,
+      (fy * sin) / scale,
+      (fy * cos) / scale,
+    ],
+    offset: [(t.offsetX / 100) * aspect[0], (t.offsetY / 100) * aspect[1]],
+  }
+}
+
 type GraphState = {
   chain: PingPong
   active: PingPong
@@ -252,13 +323,13 @@ export class Renderer {
    * A queue write lands ahead of the commands the encoder is still collecting,
    * so uploading every curve into one texture makes the last upload the one
    * every draw in the frame reads. Any frame carrying more than one curve —
-   * several masks, or a before/after pair — therefore takes a texture per
+   * several layers, or a before/after pair — therefore takes a texture per
    * curve, and the pool is rewound when the next frame opens.
    */
   private lutPool: Tex[] = []
   private lutCursor = 0
   private lutData = new Float32Array(LUT_SIZE * 4)
-  /** Mask coverage buffers, sized to the framed image. */
+  /** Layer coverage buffers, sized to the framed image. */
   private maskAcc: PingPong | null = null
   private maskScratch: PingPong | null = null
   private maskLutData = new Float32Array(LUT_SIZE * 4)
@@ -270,13 +341,19 @@ export class Renderer {
    * from that whenever a key it has not seen turns up in a mask.
    */
   private aiTex = new Map<string, Tex>()
+  /** Uploaded pixels for image layers, keyed by their content hash. */
+  private layerTex = new Map<string, Tex>()
+  /** Coverage copied out of the shared accumulator so it outlives the next mask. */
+  private coverageSlots = new Map<string, PingPong>()
+  /** One full-size chain per nesting depth, for groups that render in isolation. */
+  private groupChains: (PingPong | undefined)[] = []
   /** Framed-space coverage, one per AI component in the current mask. */
   private aiFramed: PingPong | null = null
   /**
    * The geometry stage's uniforms, or null when it was skipped.
    *
    * AI coverage is produced on the *sensor* grid — the network reads the proxy,
-   * which knows nothing about the crop — while masks are rasterised in the
+   * which knows nothing about the crop — while layers are rasterised in the
    * framed image the user sees. Replaying the same transform over the coverage
    * is what reconciles the two, and it is exact by construction rather than by
    * a second implementation that has to be kept in step. Detecting a subject
@@ -842,24 +919,210 @@ export class Renderer {
     }
   }
 
+  // -------------------------------------------------------------------------
+  // Layers
+  // -------------------------------------------------------------------------
+
+  /**
+   * Composites the layer stack over the picture the global edits produced.
+   *
+   * Layers run in paint order — index 0 at the bottom — and each one is a
+   * single pass: its mask becomes a coverage texture, its own pixels are read
+   * or computed, its adjustments run, and the result is blended onto what is
+   * already there. An adjustment layer with a normal blend is exactly the mask
+   * this pipeline has always applied, which is what lets an old edit stack
+   * render unchanged.
+   */
   private runLocalAdjustments(edits: Edits, state: GraphState) {
-    const masks = edits.masks.filter((mask) => mask.visible && mask.components.length > 0)
-    if (!masks.length) return
+    if (!edits.layers.length) return
     const apply = this.cache.get('maskApply', MASK_APPLY_FS)
-    for (const mask of masks) this.applyMask(mask, apply, state)
+    this.compositeLayers(edits.layers, apply, state, null, 0)
   }
 
-  private applyMask(mask: Mask, apply: Pass, state: GraphState) {
-    const coverage = this.buildMask(mask, state.input, state.width, state.height)
-    if (!coverage) return
-    const adjustments = mask.adjustments
+  /** One level of the stack. `inherited` is the enclosing group's coverage. */
+  private compositeLayers(
+    layers: Layer[],
+    apply: Pass,
+    state: GraphState,
+    inherited: Tex | null,
+    depth: number,
+  ) {
+    // The coverage a run of clipped layers is confined to: whatever the last
+    // unclipped layer under them covered.
+    let clipBase: Tex | null = null
+    let clipBaseKnown = false
+    let index = 0
+
+    for (const layer of layers) {
+      const resolved = this.layerCoverage(layer, state)
+      if (!resolved) continue
+      let coverage = resolved.coverage
+
+      if (layer.clipped && clipBaseKnown) {
+        coverage = this.intersectCoverage(coverage, clipBase, `clip${depth}:${index}`, state)
+      } else {
+        clipBase = this.holdCoverage(coverage, `base${depth}`, state)
+        clipBaseKnown = true
+      }
+      if (inherited) {
+        coverage = this.intersectCoverage(coverage, inherited, `group${depth}:${index}`, state)
+      }
+
+      if (layer.children) this.compositeGroup(layer, coverage, apply, state, depth)
+      else this.applyLayer(layer, coverage, apply, state)
+      index++
+    }
+  }
+
+  /**
+   * A layer's coverage, or null when it cannot put anything on screen.
+   *
+   * The inner `coverage` is null for a layer with no mask at all: that means
+   * the whole frame, and a texture full of ones would be a pass and a buffer
+   * spent saying so. An *inverted* empty mask covers nothing, which is not a
+   * layer at all.
+   */
+  private layerCoverage(layer: Layer, state: GraphState): { coverage: Tex | null } | null {
+    if (!layer.visible || layer.opacity <= 0) return null
+    if (layer.children && !layer.children.length) return null
+    if (!layer.components.length) return layer.inverted ? null : { coverage: null }
+    const coverage = this.buildMask(layer, state.input, state.width, state.height)
+    return coverage ? { coverage } : null
+  }
+
+  /**
+   * Copies coverage somewhere it will survive the next mask being built.
+   *
+   * `buildMask` hands back a texture inside the shared accumulator, which the
+   * following layer overwrites. A clipping base and a group's coverage both
+   * have to outlive that, so they are taken out of the accumulator first.
+   */
+  private holdCoverage(coverage: Tex | null, key: string, state: GraphState): Tex | null {
+    if (!coverage) return null
+    const slot = this.coverageSlot(key, state.width, state.height)
+    const copy = this.cache.get('copy', COPY_FS)
+    copy.use()
+    copy.tex('uImage', coverage).set('uSrcOffset', [0, 0]).set('uSrcScale', [1, 1])
+    drawPass(this.enc!, slot.write, copy)
+    const held: Tex = slot.write
+    slot.swap()
+    return held
+  }
+
+  /** Coverage confined to another layer's, for clipping and for groups. */
+  private intersectCoverage(
+    coverage: Tex | null,
+    limit: Tex | null,
+    key: string,
+    state: GraphState,
+  ): Tex | null {
+    if (!limit) return coverage
+    if (!coverage) return limit
+    const slot = this.coverageSlot(key, state.width, state.height)
+    const merge = this.cache.get('maskMerge', MASK_MERGE_FS)
+    merge.use()
+    merge.tex('uPrev', coverage).tex('uCov', limit)
+      .set('uBlend', 2).set('uInvert', 0).set('uFirst', 0)
+    drawPass(this.enc!, slot.write, merge)
+    const out: Tex = slot.write
+    slot.swap()
+    return out
+  }
+
+  private coverageSlot(key: string, width: number, height: number): PingPong {
+    const existing = this.coverageSlots.get(key)
+    if (existing && existing.width === width && existing.height === height) return existing
+    this.retire(existing)
+    const slot = new PingPong(this.ctx, width, height)
+    this.coverageSlots.set(key, slot)
+    return slot
+  }
+
+  /**
+   * A group, either passing through or in isolation.
+   *
+   * Pass-through is the cheap and the common case: the children blend straight
+   * onto the picture, and the group only contributes its mask. Isolation copies
+   * the backdrop, runs the children against the copy and composites the result
+   * in one go — which is the only way a group's own blend mode can mean
+   * anything, because there is nothing to blend until the children are done.
+   */
+  private compositeGroup(
+    layer: Layer,
+    coverage: Tex | null,
+    apply: Pass,
+    state: GraphState,
+    depth: number,
+  ) {
+    const children = layer.children ?? []
+    if (!layer.isolate) {
+      this.compositeLayers(children, apply, state, coverage, depth + 1)
+      return
+    }
+
+    const chain = this.groupChain(depth, state.width, state.height)
+    const copy = this.cache.get('copy', COPY_FS)
+    copy.use()
+    copy.tex('uImage', state.input).set('uSrcOffset', [0, 0]).set('uSrcScale', [1, 1])
+    drawPass(this.enc!, chain.write, copy)
+    let inner: Tex = chain.write
+    chain.swap()
+
+    const sub: GraphState = {
+      ...state,
+      active: chain,
+      input: inner,
+      pass: (program, setup) => {
+        program.use()
+        program.tex('uImage', sub.input)
+        setup(program)
+        drawPass(this.enc!, chain.write, program)
+        sub.input = chain.write
+        chain.swap()
+      },
+    }
+    this.compositeLayers(children, apply, sub, null, depth + 1)
+    inner = sub.input
+
+    this.applyLayer(layer, coverage, apply, state, inner)
+  }
+
+  private groupChain(depth: number, width: number, height: number): PingPong {
+    const existing = this.groupChains[depth]
+    if (existing && existing.width === width && existing.height === height) return existing
+    this.retire(existing)
+    const chain = new PingPong(this.ctx, width, height)
+    this.groupChains[depth] = chain
+    return chain
+  }
+
+  /** One layer, one pass: content, adjustments, blend, coverage. */
+  private applyLayer(
+    layer: Layer,
+    coverage: Tex | null,
+    apply: Pass,
+    state: GraphState,
+    groupResult: Tex | null = null,
+  ) {
+    const content = this.layerContent(layer, state, groupResult)
+    if (!content) return
+    const adjustments = layer.adjustments
     const fine = this.blurAt(state.input, state.width, state.height, 1.6, 2)
     const coarse = this.blurAt(state.input, state.width, state.height, 3.0, 8)
     const hasCurve = adjustments.curve.length > 0 && !isIdentityPoints(adjustments.curve)
     const lut = hasCurve ? this.uploadMaskLut(adjustments.curve) : null
+    const aspect = aspectVec(state.width, state.height)
+    const placement = inverseLayerTransform(layer.transform, aspect)
+
     state.pass(apply, (program) => {
       program.tex('uMask', coverage).tex('uFine', fine).tex('uCoarse', coarse).tex('uLut', lut)
-        .set('uHasCurve', hasCurve ? 1 : 0).set('uLutSize', LUT_SIZE).set('uOpacity', mask.opacity)
+        .tex('uLayer', content.texture)
+        .set('uHasCurve', hasCurve ? 1 : 0).set('uLutSize', LUT_SIZE).set('uOpacity', layer.opacity)
+        .set('uBlend', BLEND_MODE_INDEX[layer.blend] ?? 0)
+        .set('uContent', content.mode).set('uHasMask', coverage ? 1 : 0)
+        .set('uFill', content.fill).set('uContentFit', content.fit)
+        .set('uXform', placement.matrix).set('uXformOffset', placement.offset)
+        .set('uAspect', aspect)
         .set('uExposure', adjustments.exposure).set('uContrast', adjustments.contrast / 100)
         .set('uHighlights', adjustments.highlights / 100).set('uShadows', adjustments.shadows / 100)
         .set('uWhites', adjustments.whites / 100).set('uBlacks', adjustments.blacks / 100)
@@ -871,6 +1134,68 @@ export class Renderer {
         .set('uNoise', adjustments.noise / 100).set('uMoire', adjustments.moire / 100)
         .set('uDefringe', adjustments.defringe / 100)
     })
+  }
+
+  /**
+   * Where a layer's pixels come from, in the form the apply pass wants.
+   *
+   * Returns null when the layer has pixels it cannot reach — an import this
+   * machine has never cached — because compositing a placeholder into a
+   * photograph is worse than leaving the layer out until the file comes back.
+   */
+  private layerContent(
+    layer: Layer,
+    state: GraphState,
+    groupResult: Tex | null,
+  ): { mode: number; texture: Tex | null; fill: number[]; fit: [number, number] } | null {
+    const none = { fill: [0, 0, 0], fit: [1, 1] as [number, number] }
+    if (groupResult) return { mode: 3, texture: groupResult, ...none }
+
+    const content = layer.content
+    if (content.kind === 'fill') {
+      return { mode: 1, texture: null, fill: linearFill(content.color), fit: none.fit }
+    }
+    if (content.kind === 'image') {
+      const texture = this.layerTexture(content.source)
+      if (!texture) return null
+      return {
+        mode: 2,
+        texture,
+        fill: none.fill,
+        fit: containFit(content.width, content.height, state.width, state.height),
+      }
+    }
+    return { mode: 0, texture: null, ...none }
+  }
+
+  /**
+   * An imported layer's pixels on the GPU, uploaded once per source.
+   *
+   * Stored 8-bit sRGB and linearised here, so the shader sees the same working
+   * space everything else in the graph is in.
+   */
+  private layerTexture(source: string): Tex | null {
+    const existing = this.layerTex.get(source)
+    if (existing) return existing
+
+    const pixels = getLayerPixels(source)
+    if (!pixels) return null
+
+    const tex = createTexture(this.ctx, pixels.width, pixels.height, {
+      format: 'rgba16float',
+      filter: 'linear',
+    })
+    const count = pixels.width * pixels.height * 4
+    const half = new Uint16Array(count)
+    for (let i = 0; i < count; i += 4) {
+      half[i] = floatToHalf(srgbToLinear(pixels.data[i] / 255))
+      half[i + 1] = floatToHalf(srgbToLinear(pixels.data[i + 1] / 255))
+      half[i + 2] = floatToHalf(srgbToLinear(pixels.data[i + 2] / 255))
+      half[i + 3] = floatToHalf(pixels.data[i + 3] / 255)
+    }
+    writeTexture(this.ctx, tex, half)
+    this.layerTex.set(source, tex)
+    return tex
   }
 
   private runEffects(edits: Edits, state: GraphState) {
@@ -891,14 +1216,25 @@ export class Renderer {
 
   private runMaskOverlay(edits: Edits, overlay: MaskOverlay | null, state: GraphState) {
     if (!overlay) return
-    const mask = edits.masks.find((candidate) => candidate.id === overlay.maskId)
-    const coverage = mask ? this.buildMask(mask, state.input, state.width, state.height) : null
-    if (!coverage) return
+    const layer = findLayer(edits, overlay.maskId)
+    if (!layer) return
+    // No components means the whole frame, which the overlay shows as covered.
+    const hasMask = layer.components.length > 0
+    const coverage = hasMask
+      ? this.buildMask(layer, state.input, state.width, state.height)
+      : null
+    if (hasMask && !coverage) return
+    const aspect = aspectVec(state.width, state.height)
+    const placement = inverseLayerTransform(layer.transform, aspect)
     state.pass(this.cache.get('maskShow', MASK_SHOW_FS), (program) => {
       program.tex('uMask', coverage)
         .set('uTint', overlay.tint ?? [0.95, 0.25, 0.3])
         .set('uAmount', overlay.amount ?? 0.55)
         .set('uMode', overlay.mode === 'coverage' ? 1 : 0)
+        .set('uHasMask', hasMask ? 1 : 0)
+        .set('uXform', placement.matrix)
+        .set('uXformOffset', placement.offset)
+        .set('uAspect', aspect)
     })
   }
 
@@ -915,7 +1251,7 @@ export class Renderer {
    * scratch buffer and folded in once at the end.
    */
   private buildMask(
-    mask: Mask,
+    mask: Layer,
     image: Tex,
     width: number,
     height: number,
@@ -938,7 +1274,7 @@ export class Renderer {
     return mask.inverted ? this.invertMask(coverage, acc, merge) : coverage
   }
 
-  private rasterizableMaskParts(mask: Mask) {
+  private rasterizableMaskParts(mask: Layer) {
     return mask.components.filter((component) => {
       const geometry = component.geometry
       return geometry.kind in MASK_KIND && (!isAiGeometry(geometry) || this.aiCoverage(geometry.cacheKey))
@@ -956,7 +1292,7 @@ export class Renderer {
   }
 
   private rasterMaskPart(
-    part: Mask['components'][number],
+    part: Layer['components'][number],
     image: Tex,
     width: number,
     height: number,
@@ -974,7 +1310,7 @@ export class Renderer {
   }
 
   private rasterBrush(
-    geometry: Extract<Mask['components'][number]['geometry'], { kind: 'brush' }>,
+    geometry: Extract<Layer['components'][number]['geometry'], { kind: 'brush' }>,
     image: Tex,
     aspect: [number, number],
     scratch: PingPong,
@@ -1004,7 +1340,7 @@ export class Renderer {
   }
 
   private rasterNonBrush(
-    geometry: Exclude<Mask['components'][number]['geometry'], { kind: 'brush' }>,
+    geometry: Exclude<Layer['components'][number]['geometry'], { kind: 'brush' }>,
     image: Tex,
     width: number,
     height: number,
@@ -1024,8 +1360,8 @@ export class Renderer {
   }
 
   private configureMaskRaster(
-    geometry: Exclude<Mask['components'][number]['geometry'], { kind: 'brush' }>,
-    ai: Extract<Mask['components'][number]['geometry'], { kind: `ai${string}` }> | null,
+    geometry: Exclude<Layer['components'][number]['geometry'], { kind: 'brush' }>,
+    ai: Extract<Layer['components'][number]['geometry'], { kind: `ai${string}` }> | null,
     alpha: Tex | null,
     width: number,
     height: number,
@@ -1048,7 +1384,7 @@ export class Renderer {
   }
 
   private setColorRangeSamples(
-    geometry: Extract<Mask['components'][number]['geometry'], { kind: 'colorRange' }>,
+    geometry: Extract<Layer['components'][number]['geometry'], { kind: 'colorRange' }>,
     raster: Pass,
   ) {
     const values = new Float32Array(MAX_SAMPLES * 3)
@@ -1063,7 +1399,7 @@ export class Renderer {
   }
 
   private mergeMaskPart(
-    part: Mask['components'][number],
+    part: Layer['components'][number],
     previous: Tex,
     first: boolean,
     acc: PingPong,
@@ -1932,6 +2268,12 @@ export class Renderer {
     this.aiFramed = null
     for (const tex of this.aiTex.values()) tex.destroy()
     this.aiTex.clear()
+    for (const tex of this.layerTex.values()) tex.destroy()
+    this.layerTex.clear()
+    for (const slot of this.coverageSlots.values()) slot.dispose()
+    this.coverageSlots.clear()
+    for (const chain of this.groupChains) chain?.dispose()
+    this.groupChains.length = 0
     this.paneCache?.target.destroy()
     this.paneCache = null
     this.lastResult = null

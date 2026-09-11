@@ -1,8 +1,8 @@
 import { db } from '../catalog/db'
 import { parseIccProfile } from '../core/icc'
 import { defaultEdits, defaultMaskAdjustments, ALL_SECTIONS } from '../core/defaults'
-import { EDITS_VERSION, type Edits, type Mask } from '../core/types'
-import { detachDetectedAlpha } from '../develop/masks'
+import { EDITS_VERSION, type Edits, type Layer } from '../core/types'
+import { detachDetectedAlpha } from '../develop/layers'
 import { migrateEdits, migratePartialEdits, needsMigration } from '../develop/migrate'
 import { previewKey } from '../catalog/opfs'
 import { parseXmp, editsToSidecar } from '../develop/xmp'
@@ -164,7 +164,7 @@ async function checkPaneLifetime() {
 // 3. Detaching AI coverage applies to what is transferred, not to the merge.
 // ---------------------------------------------------------------------------
 
-function aiMask(id: string, cacheKey: string | null): Mask {
+function aiMask(id: string, cacheKey: string | null): Layer {
   return {
     id,
     name: 'Subject',
@@ -178,19 +178,19 @@ function aiMask(id: string, cacheKey: string | null): Mask {
       geometry: { kind: 'aiSubject', cacheKey, model: 'subject', refine: 0 },
     }],
     adjustments: defaultMaskAdjustments(),
-  } as unknown as Mask
+  } as unknown as Layer
 }
 
-const cacheKeyOf = (mask: Mask) =>
+const cacheKeyOf = (mask: Layer) =>
   (mask.components[0].geometry as unknown as { cacheKey: string | null }).cacheKey
 
 function checkDetachScope() {
   const source = defaultEdits('raw')
-  source.masks = [aiMask('src', 'alpha-src')]
+  source.layers = [aiMask('src', 'alpha-src')]
 
   const detached = detachDetectedAlpha(source)
-  ok(cacheKeyOf(detached.masks[0]) === null, 'detach: the transferred settings kept the source photo’s cached coverage')
-  ok(cacheKeyOf(source.masks[0]) === 'alpha-src', 'detach: mutated the source instead of copying it')
+  ok(cacheKeyOf(detached.layers[0]) === null, 'detach: the transferred settings kept the source photo’s cached coverage')
+  ok(cacheKeyOf(source.layers[0]) === 'alpha-src', 'detach: mutated the source instead of copying it')
 }
 
 /**
@@ -205,10 +205,10 @@ async function checkCopyEditsScope() {
 
   const srcEdits = defaultEdits('raw')
   srcEdits.basic.exposure = 1.25
-  srcEdits.masks = [aiMask('src', 'alpha-src')]
+  srcEdits.layers = [aiMask('src', 'alpha-src')]
 
   const dstEdits = defaultEdits('raw')
-  dstEdits.masks = [aiMask('own', 'alpha-own')]
+  dstEdits.layers = [aiMask('own', 'alpha-own')]
 
   const row = (id: string, edits: Edits) => ({
     id, folderId: 'f', relPath: `${id}.cr2`, filename: `${id}.cr2`, ext: 'cr2',
@@ -229,16 +229,16 @@ async function checkCopyEditsScope() {
       'copyEditsTo: the selected section was not transferred',
     )
     ok(
-      cacheKeyOf(after!.edits!.masks[0]) === 'alpha-own',
+      cacheKeyOf(after!.edits!.layers[0]) === 'alpha-own',
       'copyEditsTo: a Basic-only sync dropped the target’s own AI coverage, forcing a needless re-detect',
     )
 
-    // A full sync does carry the masks, and those are the source's — their
+    // A full sync does carry the layers, and those are the source's — their
     // cached coverage was computed from different pixels and must not follow.
     await copyEditsTo(srcId, [dstId])
     const full = await db.photos.get(dstId)
     ok(
-      cacheKeyOf(full!.edits!.masks[0]) === null,
+      cacheKeyOf(full!.edits!.layers[0]) === null,
       'copyEditsTo: a full sync carried the source photo’s cached coverage onto another image',
     )
   } finally {
@@ -350,45 +350,45 @@ function checkIccCurves() {
 function checkTintMigration() {
   const v1 = defaultEdits('raw')
   v1.version = 1
-  v1.masks = [aiMask('m', null)]
-  v1.masks[0].adjustments.tint = 30
+  v1.layers = [aiMask('m', null)]
+  v1.layers[0].adjustments.tint = 30
 
   ok(needsMigration(v1), 'migration: a v1 stack was not recognised as needing work')
 
   const v2 = migrateEdits(v1)
   ok(v2.version === EDITS_VERSION, `migration: version is ${v2.version}, expected ${EDITS_VERSION}`)
-  ok(v2.masks[0].adjustments.tint === -30, 'migration: local tint was not flipped, so old edits render mirrored')
-  ok(v1.masks[0].adjustments.tint === 30, 'migration: mutated the stored object in place')
+  ok(v2.layers[0].adjustments.tint === -30, 'migration: local tint was not flipped, so old edits render mirrored')
+  ok(v1.layers[0].adjustments.tint === 30, 'migration: mutated the stored object in place')
 
   // Idempotent: a sidecar copied between machines can be seen twice.
-  ok(migrateEdits(v2).masks[0].adjustments.tint === -30, 'migration: running twice flipped the tint back')
+  ok(migrateEdits(v2).layers[0].adjustments.tint === -30, 'migration: running twice flipped the tint back')
   ok(!needsMigration(v2), 'migration: a migrated stack still reports as stale')
 
-  // A preset says nothing about masking unless it carries masks.
+  // A preset says nothing about masking unless it carries layers.
   const preset = migratePartialEdits({ version: 1, basic: defaultEdits('raw').basic })
-  ok(!('masks' in preset), 'migration: invented a masks list on a preset that had none')
+  ok(!('layers' in preset), 'migration: invented a layers list on a preset that had none')
 }
 
 /** An XMP written now must declare its version, or it reads back as v1. */
 function checkXmpVersion() {
   const e = defaultEdits('raw')
-  e.masks = [aiMask('m', null)]
-  e.masks[0].adjustments.tint = 20
+  e.layers = [aiMask('m', null)]
+  e.layers[0].adjustments.tint = 20
   const xmp = editsToSidecar(e, ALL_SECTIONS, { filename: 'photo.cr2' })
 
   ok(/esq:EditVersion="\d+"/.test(xmp), 'xmp: no edit version written, so a future migration cannot tell what the numbers mean')
 
   const back = parseXmp(xmp)
   ok(
-    back?.edits.masks[0]?.adjustments.tint === 20,
-    `xmp: a round-trip changed the tint to ${back?.edits.masks[0]?.adjustments.tint} — the sidecar was read as an older version than it was written under`,
+    back?.edits.layers[0]?.adjustments.tint === 20,
+    `xmp: a round-trip changed the tint to ${back?.edits.layers[0]?.adjustments.tint} — the sidecar was read as an older version than it was written under`,
   )
 
   // A sidecar with no version marker is v1 and must be flipped on the way in.
   const legacy = xmp.replace(/ esq:EditVersion="\d+"/, '')
   const old = parseXmp(legacy)
   ok(
-    old?.edits.masks[0]?.adjustments.tint === -20,
+    old?.edits.layers[0]?.adjustments.tint === -20,
     'xmp: an unversioned sidecar was not migrated, so pre-fix files render mirrored',
   )
 }
@@ -431,14 +431,14 @@ async function checkPickerSample() {
     renderer.setFrame(null)
 
     const edits = defaultEdits('rendered')
-    edits.masks = [{
+    edits.layers = [{
       id: 'm1', name: 'Gradient', visible: true, inverted: false, opacity: 1,
       components: [{
         id: 'c1', blend: 'add', invert: false,
         geometry: { kind: 'linear', start: { x: 0, y: 0 }, end: { x: 0, y: 1 } },
       }],
       adjustments: defaultMaskAdjustments(),
-    } as unknown as Mask]
+    } as unknown as Layer]
 
     const read = async (clean: boolean) => {
       const out = await renderer.readPixels('srgb', 8, { x: 32, y: 40, width: 1, height: 1 }, clean)

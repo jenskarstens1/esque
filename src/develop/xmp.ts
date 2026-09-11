@@ -11,9 +11,15 @@
  * sometimes as child elements depending on which version wrote the file, so
  * everything is read through one accessor that checks both.
  */
-import { defaultEdits, defaultMaskAdjustments, sectionOfPath } from '../core/defaults'
+import {
+  defaultEdits,
+  defaultLayerTransform,
+  defaultMaskAdjustments,
+  sectionOfPath,
+} from '../core/defaults'
 import { CAMERA_PROFILES, cameraProfile } from '../core/profiles'
 import { COLOR_BANDS, EDITS_VERSION } from '../core/types'
+import { BLEND_MODE_LABELS, withLayerDefaults } from './layers'
 import { migratePartialEdits } from './migrate'
 import type {
   ColorBand,
@@ -22,10 +28,13 @@ import type {
   CurvePoint,
   EditSection,
   Edits,
+  LayerBlend,
+  LayerContent,
+  LayerTransform,
   HighlightRecovery,
   Preset,
   WhiteBalanceMode,
-  Mask,
+  Layer,
   MaskAdjustments,
   MaskComponent,
   MaskGeometry,
@@ -436,7 +445,10 @@ function parseJsonList<T>(
 }
 
 function parseLocalAdjustments(r: Reader, e: Edits): void {
-  parseJsonList(r, 'masks', 'esq:Masks', normaliseMask, (items) => (e.masks = items))
+  // `esq:Masks` is what every sidecar written before layers carries; the same
+  // JSON shape reads straight back as a layer stack.
+  parseJsonList(r, 'layers', 'esq:Masks', normaliseLayer, (items) => (e.layers = items))
+  parseJsonList(r, 'layers', 'esq:Layers', normaliseLayer, (items) => (e.layers = items))
   parseJsonList(r, 'spots', 'esq:Spots', normaliseSpot, (items) => (e.spots = items))
   parseJsonList(r, 'redEye', 'esq:RedEye', normaliseEye, (items) => (e.redEye = items))
 }
@@ -752,7 +764,7 @@ function writeCropAttributes(e: Edits, writer: AttributeWriter): void {
 }
 
 function writeLocalAdjustmentAttributes(e: Edits, put: PutAttribute): void {
-  if (e.masks.length) put('masks', `esq:Masks="${xmlAttr(JSON.stringify(e.masks))}"`)
+  if (e.layers.length) put('layers', `esq:Layers="${xmlAttr(JSON.stringify(e.layers))}"`)
   if (e.spots.length) put('spots', `esq:Spots="${xmlAttr(JSON.stringify(e.spots))}"`)
   if (e.redEye.length) put('redEye', `esq:RedEye="${xmlAttr(JSON.stringify(e.redEye))}"`)
 }
@@ -771,19 +783,21 @@ function crsAttributes(e: Edits, sections: EditSection[], only?: string[] | null
 }
 
 /**
- * Rebuilds a mask from parsed JSON.
+ * Rebuilds a layer from parsed JSON.
  *
  * A sidecar is a file on disk that anything could have written, so every field
  * is checked against a freshly built default rather than trusted. An entry that
- * isn't a recognisable mask is dropped.
+ * isn't a recognisable layer is dropped.
+ *
+ * A layer with no components is kept: an empty mask means the whole frame,
+ * which is what a fill layer wants.
  */
-function normaliseMask(raw: unknown): Mask | null {
+function normaliseLayer(raw: unknown): Layer | null {
   if (!raw || typeof raw !== 'object') return null
   const o = raw as Record<string, unknown>
   const comps = Array.isArray(o.components)
     ? o.components.map(normaliseComponent).filter((c): c is MaskComponent => !!c)
     : []
-  if (!comps.length) return null
 
   const base = defaultMaskAdjustments()
   const adj = (o.adjustments ?? {}) as Record<string, unknown>
@@ -799,14 +813,65 @@ function normaliseMask(raw: unknown): Mask | null {
     }
   }
 
-  return {
+  const children = Array.isArray(o.children)
+    ? o.children.map(normaliseLayer).filter((l): l is Layer => !!l)
+    : null
+  if (!comps.length && !children && !o.content && !o.id) return null
+
+  return withLayerDefaults({
     id: typeof o.id === 'string' && o.id ? o.id : nextId(),
     name: typeof o.name === 'string' && o.name ? o.name : 'Mask',
     visible: o.visible !== false,
     inverted: o.inverted === true,
     opacity: clamp(num(o.opacity, 1), 0, 1),
+    blend: normaliseBlendMode(o.blend),
     components: comps,
+    content: normaliseContent(o.content),
     adjustments: base,
+    transform: normaliseLayerTransform(o.transform),
+    clipped: o.clipped === true,
+    children,
+    isolate: o.isolate === true,
+  })
+}
+
+const BLEND_MODES = new Set<string>(Object.keys(BLEND_MODE_LABELS))
+
+function normaliseBlendMode(raw: unknown): LayerBlend {
+  return typeof raw === 'string' && BLEND_MODES.has(raw) ? (raw as LayerBlend) : 'normal'
+}
+
+function normaliseContent(raw: unknown): LayerContent {
+  if (!raw || typeof raw !== 'object') return { kind: 'adjust' }
+  const o = raw as Record<string, unknown>
+  if (o.kind === 'fill') {
+    const c = Array.isArray(o.color) ? o.color : []
+    return { kind: 'fill', color: [num(c[0], 0), num(c[1], 0), num(c[2], 0)] }
+  }
+  if (o.kind === 'image' && typeof o.source === 'string' && o.source) {
+    // Pixels live in the local cache, not in the sidecar; a source that this
+    // machine has never seen renders as nothing until the file is re-imported.
+    return {
+      kind: 'image',
+      source: o.source,
+      width: Math.max(1, Math.round(num(o.width, 1))),
+      height: Math.max(1, Math.round(num(o.height, 1))),
+    }
+  }
+  return { kind: 'adjust' }
+}
+
+function normaliseLayerTransform(raw: unknown): LayerTransform {
+  const d = defaultLayerTransform()
+  if (!raw || typeof raw !== 'object') return d
+  const o = raw as Record<string, unknown>
+  return {
+    offsetX: clamp(num(o.offsetX, d.offsetX), -400, 400),
+    offsetY: clamp(num(o.offsetY, d.offsetY), -400, 400),
+    scale: clamp(num(o.scale, d.scale), 1, 1000),
+    rotate: clamp(num(o.rotate, d.rotate), -360, 360),
+    flipH: o.flipH === true,
+    flipV: o.flipV === true,
   }
 }
 

@@ -1,3 +1,4 @@
+import { withLayerDefaults } from '../develop/layers'
 import Dexie, { type EntityTable } from 'dexie'
 import { createRoot } from 'react-dom/client'
 import { db, type ManagedOriginal, type Setting } from '../catalog/db'
@@ -91,7 +92,7 @@ function edits(): Edits {
   value.basic.exposure = 1.25
   value.effects.grainAmount = 24
   value.crop.left = 0.1
-  value.masks = [{
+  value.layers = [withLayerDefaults({
     id: 'mask-1', name: 'Window light', visible: true, inverted: false, opacity: 0.8,
     components: [
       { id: 'linear-1', blend: 'add', invert: false, geometry: { kind: 'linear', start: { x: 0, y: 0 }, end: { x: 1, y: 1 } } },
@@ -104,7 +105,7 @@ function edits(): Edits {
       { id: 'ai-subject', blend: 'add', invert: false, geometry: { kind: 'aiSubject', cacheKey: 'ai/private-subject-cache', model: 'birefnet-lite-webgpu', refine: 50 } },
     ],
     adjustments: { ...defaultMaskAdjustments(), exposure: 0.4 },
-  }]
+  })]
   value.spots = [{ id: 'spot-1', mode: 'heal', source: { x: 0.1, y: 0.2 }, target: { x: 0.2, y: 0.3 }, radius: 0.02, feather: 70, opacity: 0.8 }]
   value.redEye = [{ id: 'eye-1', kind: 'human', center: { x: 0.5, y: 0.5 }, radius: 0.02, darken: 60 }]
   return value
@@ -204,7 +205,7 @@ async function drive() {
   for (const forbidden of ['fileHandle', 'thumbKey', 'thumbRev', 'proxyKey', 'cacheKey', '"handle"', 'readError', 'export.destination', 'private-original-cache', 'private-proxy-pointer']) {
     ok(!json.includes(forbidden), `no ${forbidden} is serialized`)
   }
-  ok(isAiGeometry(master.edits!.masks[0].components[5].geometry) && master.edits!.masks[0].components[5].geometry.cacheKey !== null, 'backup projection leaves original AI cache pointers unchanged')
+  ok(isAiGeometry(master.edits!.layers[0].components[5].geometry) && master.edits!.layers[0].components[5].geometry.cacheKey !== null, 'backup projection leaves original AI cache pointers unchanged')
 
   const target = fresh()
   const restored = await mergeCatalogArchive(roundtrip, target)
@@ -212,13 +213,13 @@ async function drive() {
     equal(restored.counts[table], { added: archive[table].length, skipped: 0, conflicts: 0 }, `roundtrip ${table} counts`)
   }
   ok(restored.virtualCopiesAdded === 1 && restored.collectionSetsAdded === 1, 'copy/set counts are accurate')
-  equal((await createCatalogArchive(target)).photos, archive.photos, 'restored photos, masks, metadata and edits match')
+  equal((await createCatalogArchive(target)).photos, archive.photos, 'restored photos, layers, metadata and edits match')
   equal((await createCatalogArchive(target)).collections, archive.collections, 'collections and rules match')
   equal((await createCatalogArchive(target)).snapshots, archive.snapshots, 'all snapshots and their edits match')
   equal((await createCatalogArchive(target)).presets, archive.presets, 'partial user preset payload matches')
   const restoredCopy = await target.photos.get(copy.id)
   ok(restoredCopy?.masterId === master.id && restoredCopy.edits?.basic.exposure === -0.75, 'virtual copy keeps its own edits and master')
-  const restoredAI = restoredCopy?.edits?.masks[0].components[5].geometry
+  const restoredAI = restoredCopy?.edits?.layers[0].components[5].geometry
   ok(restoredAI && isAiGeometry(restoredAI) && restoredAI.cacheKey === null, 'detected mask geometry survives without a stale cache pointer')
 
   const beforeRepeat = await content(target)
@@ -252,7 +253,7 @@ async function drive() {
     ['unreferenced set', { ...archive, collectionSetIds: [...archive.collectionSetIds, 'missing-set'] }],
     ['missing snapshot reference', { ...archive, snapshots: [{ ...archive.snapshots[0], photoId: 'missing-photo' }] }],
     ['invalid preset path', { ...archive, presets: [{ ...archive.presets[0], paths: ['basic.__proto__'] }] }],
-    ['invalid preset section', { ...archive, presets: [{ ...archive.presets[0], sections: ['masks'] }] }],
+    ['invalid preset section', { ...archive, presets: [{ ...archive.presets[0], sections: ['layers'] }] }],
     ['invalid numeric rating', { ...archive, photos: archive.photos.map((entry, i) => i ? entry : { ...entry, rating: 6 }) }],
     ['negative file size', { ...archive, photos: archive.photos.map((entry, i) => i ? entry : { ...entry, fileSize: -1 }) }],
     ['non-finite metadata', { ...archive, photos: archive.photos.map((entry, i) => i ? entry : { ...entry, meta: { ...entry.meta, iso: Infinity } }) }],
@@ -263,12 +264,12 @@ async function drive() {
     ['unsupported edit version', { ...archive, snapshots: archive.snapshots.map((entry) => ({ ...entry, edits: { ...entry.edits, version: 999 } })) }],
     ['non-finite edit', { ...archive, snapshots: archive.snapshots.map((entry) => ({ ...entry, edits: { ...entry.edits, basic: { ...entry.edits.basic, exposure: NaN } } })) }],
     ['invalid crop', { ...archive, snapshots: archive.snapshots.map((entry) => ({ ...entry, edits: { ...entry.edits, crop: { ...entry.edits.crop, right: 0 } } })) }],
-    ['duplicate mask component', { ...archive, snapshots: archive.snapshots.map((entry) => ({ ...entry, edits: { ...entry.edits, masks: entry.edits.masks.map((mask) => ({ ...mask, components: [...mask.components, mask.components[0]] })) } })) }],
+    ['duplicate mask component', { ...archive, snapshots: archive.snapshots.map((entry) => ({ ...entry, edits: { ...entry.edits, layers: entry.edits.layers.map((mask) => ({ ...mask, components: [...mask.components, mask.components[0]] })) } })) }],
     ['bad smart operator', { ...archive, collections: [{ ...archive.collections[1], rules: [{ field: 'rating', op: 'execute', value: 3 }] }] }],
     ['incompatible smart value', { ...archive, collections: [{ ...archive.collections[1], rules: [{ field: 'rating', op: 'gte', value: true }] }] }],
-    ['serialized AI cache', { ...archive, snapshots: archive.snapshots.map((entry) => ({ ...entry, edits: { ...entry.edits, masks: entry.edits.masks.map((mask) => ({ ...mask, components: mask.components.map((component) => component.geometry.kind === 'aiSubject' ? { ...component, geometry: { ...component.geometry, cacheKey: 'foreign-cache' } } : component) })) } })) }],
-    ['unregenerable Sky detection', { ...archive, snapshots: archive.snapshots.map((entry) => ({ ...entry, edits: { ...entry.edits, masks: entry.edits.masks.map((mask) => ({ ...mask, components: mask.components.map((component) => component.geometry.kind === 'aiSubject' ? { ...component, geometry: { ...component.geometry, kind: 'aiSky' } } : component) })) } })) }],
-    ['unregenerable Object detection', { ...archive, snapshots: archive.snapshots.map((entry) => ({ ...entry, edits: { ...entry.edits, masks: entry.edits.masks.map((mask) => ({ ...mask, components: mask.components.map((component) => component.geometry.kind === 'aiSubject' ? { ...component, geometry: { ...component.geometry, kind: 'aiObjects' } } : component) })) } })) }],
+    ['serialized AI cache', { ...archive, snapshots: archive.snapshots.map((entry) => ({ ...entry, edits: { ...entry.edits, layers: entry.edits.layers.map((mask) => ({ ...mask, components: mask.components.map((component) => component.geometry.kind === 'aiSubject' ? { ...component, geometry: { ...component.geometry, cacheKey: 'foreign-cache' } } : component) })) } })) }],
+    ['unregenerable Sky detection', { ...archive, snapshots: archive.snapshots.map((entry) => ({ ...entry, edits: { ...entry.edits, layers: entry.edits.layers.map((mask) => ({ ...mask, components: mask.components.map((component) => component.geometry.kind === 'aiSubject' ? { ...component, geometry: { ...component.geometry, kind: 'aiSky' } } : component) })) } })) }],
+    ['unregenerable Object detection', { ...archive, snapshots: archive.snapshots.map((entry) => ({ ...entry, edits: { ...entry.edits, layers: entry.edits.layers.map((mask) => ({ ...mask, components: mask.components.map((component) => component.geometry.kind === 'aiSubject' ? { ...component, geometry: { ...component.geometry, kind: 'aiObjects' } } : component) })) } })) }],
     ['unsafe loose filename', { ...archive, photos: archive.photos.map((entry) => entry.id === loose.id ? { ...entry, filename: '../loose.jpg' } : entry) }],
     ['virtual copy cycle', { ...archive, photos: archive.photos.map((entry) => entry.id === master.id ? { ...entry, masterId: copy.id } : entry) }],
   ]
@@ -394,7 +395,7 @@ async function drive() {
   const recoveryId = `recovery-${crypto.randomUUID()}`
   const recoveryKey = alphaKey(recoveryId, 'aiSubject', 'u2netp')
   const recoveryEdits = structuredClone((await reconnect.photos.get(master.id))!.edits!)
-  const recoveryGeometry = recoveryEdits.masks[0].components[5].geometry
+  const recoveryGeometry = recoveryEdits.layers[0].components[5].geometry
   if (!isAiGeometry(recoveryGeometry)) throw new Error('Missing AI fixture')
   const recoveryPhoto: Photo = {
     ...(await reconnect.photos.get(master.id))!, id: recoveryId, masterId: master.id,

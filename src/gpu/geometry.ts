@@ -1,5 +1,6 @@
 import { defaultEdits } from '../core/defaults'
 import type { CropAspect, Edits } from '../core/types'
+import { layersRender } from '../develop/layers'
 
 /**
  * The geometry the renderer and the viewport have to agree on.
@@ -87,7 +88,7 @@ export function splitAtGeometry(edits: Edits): { local: Edits; framing: Edits } 
     crop: fresh.crop,
     transform: fresh.transform,
     effects: fresh.effects,
-    masks: [],
+    layers: [],
     // Spots and red-eye read pixels from anywhere in the frame, so a tile has
     // no way to run them correctly; they move to the assembled stage.
     spots: [],
@@ -108,7 +109,7 @@ export function splitAtGeometry(edits: Edits): { local: Edits; framing: Edits } 
     crop: base.crop,
     transform: base.transform,
     effects: base.effects,
-    masks: base.masks,
+    layers: base.layers,
     spots: base.spots,
     redEye: base.redEye,
     lens: {
@@ -128,7 +129,7 @@ export function isIdentityFraming(edits: Edits): boolean {
     isIdentityGeometry(edits) &&
     edits.effects.vignetteAmount === 0 &&
     edits.effects.grainAmount === 0 &&
-    !edits.masks.some((m) => m.visible && m.components.length > 0) &&
+    !layersRender(edits.layers) &&
     !edits.spots.some((s) => s.opacity > 0 && s.radius > 0) &&
     !edits.redEye.some((r) => r.radius > 0)
   )

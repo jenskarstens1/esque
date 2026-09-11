@@ -18,7 +18,7 @@ import { halfRgbaToRgb16 } from '../export/dng'
 import { alphaKey, dropAlphasFor, getAlpha, putAlpha, saveAlpha } from '../ai/alpha'
 import { detect, restoreCoverage, useDetect } from '../ai/detect'
 import { cacheDelete, cacheRead } from '../catalog/opfs'
-import { newMask } from '../develop/masks'
+import { newMaskLayer } from '../develop/layers'
 import { disposeExportWorker, renderThumbInWorker } from '../export/client'
 
 const RENDERED_SOURCE = {
@@ -79,12 +79,12 @@ async function checkMaskCoverage() {
   const key = alphaKey(photoId, 'aiSubject', 'u2netp')
   const alpha = { size: 8, data: new Float32Array(64).fill(1) }
   const edits = defaultEdits()
-  const mask = newMask([], 'aiSubject')
+  const mask = newMaskLayer([], 'aiSubject')
   const geometry = mask.components[0].geometry
   if (!isAiGeometry(geometry)) throw new Error('Expected a detected mask fixture')
   geometry.cacheKey = key
   mask.adjustments.exposure = 1
-  edits.masks = [mask]
+  edits.layers = [mask]
   const render = (settings: Edits) => renderFull(image, {
     edits: settings, outputSpace: 'srgb', depth: 8,
   })
@@ -186,19 +186,19 @@ async function checkMaskCoverage() {
       'Unavailable coverage has a visible detection error state')
 
     const undetected = structuredClone(edits)
-    const pendingGeometry = undetected.masks[0].components[0].geometry
+    const pendingGeometry = undetected.layers[0].components[0].geometry
     if (!isAiGeometry(pendingGeometry)) throw new Error('Expected a detected mask fixture')
     pendingGeometry.cacheKey = null
     await expectMissing(() => render(undetected), 'Unfinished non-neutral detection cannot export silently')
 
     for (const state of ['hidden', 'transparent', 'neutral'] as const) {
       const ignored = structuredClone(edits)
-      if (state === 'hidden') ignored.masks[0].visible = false
-      else if (state === 'transparent') ignored.masks[0].opacity = 0
-      else ignored.masks[0].adjustments = defaultMaskAdjustments()
+      if (state === 'hidden') ignored.layers[0].visible = false
+      else if (state === 'transparent') ignored.layers[0].opacity = 0
+      else ignored.layers[0].adjustments = defaultMaskAdjustments()
       const result = await render(ignored)
       check(result.data.every((value, i) => Math.abs(value - plain.data[i]) <= 1),
-        `${state} masks do not block or change an export`)
+        `${state} layers do not block or change an export`)
     }
 
     try {
@@ -386,10 +386,10 @@ async function checkTiledExport(out: Record<string, unknown>, failures: string[]
 }
 
 async function run() {
-  const masks = await checkMaskCoverage()
-  if (new URLSearchParams(location.search).get('case') === 'masks') return masks
-  const out: Record<string, unknown> = { masks }
-  const failures: string[] = [...masks.failures]
+  const layers = await checkMaskCoverage()
+  if (new URLSearchParams(location.search).get('case') === 'layers') return layers
+  const out: Record<string, unknown> = { layers }
+  const failures: string[] = [...layers.failures]
   checkDngHeadroom(out, failures)
   await checkCropExport(ramped(W, H), out, failures)
   await checkTiledExport(out, failures)

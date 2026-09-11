@@ -1,3 +1,4 @@
+import { withLayerDefaults } from '../develop/layers'
 import { defaultEdits, ALL_SECTIONS, cloneEdits, defaultMaskAdjustments } from '../core/defaults'
 import { parseXmp, editsToSidecar, presetToXmp } from '../develop/xmp'
 import { applySidecarText, sidecarNames } from '../catalog/sidecar'
@@ -151,8 +152,8 @@ function perturb(e: Edits): Edits {
 
   // One mask per geometry kind, so a shape the writer forgets shows up as a
   // named difference instead of quietly vanishing on the next import.
-  next.masks = [
-    {
+  next.layers = [
+    withLayerDefaults({
       id: 'mask-a',
       name: 'Sky',
       visible: true,
@@ -216,8 +217,8 @@ function perturb(e: Edits): Edits {
           { x: 1, y: 0.98 },
         ],
       },
-    },
-    {
+    }),
+    withLayerDefaults({
       id: 'mask-b',
       name: 'Brushwork',
       visible: false,
@@ -259,7 +260,7 @@ function perturb(e: Edits): Edits {
         },
       ],
       adjustments: maskAdjustments(),
-    },
+    }),
   ]
 
   next.spots = [
@@ -306,7 +307,7 @@ const ROUND_TRIPPED: EditSection[] = [
   'lens',
   'transform',
   'crop',
-  'masks',
+  'layers',
   'spots',
   'redEye',
 ]

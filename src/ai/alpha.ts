@@ -8,7 +8,7 @@
  * GPU time. So `AiGeometry` stores a *key*, and the pixels it names live here:
  * in memory for the session, and in OPFS across sessions.
  *
- * That indirection is what keeps AI masks non-destructive in the same sense as
+ * That indirection is what keeps AI layers non-destructive in the same sense as
  * everything else. The edit stack still holds nothing but parameters, history
  * and presets still round-trip, and the alpha is derived data that can always
  * be rebuilt from the photo and the key.

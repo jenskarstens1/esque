@@ -1,5 +1,5 @@
 /**
- * End-to-end check for detected masks.
+ * End-to-end check for detected layers.
  *
  * The interesting failures in this feature are all silent ones, which is why
  * this exists rather than a unit test of the pieces.
@@ -45,7 +45,7 @@ import { modelDownloadAllowed, setModelConsent } from '../ai/preferences'
 import { SEGMENT_MODELS, aiSupport, MODEL_MEAN, type SegmentModel } from '../ai/models'
 import { putAlpha, alphaKey, dropAlphasFor, loadAlpha, saveAlpha } from '../ai/alpha'
 import { cacheDelete } from '../catalog/opfs'
-import { newMask } from '../develop/masks'
+import { newMaskLayer } from '../develop/layers'
 import { runCheck } from './checkreport'
 import type { Edits } from '../core/types'
 import * as Comlink from 'comlink'
@@ -307,7 +307,7 @@ async function checkPortraitRender(source: SourceImage, alpha: { data: Float32Ar
     renderer.setImage(source)
     renderer.setFrame(null)
     const base = defaultEdits('rendered')
-    const mask = newMask([], kind)
+    const mask = newMaskLayer([], kind)
     const geometry = mask.components[0].geometry
     if (!('cacheKey' in geometry)) throw new Error('Expected detected geometry')
     geometry.cacheKey = key
@@ -319,7 +319,7 @@ async function checkPortraitRender(source: SourceImage, alpha: { data: Float32Ar
       const edits = { ...base, crop: { ...base.crop, ...crop } }
       renderer.renderOffscreen(edits)
       const plain = await renderer.readPixels('prophoto', 16, null)
-      renderer.renderOffscreen({ ...edits, masks: [mask] })
+      renderer.renderOffscreen({ ...edits, layers: [mask] })
       const lit = await renderer.readPixels('prophoto', 16, null)
       if (!lit || !plain) throw new Error('Portrait mask rendering returned no pixels.')
       const changeAt = (x: number, y: number) => {
@@ -369,12 +369,12 @@ async function checkRender(alpha: Float32Array) {
   putAlpha(cacheKey, { size: Math.round(Math.sqrt(alpha.length)), data: alpha })
 
   const withMask = (base: Edits): Edits => {
-    const mask = newMask([], 'aiSubject')
+    const mask = newMaskLayer([], 'aiSubject')
     const geom = mask.components[0].geometry as { cacheKey: string | null; refine: number }
     geom.cacheKey = cacheKey
     geom.refine = 50
     mask.adjustments.exposure = 3
-    return { ...base, masks: [mask] }
+    return { ...base, layers: [mask] }
   }
 
   /** Where the mask put its weight, and how much of it there was. */

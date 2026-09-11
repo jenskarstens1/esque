@@ -443,15 +443,113 @@ export interface MaskAdjustments {
   curve: CurvePoint[]
 }
 
-export interface Mask {
+// ---------------------------------------------------------------------------
+// Layers
+// ---------------------------------------------------------------------------
+
+/**
+ * How a layer's own pixels combine with the picture beneath it.
+ *
+ * The separable modes are the Photoshop set, evaluated per channel in tone
+ * space — the same space the tone controls work in, which is where these
+ * formulas were defined and the only place `overlay` and `softLight` pivot
+ * around a mid grey the eye agrees with. The four non-separable modes at the
+ * end swap components of HSY between backdrop and layer instead.
+ */
+export type LayerBlend =
+  | 'normal'
+  | 'multiply'
+  | 'screen'
+  | 'overlay'
+  | 'darken'
+  | 'lighten'
+  | 'colorDodge'
+  | 'colorBurn'
+  | 'hardLight'
+  | 'softLight'
+  | 'difference'
+  | 'exclusion'
+  | 'hue'
+  | 'saturation'
+  | 'color'
+  | 'luminosity'
+
+/**
+ * Where a layer's pixels come from, before its own adjustments run.
+ *
+ * `adjust` is the classic local adjustment: the layer's pixels *are* the
+ * picture below it, so an exposure lift on a masked layer does what a Lightroom
+ * mask has always done. `fill` and `image` bring pixels that were not in the
+ * photograph, which is what makes a blend mode worth having.
+ */
+export type LayerContent =
+  | { kind: 'adjust' }
+  /** Solid colour, sRGB 0..1. */
+  | { kind: 'fill'; color: [number, number, number] }
+  /** Pixels imported from a file; `source` is the OPFS key they were cached under. */
+  | { kind: 'image'; source: string; width: number; height: number }
+
+/**
+ * Placement of a layer's own pixels and its mask over the frame.
+ *
+ * The picture below is never moved — only what the layer brings. On an
+ * adjustment layer there are no pixels to move, so this repositions the mask,
+ * which is how a detected subject mask can be nudged back into register after
+ * a crop.
+ */
+export interface LayerTransform {
+  /** Percent of frame width/height, -100..100. */
+  offsetX: number
+  offsetY: number
+  /** Percent, 100 = as placed. */
+  scale: number
+  /** Degrees, clockwise. */
+  rotate: number
+  flipH: boolean
+  flipV: boolean
+}
+
+export interface Layer {
   id: string
   name: string
   visible: boolean
+  /** The mask is inverted before it is used. */
   inverted: boolean
-  /** 0..1 global multiplier for the whole mask. */
+  /** 0..1 global multiplier for the whole layer. */
   opacity: number
+  blend: LayerBlend
+  /**
+   * The layer's mask.
+   *
+   * An empty stack covers the whole frame — a fill layer with no mask is a flat
+   * wash, which is what it should be. Components fold in order exactly as they
+   * always have.
+   */
   components: MaskComponent[]
+  content: LayerContent
   adjustments: MaskAdjustments
+  transform: LayerTransform
+  /**
+   * Confines this layer to the coverage of the layer below.
+   *
+   * A run of clipped layers all clip to the nearest unclipped layer under them,
+   * as in Photoshop: three clipped layers over a cut-out subject stay on that
+   * subject without any of them owning a copy of the mask.
+   */
+  clipped: boolean
+  /**
+   * Children, for a group. `null` on a leaf — that is what makes it a leaf.
+   *
+   * A group's mask, opacity and transform fold into every child. Its
+   * `content` and `adjustments` are unused.
+   */
+  children: Layer[] | null
+  /**
+   * Group only: render the children against a copy of the backdrop and
+   * composite that result with the group's blend mode, rather than letting each
+   * child blend straight onto the picture (Photoshop's "Pass Through").
+   */
+  isolate: boolean
 }
 
 // ---------------------------------------------------------------------------
@@ -481,7 +579,7 @@ export interface RedEyeEdit {
 // The whole edit stack
 // ---------------------------------------------------------------------------
 
-export const EDITS_VERSION = 2
+export const EDITS_VERSION = 3
 
 export interface Edits {
   version: number
@@ -498,7 +596,7 @@ export interface Edits {
   crop: CropEdits
   effects: EffectsEdits
   calibration: CalibrationEdits
-  masks: Mask[]
+  layers: Layer[]
   spots: SpotEdit[]
   redEye: RedEyeEdit[]
 }

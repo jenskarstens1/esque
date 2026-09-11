@@ -178,16 +178,16 @@ function layoutFor(
 function useStoredCoverage(
   edits: Edits,
   previewEdits: Edits | null,
-  beforeMasks: Edits['masks'],
+  beforeMasks: Edits['layers'],
   beforeAfter: BeforeAfter,
 ) {
   const keys = useMemo(() => [...new Set([
-    ...edits.masks,
-    ...(previewEdits?.masks ?? []),
+    ...edits.layers,
+    ...(previewEdits?.layers ?? []),
     ...(beforeAfter === 'off' ? [] : beforeMasks),
   ].flatMap((mask) => mask.components.flatMap(({ geometry }) =>
     isAiGeometry(geometry) && geometry.cacheKey ? [geometry.cacheKey] : [],
-  )))].sort(), [edits.masks, previewEdits?.masks, beforeMasks, beforeAfter])
+  )))].sort(), [edits.layers, previewEdits?.layers, beforeMasks, beforeAfter])
   const stored = useRef(keys)
   const changed =
     keys.length !== stored.current.length ||
@@ -359,7 +359,7 @@ export function Viewport({ photo }: Props) {
 
   const edits = useDevelop((s) => s.edits)
   const previewEdits = useDevelop((s) => s.previewEdits)
-  const beforeMasks = useDevelop((s) => s.before.masks)
+  const beforeMasks = useDevelop((s) => s.before.layers)
   const revision = useDevelop((s) => s.revision)
   // Coverage lands outside the edit stack, so a finished detection has to
   // announce itself separately or the mask stays empty until the next edit.
@@ -393,7 +393,7 @@ export function Viewport({ photo }: Props) {
       if (missing.length && warnedCoverage.current !== warning) {
         warnedCoverage.current = warning
         toast.error(
-          'Detected masks need attention',
+          'Detected layers need attention',
           'Open Masking and run detection again. Your saved mask adjustments are unchanged.',
         )
       }

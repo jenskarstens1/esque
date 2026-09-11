@@ -1,4 +1,5 @@
 import { COMMON } from './common'
+import { BLEND } from './blend'
 
 /**
  * Masking, in three shaders.
@@ -297,9 +298,16 @@ fn fs(@location(0) uv: vec2f) -> @location(0) vec4f {
 
 export const MASK_APPLY_FS = /* wgsl */ `
 ${COMMON}
+${BLEND}
 
 struct U {
   uOpacity: f32,
+  /** Index into BLEND_MODE_INDEX. */
+  uBlend: f32,
+  /** 0 the picture below, 1 a solid fill, 2 placed pixels, 3 a full-frame texture. */
+  uContent: f32,
+  /** 0 when the layer has no mask and covers the whole frame. */
+  uHasMask: f32,
   uExposure: f32,    // stops
   uContrast: f32,    // -1..1
   uHighlights: f32,
@@ -321,6 +329,14 @@ struct U {
   uDefringe: f32,    // 0..1
   uHasCurve: f32,
   uLutSize: f32,
+  /** Solid fill colour, linear working space. */
+  uFill: vec3f,
+  /** Inverse of the layer's placement, row-major 2x2. */
+  uXform: vec4f,
+  uXformOffset: vec2f,
+  uAspect: vec2f,
+  /** Layer space to content texture uv, for placed pixels. */
+  uContentFit: vec2f,
 }
 
 @group(0) @binding(0) var<uniform> u: U;
@@ -330,6 +346,7 @@ struct U {
 @group(0) @binding(5) var uFine: texture_2d<f32>;    // small-radius blur, for texture / sharpness / noise
 @group(0) @binding(6) var uCoarse: texture_2d<f32>;  // large-radius blur, for clarity / dehaze
 @group(0) @binding(7) var uLut: texture_2d<f32>;     // the local point curve
+@group(0) @binding(8) var uLayer: texture_2d<f32>;   // the layer's own pixels
 
 fn lut1(x: f32, ch: i32) -> f32 {
   let lc = (clamp(x, 0.0, 1.0) * (u.uLutSize - 1.0) + 0.5) / u.uLutSize;
@@ -339,13 +356,40 @@ fn lut1(x: f32, ch: i32) -> f32 {
   return s.b;
 }
 
+/** Inside the frame after the layer's placement is undone. */
+fn inFrame(p: vec2f) -> bool {
+  return p.x >= 0.0 && p.x <= 1.0 && p.y >= 0.0 && p.y <= 1.0;
+}
+
 @fragment
 fn fs(@location(0) uv: vec2f) -> @location(0) vec4f {
   let src = textureSampleLevel(uImage, sampLin, uv, 0.0);
-  let m = clamp(textureSampleLevel(uMask, sampLin, uv, 0.0).r, 0.0, 1.0) * u.uOpacity;
+
+  // Undo the layer's placement: the picture below never moves, so the mask and
+  // the layer's own pixels are read from where they were put instead.
+  let p = (uv - vec2f(0.5)) * u.uAspect - u.uXformOffset;
+  let q = vec2f(u.uXform.x * p.x + u.uXform.y * p.y,
+                u.uXform.z * p.x + u.uXform.w * p.y);
+  let luv = q / u.uAspect + vec2f(0.5);
+
+  var m = u.uOpacity;
+  if (u.uHasMask > 0.5) {
+    if (!inFrame(luv)) { return src; }
+    m = m * clamp(textureSampleLevel(uMask, sampLin, luv, 0.0).r, 0.0, 1.0);
+  }
   if (m <= 0.0005) { return src; }
 
   var lin = max(src.rgb, vec3f(0.0));
+  if (u.uContent > 2.5) {
+    // A group's isolated result, already in frame coordinates.
+    lin = max(textureSampleLevel(uLayer, sampLin, uv, 0.0).rgb, vec3f(0.0));
+  } else if (u.uContent > 1.5) {
+    let iuv = q * u.uContentFit + vec2f(0.5);
+    if (!inFrame(iuv)) { return src; }
+    lin = max(textureSampleLevel(uLayer, sampLin, iuv, 0.0).rgb, vec3f(0.0));
+  } else if (u.uContent > 0.5) {
+    lin = u.uFill;
+  }
 
   // --- Linear-light work ---------------------------------------------------
   if (abs(u.uExposure) > 1e-4) { lin = lin * exp2(u.uExposure); }
@@ -453,7 +497,10 @@ fn fs(@location(0) uv: vec2f) -> @location(0) vec4f {
     t = vec3f(lut1(t.r, 0), lut1(t.g, 1), lut1(t.b, 2));
   }
 
-  let outRgb = decode(clamp(t, vec3f(0.0), vec3f(1.0)));
+  // Blend in tone space, where a mid grey is where the eye puts it.
+  let backdrop = encode(max(src.rgb, vec3f(0.0)));
+  let blended = blendMode(i32(u.uBlend), backdrop, clamp(t, vec3f(0.0), vec3f(1.0)));
+  let outRgb = decode(clamp(blended, vec3f(0.0), vec3f(1.0)));
   return vec4f(mix(src.rgb, outRgb, vec3f(m)), src.a);
 }
 `
@@ -467,6 +514,10 @@ struct U {
   uTint: vec3f,
   uAmount: f32,
   uMode: f32,
+  uHasMask: f32,
+  uXform: vec4f,
+  uXformOffset: vec2f,
+  uAspect: vec2f,
 }
 
 @group(0) @binding(0) var<uniform> u: U;
@@ -477,7 +528,17 @@ struct U {
 @fragment
 fn fs(@location(0) uv: vec2f) -> @location(0) vec4f {
   let src = textureSampleLevel(uImage, sampLin, uv, 0.0);
-  let m = clamp(textureSampleLevel(uMask, sampLin, uv, 0.0).r, 0.0, 1.0);
+  // The overlay has to land where the layer is, not where its mask was drawn.
+  let p = (uv - vec2f(0.5)) * u.uAspect - u.uXformOffset;
+  let q = vec2f(u.uXform.x * p.x + u.uXform.y * p.y,
+                u.uXform.z * p.x + u.uXform.w * p.y);
+  let luv = q / u.uAspect + vec2f(0.5);
+  let inside = luv.x >= 0.0 && luv.x <= 1.0 && luv.y >= 0.0 && luv.y <= 1.0;
+
+  var m = 1.0;
+  if (u.uHasMask > 0.5) {
+    m = select(0.0, clamp(textureSampleLevel(uMask, sampLin, luv, 0.0).r, 0.0, 1.0), inside);
+  }
   if (u.uMode > 0.5) { return vec4f(vec3f(m), 1.0); }
   return vec4f(mix(src.rgb, u.uTint, vec3f(m * u.uAmount)), src.a);
 }

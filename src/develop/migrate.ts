@@ -1,4 +1,5 @@
-import { EDITS_VERSION, type Edits, type Mask } from '../core/types'
+import { EDITS_VERSION, type Edits, type Layer } from '../core/types'
+import { withLayerDefaults } from './layers'
 
 /**
  * Brings a stored edit stack forward to the current `EDITS_VERSION`.
@@ -18,8 +19,8 @@ export function migrateEdits<T extends Edits>(edits: T, from?: number): T {
   const version = from ?? (typeof edits.version === 'number' ? edits.version : 1)
   if (version >= EDITS_VERSION) return edits
 
-  let out = edits
-  if (version < 2) out = { ...out, masks: out.masks.map(flipLocalTint) }
+  let out = adoptMasks(edits)
+  if (version < 2) out = { ...out, layers: out.layers.map(flipLocalTint) }
 
   return { ...out, version: EDITS_VERSION }
 }
@@ -27,7 +28,7 @@ export function migrateEdits<T extends Edits>(edits: T, from?: number): T {
 /**
  * The same, for a preset: it carries only the sections it touches.
  *
- * A preset with no `masks` key says nothing about masking and must keep saying
+ * A preset with no `layers` key says nothing about masking and must keep saying
  * nothing, so the absent case returns the object untouched rather than
  * inventing an empty list.
  */
@@ -35,10 +36,32 @@ export function migratePartialEdits<T extends Partial<Edits>>(edits: T, from?: n
   const version = from ?? (typeof edits.version === 'number' ? edits.version : 1)
   if (version >= EDITS_VERSION) return edits
 
-  let out = edits
-  if (version < 2 && out.masks) out = { ...out, masks: out.masks.map(flipLocalTint) }
+  let out = adoptMasks(edits)
+  if (version < 2 && out.layers) out = { ...out, layers: out.layers.map(flipLocalTint) }
 
   return { ...out, version: EDITS_VERSION }
+}
+
+/**
+ * v2 → v3: masks became layers.
+ *
+ * A layer is a mask that also knows how to blend, clip, hold pixels and carry
+ * children. Every field a mask had means the same thing it always did, so the
+ * upgrade is a rename plus the defaults that reproduce the old behaviour
+ * exactly: normal blend, no clipping, pixels taken from the picture below.
+ *
+ * Idempotent by shape rather than by version: a stack that already has
+ * `layers` is left alone, which is what a sidecar copied between a new machine
+ * and an old one needs.
+ */
+function adoptMasks<T extends { layers?: Layer[] }>(edits: T): T {
+  const legacy = (edits as { masks?: unknown }).masks
+  if (!Array.isArray(legacy)) return edits
+  const { masks: _legacy, ...rest } = edits as T & { masks?: unknown }
+  const adopted = legacy
+    .filter((mask): mask is Partial<Layer> => !!mask && typeof mask === 'object')
+    .map((mask) => withLayerDefaults(mask))
+  return { ...(rest as T), layers: edits.layers ?? adopted }
 }
 
 /**
@@ -49,7 +72,7 @@ export function migratePartialEdits<T extends Partial<Edits>>(edits: T, from?: n
  * in by eye under the old one now pushes the opposite way, so negating it
  * reproduces exactly the colour that was on screen when it was chosen.
  */
-function flipLocalTint(mask: Mask): Mask {
+function flipLocalTint(mask: Layer): Layer {
   const tint = mask.adjustments.tint
   if (!tint) return mask
   return { ...mask, adjustments: { ...mask.adjustments, tint: -tint } }

@@ -19,7 +19,7 @@ import { useMasking } from '../develop/masking'
 import { useRetouch } from '../develop/retouch'
 import * as wbPicker from '../develop/wbPicker'
 import * as geometry from '../gpu/geometry'
-import * as masks from '../develop/masks'
+import * as layers from '../develop/layers'
 import {
   cropMenuItems,
   maskMenuItems,
@@ -37,7 +37,7 @@ export interface DevBridge {
   useRetouch: typeof useRetouch
   wbPicker: typeof wbPicker
   geometry: typeof geometry
-  masks: typeof masks
+  layers: typeof layers
   menus: {
     cropMenuItems: typeof cropMenuItems
     maskMenuItems: typeof maskMenuItems
@@ -64,7 +64,7 @@ export function installDevBridge() {
     useRetouch,
     wbPicker,
     geometry,
-    masks,
+    layers,
     menus: { cropMenuItems, maskMenuItems, retouchMenuItems, viewportMenuItems },
   }
 }

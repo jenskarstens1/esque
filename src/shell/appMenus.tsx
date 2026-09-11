@@ -69,9 +69,9 @@ import {
   DETECTED_KINDS,
   MASK_KINDS,
   MASK_KIND_LABELS,
-  duplicateMask,
-  newMask,
-} from '../develop/masks'
+  duplicateLayer,
+  newMaskLayer,
+} from '../develop/layers'
 import { aiSupportNow, type AiSupport } from '../ai/models'
 import type {
   CatalogFolder,
@@ -358,18 +358,18 @@ export function maskKindItems(
   return items
 }
 
-/** Mask creation, selection and overlay — the viewport's masking submenu. */
+/** Layer creation, selection and overlay — the viewport's masking submenu. */
 export function maskMenuItems(): MenuItem[] {
   const ui = useUI.getState()
   const dev = useDevelop.getState()
   const mk = useMasking.getState()
-  const masks = dev.edits.masks
-  const selected = masks.find((m) => m.id === mk.selectedMaskId) ?? null
+  const layers = dev.edits.layers
+  const selected = layers.find((m) => m.id === mk.selectedMaskId) ?? null
 
   const create = (kind: MaskGeometryKind) => {
-    const mask = newMask(masks, kind)
-    dev.update('masks.add', 'Add Mask', (e) => {
-      e.masks.push(mask)
+    const mask = newMaskLayer(layers, kind)
+    dev.update('layers.add', 'Add Mask', (e) => {
+      e.layers.push(mask)
     }, false)
     mk.select(mask.id, mask.components[0].id)
     ui.openDevelopTool('mask')
@@ -391,11 +391,11 @@ export function maskMenuItems(): MenuItem[] {
     },
   ]
 
-  if (masks.length) {
+  if (layers.length) {
     items.push({
       label: 'Select Mask',
       icon: <ListIcon size={MENU_ICON} />,
-      submenu: masks.map((m) => ({
+      submenu: layers.map((m) => ({
         label: m.name,
         checked: m.id === mk.selectedMaskId,
         onSelect: () => {
@@ -422,8 +422,8 @@ export function maskMenuItems(): MenuItem[] {
       icon: <ContrastIcon size={MENU_ICON} />,
       checked: selected.inverted,
       onSelect: () =>
-        dev.update('masks.invert', 'Invert Mask', (e) => {
-          const m = e.masks.find((x) => x.id === selected.id)
+        dev.update('layers.invert', 'Invert Mask', (e) => {
+          const m = e.layers.find((x) => x.id === selected.id)
           if (m) m.inverted = !m.inverted
         }),
     })
@@ -432,8 +432,8 @@ export function maskMenuItems(): MenuItem[] {
       icon: <EyeIcon size={MENU_ICON} off={!selected.visible} />,
       checked: selected.visible,
       onSelect: () =>
-        dev.update('masks.visible', 'Toggle Mask', (e) => {
-          const m = e.masks.find((x) => x.id === selected.id)
+        dev.update('layers.visible', 'Toggle Mask', (e) => {
+          const m = e.layers.find((x) => x.id === selected.id)
           if (m) m.visible = !m.visible
         }),
     })
@@ -441,9 +441,9 @@ export function maskMenuItems(): MenuItem[] {
       label: 'Duplicate Mask',
       icon: <CopyIcon size={MENU_ICON} />,
       onSelect: () => {
-        const copy = duplicateMask(selected, dev.edits.masks)
-        dev.update('masks.add', 'Duplicate Mask', (e) => {
-          e.masks.push(copy)
+        const copy = duplicateLayer(selected, dev.edits.layers)
+        dev.update('layers.add', 'Duplicate Mask', (e) => {
+          e.layers.push(copy)
         }, false)
         mk.select(copy.id)
       },
@@ -454,23 +454,23 @@ export function maskMenuItems(): MenuItem[] {
       icon: <TrashIcon size={MENU_ICON} />,
       danger: true,
       onSelect: () => {
-        dev.update('masks.delete', 'Delete Mask', (e) => {
-          e.masks = e.masks.filter((x) => x.id !== selected.id)
+        dev.update('layers.delete', 'Delete Mask', (e) => {
+          e.layers = e.layers.filter((x) => x.id !== selected.id)
         }, false)
         mk.select(null)
       },
     })
   }
 
-  if (masks.length) {
+  if (layers.length) {
     if (!selected) items.push({ kind: 'separator' })
     items.push({
       label: 'Delete All Masks',
       icon: <TrashIcon size={MENU_ICON} />,
       danger: true,
       onSelect: () => {
-        dev.update('masks.clear', 'Delete All Masks', (e) => {
-          e.masks = []
+        dev.update('layers.clear', 'Delete All Masks', (e) => {
+          e.layers = []
         }, false)
         mk.select(null)
       },

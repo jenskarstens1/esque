@@ -37,7 +37,7 @@ import { readSidecars, writeSidecars } from '../catalog/sidecar'
 import { cloneEdits, defaultEdits, editsKind } from '../core/defaults'
 import { useCatalog } from '../state/catalog'
 import { useUI } from '../state/ui'
-import { detachDetectedAlpha } from '../develop/masks'
+import { detachDetectedAlpha } from '../develop/layers'
 import { useDevelop, ALL_SECTIONS } from '../develop/session'
 import { useExport } from '../state/exportStore'
 import { toast } from '../design/toast'
@@ -366,7 +366,7 @@ async function pasteToAll(targets: string[]) {
   if (others.length) {
     const rows = (await db.photos.bulkGet(others)).filter(Boolean) as Photo[]
     // Detached on the way in, not on the way out: the target's own detected
-    // masks stay keyed to the target, including when Masking wasn't copied.
+    // layers stay keyed to the target, including when Masking wasn't copied.
     const source = clip.imageId ? detachDetectedAlpha(clip.edits) : clip.edits
     const pasted = new Map<string, Edits>()
     for (const p of rows) {

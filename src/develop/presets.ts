@@ -65,7 +65,7 @@ function record(build: (e: Edits) => void): { edits: Edits; paths: string[] } {
     new Proxy(target, {
       get(t, key: string) {
         const value = t[key]
-        // Arrays are assigned whole (curves, masks), so they stay opaque.
+        // Arrays are assigned whole (curves, layers), so they stay opaque.
         return value && typeof value === 'object' && !Array.isArray(value)
           ? wrap(value as Record<string, unknown>, `${prefix}${key}.`)
           : value
@@ -980,7 +980,7 @@ export const PRESET_SCOPES: PresetScope[] = [
   { id: 'lens', label: 'Lens Corrections', section: 'lens', paths: null },
   { id: 'transform', label: 'Transform', section: 'transform', paths: null },
   { id: 'crop', label: 'Crop', section: 'crop', paths: null },
-  { id: 'masks', label: 'Masking', section: 'masks', paths: null },
+  { id: 'layers', label: 'Masking', section: 'layers', paths: null },
   { id: 'spots', label: 'Spot Removal', section: 'spots', paths: null },
   { id: 'redEye', label: 'Red Eye', section: 'redEye', paths: null },
 ]

@@ -5,13 +5,14 @@
  * split, paired and single layouts can be verified without a catalog, a RAW
  * decode or a browser file picker. Run through `tools/headless.mjs`.
  */
+import { withLayerDefaults } from '../develop/layers'
 import { Renderer } from '../gpu/renderer'
 import { defaultEdits } from '../core/defaults'
 import { geometryOutputSize } from '../gpu/geometry'
 import { defaultMaskAdjustments } from '../core/defaults'
 import { MAX_DABS } from '../gpu/wgsl/mask'
 import { MAX_SPOTS } from '../gpu/wgsl/retouch'
-import type { Edits, Mask, MaskGeometry } from '../core/types'
+import type { Edits, Layer, MaskGeometry } from '../core/types'
 import type { SourceImage } from '../gpu/renderer'
 import { RENDERED_WHITE_POINT } from '../core/workingImage'
 import { runCheck } from './checkreport'
@@ -503,26 +504,23 @@ async function run() {
   }
   await checkGeometry()
 
-  // -- masks, read off the pixels -------------------------------------------
+  // -- layers, read off the pixels -------------------------------------------
   // A mask that only sets exposure turns coverage into brightness, so the
   // rendered frame *is* the mask and every shape can be measured directly.
   function checkMasks() {
     const flat = solid(80, 60, [0.18, 0.18, 0.18])
     renderer.setImage(flat)
 
-    const maskEdits = (geometry: MaskGeometry, extra: Partial<Mask> = {}): Edits => {
+    const maskEdits = (geometry: MaskGeometry, extra: Partial<Layer> = {}): Edits => {
       const e = defaultEdits()
-      e.masks = [
-        {
+      e.layers = [
+        withLayerDefaults({
           id: 'm1',
           name: 'Mask 1',
-          visible: true,
-          inverted: false,
-          opacity: 1,
           components: [{ id: 'c1', blend: 'add', invert: false, geometry }],
           adjustments: { ...defaultMaskAdjustments(), exposure: 2 },
           ...extra,
-        },
+        }),
       ]
       return e
     }
@@ -534,7 +532,7 @@ async function run() {
     }
 
     const base = at(defaultEdits(), 0.5, 0.5)
-    const masks: Record<string, unknown> = { base }
+    const layers: Record<string, unknown> = { base }
 
     // Linear: dark at the start handle, bright at the end, monotone between.
     {
@@ -546,7 +544,7 @@ async function run() {
       const l = at(e, 0.02, 0.5)
       const m = at(e, 0.5, 0.5)
       const r = at(e, 0.98, 0.5)
-      masks.linear = [l, m, r]
+      layers.linear = [l, m, r]
       check('linearStartsUnmasked', Math.abs(l - base) < 4, `${l} vs ${base}`)
       check('linearEndsFullyMasked', r > base + 40, `${r} vs ${base}`)
       check('linearRampsMonotonically', l < m && m < r, `${l},${m},${r}`)
@@ -565,7 +563,7 @@ async function run() {
       })
       const c = at(e, 0.5, 0.5)
       const edge = at(e, 0.98, 0.98)
-      masks.radial = [c, edge]
+      layers.radial = [c, edge]
       check('radialCentreMasked', c > base + 40, `${c} vs ${base}`)
       check('radialCornerClean', Math.abs(edge - base) < 4, `${edge} vs ${base}`)
     }
@@ -582,7 +580,7 @@ async function run() {
       })
       const side = at(e, 0.82, 0.5)
       const above = at(e, 0.5, 0.82)
-      masks.ellipse = [side, above]
+      layers.ellipse = [side, above]
       check('radialIsElliptical', side > above + 30, `side=${side} above=${above}`)
     }
 
@@ -601,7 +599,7 @@ async function run() {
       const pc = at(plain, 0.5, 0.5)
       const ic = at(inv, 0.5, 0.5)
       const ie = at(inv, 0.98, 0.98)
-      masks.inverted = [pc, ic, ie]
+      layers.inverted = [pc, ic, ie]
       check('invertClearsCentre', Math.abs(ic - base) < 4, `${ic} vs ${base}`)
       check('invertMasksCorner', ie > base + 40, `${ie} vs ${base}`)
     }
@@ -618,7 +616,7 @@ async function run() {
       }
       const fullOn = at(maskEdits(geo), 0.5, 0.5)
       const half = at(maskEdits(geo, { opacity: 0.5 }), 0.5, 0.5)
-      masks.opacity = [fullOn, half]
+      layers.opacity = [fullOn, half]
       check('opacityScalesMask', half > base + 10 && half < fullOn - 10, `${base},${half},${fullOn}`)
     }
 
@@ -636,7 +634,7 @@ async function run() {
       const d1 = at(e, 0.3, 0.3)
       const d2 = at(e, 0.7, 0.7)
       const gap = at(e, 0.3, 0.7)
-      masks.brush = [d1, d2, gap]
+      layers.brush = [d1, d2, gap]
       check('brushPaintsDabs', d1 > base + 40 && d2 > base + 40, `${d1},${d2}`)
       check('brushLeavesGap', Math.abs(gap - base) < 5, `${gap} vs ${base}`)
     }
@@ -654,7 +652,7 @@ async function run() {
       })
       const hole = at(e, 0.5, 0.5)
       const ring = at(e, 0.5, 0.76)
-      masks.erase = [hole, ring]
+      layers.erase = [hole, ring]
       check('eraseCutsHole', Math.abs(hole - base) < 5, `${hole} vs ${base}`)
       check('eraseKeepsRing', ring > base + 40, `${ring} vs ${base}`)
     }
@@ -670,7 +668,7 @@ async function run() {
       const b2 = at(e, 0.5, 0.5)
       const c = at(e, 0.9, 0.5)
       const off = at(e, 0.5, 0.05)
-      masks.chunked = [a, b2, c, off]
+      layers.chunked = [a, b2, c, off]
       check(
         'brushChunksAreSeamless',
         a > base + 40 && b2 > base + 40 && c > base + 40,
@@ -702,7 +700,7 @@ async function run() {
       const plainBright = at(defaultEdits(), 0.95, 0.5)
       const darkOn = at(e, 0.05, 0.5)
       const brightOn = at(e, 0.95, 0.5)
-      masks.luminance = [plainDark, darkOn, plainBright, brightOn]
+      layers.luminance = [plainDark, darkOn, plainBright, brightOn]
       check('lumRangeLiftsShadows', darkOn > plainDark + 20, `${plainDark}→${darkOn}`)
       check('lumRangeSparesHighlights', Math.abs(brightOn - plainBright) < 5, `${plainBright}→${brightOn}`)
       renderer.setImage(flat)
@@ -729,7 +727,7 @@ async function run() {
       const plainBlue = at(defaultEdits(), 0.8, 0.5)
       const redOn = at(e, 0.2, 0.5)
       const blueOn = at(e, 0.8, 0.5)
-      masks.colorRange = [plainRed, redOn, plainBlue, blueOn]
+      layers.colorRange = [plainRed, redOn, plainBlue, blueOn]
       check('colorRangePicksSample', redOn > plainRed + 20, `${plainRed}→${redOn}`)
       check('colorRangeSparesOthers', Math.abs(blueOn - plainBlue) < 5, `${plainBlue}→${blueOn}`)
       renderer.setImage(flat)
@@ -738,8 +736,8 @@ async function run() {
     // Components combine: subtract cuts one shape out of another.
     {
       const e = defaultEdits()
-      e.masks = [
-        {
+      e.layers = [
+        withLayerDefaults({
           id: 'm1',
           name: 'Mask 1',
           visible: true,
@@ -760,11 +758,11 @@ async function run() {
             },
           ],
           adjustments: { ...defaultMaskAdjustments(), exposure: 2 },
-        },
+        }),
       ]
       const hole = at(e, 0.5, 0.5)
       const ring = at(e, 0.5, 0.72)
-      masks.subtract = [hole, ring]
+      layers.subtract = [hole, ring]
       check('subtractCutsHole', Math.abs(hole - base) < 5, `${hole} vs ${base}`)
       check('subtractKeepsRing', ring > base + 40, `${ring} vs ${base}`)
     }
@@ -776,25 +774,25 @@ async function run() {
         { visible: false },
       )
       const v = at(e, 0.5, 0.5)
-      masks.hidden = v
+      layers.hidden = v
       check('hiddenMaskIsInert', Math.abs(v - base) < 3, `${v} vs ${base}`)
     }
 
     // The overlay tints coverage without changing what is underneath.
     {
       const e = maskEdits({ kind: 'radial', center: { x: 0.5, y: 0.5 }, radiusX: 0.4, radiusY: 0.4, rotation: 0, feather: 0 })
-      e.masks[0].adjustments.exposure = 0
+      e.layers[0].adjustments.exposure = 0
       renderer.render(e, { rect: full, maskOverlay: { maskId: 'm1', mode: 'coverage' } })
       const inside = pixelAt(canvas, Math.round(0.5 * (CW - 1)), Math.round(0.5 * (CH - 1)))
       const outside = pixelAt(canvas, 2, 2)
-      masks.overlay = [inside[0], outside[0]]
+      layers.overlay = [inside[0], outside[0]]
       check('overlayShowsCoverage', inside[0] > 200 && outside[0] < 40, `${inside[0]},${outside[0]}`)
     }
 
     // Every adjustment, on at once — the chain has to survive its own length.
     {
       const e = maskEdits({ kind: 'radial', center: { x: 0.5, y: 0.5 }, radiusX: 0.6, radiusY: 0.6, rotation: 0, feather: 40 })
-      Object.assign(e.masks[0].adjustments, {
+      Object.assign(e.layers[0].adjustments, {
         exposure: 0.5, contrast: 30, highlights: -40, shadows: 40, whites: 20, blacks: -20,
         texture: 40, clarity: 35, dehaze: 25, temp: 20, tint: -15, saturation: 30,
         hue: 210, hueStrength: 40, colorize: 30, sharpness: 40, noise: 25, moire: 20, defringe: 30,
@@ -802,31 +800,31 @@ async function run() {
       })
       renderer.render(e, { rect: full })
       const px = pixelAt(canvas, Math.round(0.5 * (CW - 1)), Math.round(0.5 * (CH - 1)))
-      masks.allAdjustments = px
+      layers.allAdjustments = px
       check('allMaskAdjustments', Number.isFinite(px[0]))
     }
 
-    // Two masks stack.
+    // Two layers stack.
     {
       const e = defaultEdits()
-      const mk = (id: string, cx: number): Mask => ({
-        id, name: id, visible: true, inverted: false, opacity: 1,
+      const mk = (id: string, cx: number): Layer => withLayerDefaults({
+        id, name: id,
         components: [{
           id: id + 'c', blend: 'add', invert: false,
           geometry: { kind: 'radial', center: { x: cx, y: 0.5 }, radiusX: 0.2, radiusY: 0.2, rotation: 0, feather: 0 },
         }],
         adjustments: { ...defaultMaskAdjustments(), exposure: 1.5 },
       })
-      e.masks = [mk('a', 0.25), mk('b', 0.75)]
+      e.layers = [mk('a', 0.25), mk('b', 0.75)]
       const l = at(e, 0.25, 0.5)
       const r = at(e, 0.75, 0.5)
       const mid = at(e, 0.5, 0.5)
-      masks.twoMasks = [l, mid, r]
+      layers.twoMasks = [l, mid, r]
       check('bothMasksApply', l > base + 30 && r > base + 30, `${l},${r}`)
       check('gapBetweenMasksIsClean', Math.abs(mid - base) < 5, `${mid} vs ${base}`)
     }
 
-    out.masks = masks
+    out.layers = layers
   }
   checkMasks()
 

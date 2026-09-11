@@ -10,6 +10,7 @@
  *
  * Run through `tools/headless.mjs /checks/compositecheck.html`.
  */
+import { withLayerDefaults } from '../develop/layers'
 import { Renderer } from '../gpu/renderer'
 import { defaultEdits, defaultMaskAdjustments } from '../core/defaults'
 import { splitAtGeometry } from '../gpu/geometry'
@@ -218,8 +219,8 @@ async function run() {
   // Masks are defined on the framed photo, so they too have to run after the
   // tiles are joined — a mask applied per tile would repeat on every one.
   const maskEdits = defaultEdits('rendered')
-  maskEdits.masks = [
-    {
+  maskEdits.layers = [
+    withLayerDefaults({
       id: 'm1',
       name: 'Mask 1',
       visible: true,
@@ -241,7 +242,7 @@ async function run() {
         },
       ],
       adjustments: { ...defaultMaskAdjustments(), exposure: 1.2, saturation: 30 },
-    },
+    }),
   ]
   // +1.2 stops is 2.3× in linear light, tempered by the output transform.
   compare('mask', await single(maskEdits), await composited(maskEdits), 2.0)

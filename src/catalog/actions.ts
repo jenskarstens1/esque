@@ -1,5 +1,5 @@
 import { db } from './db'
-import { detachDetectedAlpha } from '../develop/masks'
+import { detachDetectedAlpha } from '../develop/layers'
 import { dropDetail } from './detail'
 import { invalidateRendered } from './previews'
 import { cacheDelete, previewKey, thumbKey } from './opfs'
@@ -94,7 +94,7 @@ export async function copyEditsTo(sourceId: string, targets: string[], sections?
     src.edits ?? defaultEdits(editsKind(src.isRaw), undefined, src.meta.iso)
   const rows = (await db.photos.bulkGet(targets)).filter(Boolean) as Photo[]
   // A detected mask's cached alpha belongs to the pixels it was computed from.
-  // Detaching the *source* leaves the target's own masks — which may not even
+  // Detaching the *source* leaves the target's own layers — which may not even
   // be part of this transfer — keyed to the photo that actually owns them.
   const detached = detachDetectedAlpha(srcEdits)
   const sourceImage = src.masterId ?? src.id

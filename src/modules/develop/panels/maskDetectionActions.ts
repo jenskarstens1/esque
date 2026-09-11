@@ -9,7 +9,7 @@ interface DetectionTarget extends Omit<DetectRequest, 'force'> {
 }
 
 function geometryFor(edits: Edits, target: DetectionTarget): AiMaskGeometry | null {
-  const geometry = edits.masks.find((mask) => mask.id === target.maskId)?.components
+  const geometry = edits.layers.find((mask) => mask.id === target.maskId)?.components
     .find((component) => component.id === target.componentId)?.geometry
   return geometry && isAiGeometry(geometry) && geometry.kind === target.kind ? geometry : null
 }
@@ -30,7 +30,7 @@ export async function runMaskDetection(target: DetectionTarget, detector: typeof
   let expectedModel = original.model
 
   if (!original.cacheKey) {
-    session.update('masks.ai', 'Detect Mask', (edits) => {
+    session.update('layers.ai', 'Detect Mask', (edits) => {
       const geometry = geometryFor(edits, target)
       if (!geometry) return
       selectModel(geometry, target.modelId)
@@ -46,7 +46,7 @@ export async function runMaskDetection(target: DetectionTarget, detector: typeof
   const geometry = geometryFor(current.edits, target)
   if (!geometry || geometry.model !== expectedModel || geometry.cacheKey !== expectedKey) return false
 
-  current.update('masks.ai', 'Update Detected Mask', (edits) => {
+  current.update('layers.ai', 'Update Detected Mask', (edits) => {
     const next = geometryFor(edits, target)
     if (!next) return
     selectModel(next, target.modelId)

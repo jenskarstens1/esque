@@ -5,6 +5,7 @@ import {
   type DetailEdits,
   type Edits,
   type EditSection,
+  type LayerTransform,
   type MaskAdjustments,
 } from './types'
 import type { WhitePoint } from './color'
@@ -241,11 +242,21 @@ export const defaultEdits = (
     blueSaturation: 0,
   },
 
-  masks: [],
+  layers: [],
   spots: [],
   redEye: [],
   }
 }
+
+/** A layer sitting exactly where it was placed. */
+export const defaultLayerTransform = (): LayerTransform => ({
+  offsetX: 0,
+  offsetY: 0,
+  scale: 100,
+  rotate: 0,
+  flipH: false,
+  flipV: false,
+})
 
 export const defaultMaskAdjustments = (): MaskAdjustments => ({
   exposure: 0,
@@ -286,7 +297,7 @@ export const SECTION_LABELS: Record<EditSection, string> = {
   crop: 'Crop',
   effects: 'Effects',
   calibration: 'Calibration',
-  masks: 'Masking',
+  layers: 'Masking',
   spots: 'Spot Removal',
   redEye: 'Red Eye',
 }
