@@ -10,6 +10,12 @@ import { holdToasts, releaseToasts, snapshot, subscribe, toast } from './toast'
  * Nothing here is colour-coded by status: the sentence is the status. Only a
  * failure is marked, with the same warning glyph the rest of the app uses,
  * because that is the one message a user must not scroll past.
+ *
+ * Deliberately flat: an opaque surface, a hairline and nothing else. Vibrancy
+ * and a drop shadow both sample what is behind the toast, and what is behind a
+ * toast is a photograph — so a rounded corner over a bright sky fringed, and
+ * the blur's edge and the shadow's spread stacked into a visible halo at each
+ * corner while the notice scaled in. A notice has to be read, not staged.
  */
 export function ToastHost() {
   const items = useSyncExternalStore(subscribe, snapshot, snapshot)
@@ -44,11 +50,11 @@ export function ToastHost() {
               data-tone={t.tone}
               onClick={() => toast.dismiss(t.id)}
               className={cn(
-                'material-thick pointer-events-auto flex w-[340px] items-start gap-2',
-                'rounded-xl px-3.5 py-2.5 shadow-lg',
-                'transition-[opacity,scale] duration-[--duration-fast] ease-[--ease-out]',
+                'material-solid pointer-events-auto flex w-[340px] items-start gap-2',
+                'rounded-lg px-3.5 py-2.5 ring-[0.5px] ring-hairline-strong ring-inset',
+                'transition-opacity duration-[--duration-fast] ease-[--ease-out]',
                 t.closing
-                  ? 'scale-[0.98] opacity-0'
+                  ? 'opacity-0'
                   : 'animate-[esq-toast-in_var(--duration-base)_var(--ease-out)]',
               )}
             >
