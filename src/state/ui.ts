@@ -4,7 +4,6 @@ import { persist } from "zustand/middleware";
 import { applyDynamicRangeLimit, HEADROOM_STOPS_DEFAULT } from "../core/hdr";
 import {
   applyAppearance,
-  type Accent,
   type Appearance,
   type AppearanceSettings,
   type Surround,
@@ -148,7 +147,6 @@ export interface UIState {
 
   /** ---- Appearance ------------------------------------------------------ */
   appearance: Appearance;
-  accent: Accent;
   surround: Surround;
   textSize: TextSize;
 
@@ -300,7 +298,6 @@ export interface UIState {
   setSoftProof: (s: OutputSpace) => void;
   setPreviewQuality: (q: PreviewQuality) => void;
   setAppearance: (a: Appearance) => void;
-  setAccent: (a: Accent) => void;
   setSurround: (s: Surround) => void;
   setTextSize: (t: TextSize) => void;
   setAutoWriteSidecars: (on: boolean) => void;
@@ -322,10 +319,10 @@ export interface UIState {
 }
 
 /**
- * Folds one appearance change into the other three and writes the result to the
+ * Folds one appearance change into the other two and writes the result to the
  * document.
  *
- * The four settings are one decision as far as the cascade is concerned — they
+ * The three settings are one decision as far as the cascade is concerned — they
  * are written together or the document ends up describing a state the store was
  * never in — so every setter goes through here rather than each remembering to
  * re-apply the rest.
@@ -335,7 +332,6 @@ const withAppearance =
   (s: UIState): Partial<UIState> => {
     const next: AppearanceSettings = {
       appearance: s.appearance,
-      accent: s.accent,
       surround: s.surround,
       textSize: s.textSize,
       ...patch,
@@ -374,7 +370,6 @@ export const useUI = create<UIState>()(
       clipShadow: 0.0025,
 
       appearance: "dark",
-      accent: "blue",
       surround: "match",
       textSize: "default",
 
@@ -478,7 +473,6 @@ export const useUI = create<UIState>()(
       // Each writes the document as well as the store: the cascade owns the
       // appearance, and the store is only where the choice is remembered.
       setAppearance: (appearance) => set(withAppearance({ appearance })),
-      setAccent: (accent) => set(withAppearance({ accent })),
       setSurround: (surround) => set(withAppearance({ surround })),
       setTextSize: (textSize) => set(withAppearance({ textSize })),
 
@@ -546,6 +540,13 @@ export const useUI = create<UIState>()(
     }),
     {
       name: "esque.ui",
+      // Retire saved accent choices without resetting the rest of the workspace.
+      merge: (persisted, current) => {
+        if (!persisted || typeof persisted !== "object") return current;
+        const saved = { ...persisted };
+        if ("accent" in saved) delete saved.accent;
+        return { ...current, ...saved };
+      },
       // View state is per-session; layout preferences persist.
       partialize: (s) => ({
         module: s.module,
@@ -574,7 +575,6 @@ export const useUI = create<UIState>()(
         clipHighlight: s.clipHighlight,
         clipShadow: s.clipShadow,
         appearance: s.appearance,
-        accent: s.accent,
         surround: s.surround,
         textSize: s.textSize,
         soloPanels: s.soloPanels,

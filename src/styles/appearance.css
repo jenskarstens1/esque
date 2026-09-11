@@ -3,8 +3,8 @@
  *
  * `theme.css` declares the app's tokens and the dark set they hold by default.
  * This file is the switchboard: it restates only the tokens whose *value*
- * depends on how dark the chrome is, which accent it points with, what the
- * photograph sits on, and how large the type is set.
+ * depends on how dark the chrome is, what the photograph sits on, and how
+ * large the type is set. The blue accent is fixed across appearances.
  *
  * Deliberately unlayered. Tailwind emits `@theme` into `@layer theme`, and an
  * unlayered rule outranks every layered one no matter how weak its selector —
@@ -25,6 +25,7 @@
  */
 :root {
   --ui-scale: 1;
+  --accent-ink: #ffffff;
 
   --text-micro: calc(0.625rem * var(--ui-scale));
   --text-mini: calc(0.6875rem * var(--ui-scale));
@@ -81,6 +82,10 @@ html[data-appearance='light'] {
   --color-active: #e2e2e7;
   --color-scrim: rgb(0 0 0 / 0.25);
 
+  --color-accent-hover: #0071e3;
+  --color-accent-press: #0058b8;
+  --color-accent-soft: rgb(10 132 255 / 0.14);
+
   --color-label: rgb(0 0 0 / 0.88);
   --color-label-secondary: rgb(60 60 67 / 0.66);
   --color-label-tertiary: rgb(60 60 67 / 0.4);
@@ -124,62 +129,6 @@ html[data-appearance='light'] {
   --color-hist-g: #1f9e42;
   --color-hist-b: #2f6fd0;
 }
-
-/* ---- Accents ------------------------------------------------------------ */
-/*
- * Only the base hue is declared per accent; hover and press are mixed from it.
- * Nine accents times three appearances is twenty-seven values nobody could keep
- * in step by hand, and the two derived tones are a mechanical lightening and
- * darkening in every one of those cases.
- *
- * Blue is the exception, and keeps the hand-picked values theme.css already
- * ships: it is the default, and the default should not drift because the
- * machinery that serves the other eight arrived.
- */
-html[data-accent]:not([data-accent='blue']) {
-  --color-accent-hover: color-mix(in oklab, var(--color-accent) 86%, white);
-  --color-accent-press: color-mix(in oklab, var(--color-accent) 86%, black);
-  --color-accent-soft: color-mix(in srgb, var(--color-accent) 18%, transparent);
-}
-
-/*
- * On a light ground the relationship inverts: lightening an already-light
- * accent on hover makes the control look like it is receding, so hover goes
- * down in lightness and press further still.
- */
-html[data-appearance='light'][data-accent]:not([data-accent='blue']) {
-  --color-accent-hover: color-mix(in oklab, var(--color-accent) 88%, black);
-  --color-accent-press: color-mix(in oklab, var(--color-accent) 74%, black);
-  --color-accent-soft: color-mix(in srgb, var(--color-accent) 15%, transparent);
-}
-
-html[data-appearance='light'][data-accent='blue'] {
-  --color-accent-hover: #0071e3;
-  --color-accent-press: #0058b8;
-  --color-accent-soft: rgb(10 132 255 / 0.14);
-}
-
-html[data-accent='purple'] { --color-accent: #bf5af2; }
-html[data-accent='pink'] { --color-accent: #ff375f; }
-html[data-accent='red'] { --color-accent: #ff453a; }
-html[data-accent='orange'] { --color-accent: #ff9f0a; }
-html[data-accent='yellow'] { --color-accent: #ffd60a; }
-html[data-accent='green'] { --color-accent: #30d158; }
-html[data-accent='teal'] { --color-accent: #40c8e0; }
-html[data-accent='graphite'] { --color-accent: #98989f; }
-
-/*
- * Yellow is the one accent that cannot carry white text — 4.5:1 against #ffd60a
- * needs something near black — so the two places that set a label on a filled
- * accent are told to use ink instead. `--accent-ink` is read by the primary
- * button and the checkbox tick; everything else puts the accent *on* a surface
- * rather than under a label.
- */
-:root { --accent-ink: #ffffff; }
-html[data-accent='yellow'],
-html[data-accent='orange'],
-html[data-accent='teal'],
-html[data-accent='green'] { --accent-ink: rgb(0 0 0 / 0.88); }
 
 /* ---- Surround ----------------------------------------------------------- */
 /*

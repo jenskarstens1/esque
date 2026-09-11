@@ -9,12 +9,11 @@ import {
 import { Dialog } from "../design/Dialog";
 import {
   Button,
-  SegmentedControl,
+  Checkbox,
   Select,
-  Switch,
   TextField,
 } from "../design/Controls";
-import { Field } from "../design/Field";
+import { Field, FieldGroup } from "../design/Field";
 import { Scroller } from "../design/Scroller";
 import { Slider } from "../design/Slider";
 import { toast } from "../design/toast";
@@ -32,16 +31,13 @@ import { formatBytes } from "../lib/math";
 import { useUI } from "../state/ui";
 import { hdrReach } from "../core/hdr";
 import { cn } from "../lib/cn";
+import { useIsPhone } from "../lib/useViewport";
 import { APP_VERSION } from "./changelog";
 import { openWhatsNew } from "./whatsNew";
 import {
-  ACCENTS,
-  ACCENT_LABELS,
-  ACCENT_SWATCHES,
   APPEARANCE_LABELS,
   SURROUND_LABELS,
   TEXT_SIZE_LABELS,
-  type Accent,
   type Appearance,
   type Surround,
   type TextSize,
@@ -68,36 +64,11 @@ import type { Preset } from "../core/types";
 import type { OutputSpace } from "../gpu/colorspace";
 import { CatalogBackup } from "./CatalogBackup";
 
-/**
- * Settings is a *panel*, not a list.
- *
- * Every row here is a label in a fixed column and a control in the next, and
- * for three groups of settings that grid is the whole vocabulary. About is not
- * a setting though — it is the app's signature — and stacking it under the
- * cache meter as a fourth "group" forced it to borrow a grid it could never
- * satisfy, which is what made the bottom of this dialog read as a pile.
- *
- * So the groups became panes behind a rail that runs along the top, under the
- * title. Each pane owns its own state and lands in a frame of fixed size —
- * switching panes never resizes the dialog under the pointer — and About
- * finally gets a stage of its own instead of a leftover row.
- *
- * The frame is sized to the panes, not to a round number: three or four rows do
- * not fill 340px, and the emptiness underneath read as something missing rather
- * than as air. `--field-measure` closes the control column on its right, so a
- * select, a switch and a slider all start and end on the same two verticals.
- *
- * It grew when Keyboard arrived. A shortcut reference is a *list* and a list
- * needs a run of rows to read as one — six visible rows is a settings pane with
- * a scrollbar, twelve is a reference — so the frame was set by that pane and
- * the others were allowed to keep their air rather than the reverse.
- */
-
 const PANES = [
   { id: "display", label: "Display", icon: DisplayIcon },
   { id: "interface", label: "Interface", icon: InterfaceIcon },
   { id: "files", label: "Files", icon: FolderIcon },
-  { id: "keyboard", label: "Keys", icon: KeyboardIcon },
+  { id: "keyboard", label: "Keyboard", icon: KeyboardIcon },
   { id: "cache", label: "Cache", icon: CacheIcon },
   { id: "about", label: "About", icon: InfoIcon },
 ] as const;
@@ -129,16 +100,13 @@ export function SettingsDialog({
       onClose={() => { if (!backupBusy) onClose(); }}
       dismissable={!backupBusy}
       title="Settings"
-      width={520}
-      height={430}
+      width={720}
+      height={560}
       scrollable={false}
-      dividers={false}
-      // The control column closes on the dialog's own right margin: 116px of
-      // label, the gap, and the rest. A narrower measure left a band of nothing
-      // down the right of every pane that the keyboard list could not use.
-      bodyClassName="flex-col items-stretch [--field-measure:352px]"
+      dividers
+      bodyClassName="items-stretch max-md:flex-col [--field-measure:100%] [--field-label-width:104px] md:[--field-label-width:132px]"
       footer={
-        <Button variant="primary" disabled={backupBusy} onClick={onClose}>
+        <Button variant="primary" className="min-w-20" disabled={backupBusy} onClick={onClose}>
           Done
         </Button>
       }
@@ -148,9 +116,8 @@ export function SettingsDialog({
           the disk, say — happens exactly when it is asked for. */}
       <Scroller
         key={pane}
-        frameClassName="min-h-0 flex-1"
-        className="px-5 pt-1 pb-3"
-        edgeFade
+        frameClassName="min-h-0 min-w-0 flex-1"
+        className="px-5 py-4"
         role="tabpanel"
         id={`settings-pane-${pane}`}
         aria-labelledby={`settings-tab-${pane}`}
@@ -170,11 +137,6 @@ export function SettingsDialog({
 // Rail
 // ---------------------------------------------------------------------------
 
-/**
- * The pane list. It runs along the top, its items starting on the same left
- * edge as the dialog's own title — the padding is split between the rail and
- * the item so the icons land at 20px, exactly where "Settings" starts.
- */
 function Rail({
   pane,
   onSelect,
@@ -185,12 +147,14 @@ function Rail({
   disabled: boolean;
 }) {
   const tabs = useRef<Array<HTMLButtonElement | null>>([]);
+  const phone = useIsPhone();
 
-  // Roving focus: the rail is one tab stop and the arrows walk it, so a
-  // keyboard user isn't made to step through five buttons to reach the fields.
+  // The keyboard direction follows the rail when it moves above the pane.
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (disabled) return;
-    const step = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0;
+    const nextKey = phone ? "ArrowRight" : "ArrowDown";
+    const previousKey = phone ? "ArrowLeft" : "ArrowUp";
+    const step = e.key === nextKey ? 1 : e.key === previousKey ? -1 : 0;
     const index = PANES.findIndex((p) => p.id === pane);
     let next = -1;
     if (step) next = (index + step + PANES.length) % PANES.length;
@@ -206,12 +170,9 @@ function Rail({
     <div
       role="tablist"
       aria-label="Settings sections"
-      aria-orientation="horizontal"
+      aria-orientation={phone ? "horizontal" : "vertical"}
       onKeyDown={onKeyDown}
-      // No rule under the rail: with the header and footer undivided, a hairline
-      // inset from the dialog's edges dangles short of both. The selected chip
-      // and the gap carry the separation instead.
-      className="flex min-w-0 shrink-0 items-center gap-px overflow-x-auto px-3 pt-1 pb-2"
+      className="flex min-h-0 min-w-0 shrink-0 gap-1 bg-base p-3 max-md:hairline-b max-md:overflow-x-auto md:w-[148px] md:flex-col md:overflow-y-auto md:hairline-r"
     >
       {PANES.map(({ id, label, icon: Icon }, i) => {
         const active = id === pane;
@@ -230,17 +191,18 @@ function Rail({
             tabIndex={active ? 0 : -1}
             onClick={() => onSelect(id)}
             className={cn(
-              "flex h-7 shrink-0 items-center gap-2 rounded-md px-2 text-left text-ui",
+              "flex h-8 shrink-0 items-center gap-2.5 rounded-sm px-2.5 text-left text-ui coarse:h-11",
               "transition-colors duration-[--duration-fast] ease-[--ease-out]",
+              "disabled:pointer-events-none disabled:opacity-35",
               active
-                ? "bg-accent-soft text-accent"
+                ? "bg-control font-medium text-label"
                 : "text-label-secondary hover:bg-raised hover:text-label",
             )}
           >
             <Icon
               className={cn(
                 "size-3.5 shrink-0",
-                !active && "text-icon-tertiary",
+                active ? "text-icon" : "text-icon-tertiary",
               )}
             />
             <span className="truncate">{label}</span>
@@ -282,76 +244,78 @@ function DisplayPane() {
 
   return (
     <>
-      <Field label="Proof against">
-        <Select
-          value={softProof}
-          onChange={setSoftProof}
-          options={PROOF_SPACES}
-          className="flex-1"
-        />
-      </Field>
-      <Field
-        label="HDR preview"
-        hint={reach === "none" ? "Not available in this browser." : undefined}
-      >
-        <Switch
-          checked={hdr}
-          onChange={setHdr}
-          disabled={reach === "none"}
-          label="HDR preview"
-        />
-      </Field>
-      {/* Named "backdrop" rather than "surround" because that is what it is to
-          everyone who has not read a colour-science paper — but it is the
-          surround field in the technical sense, which is why it belongs to
-          Display and sits directly under the proofing space it biases. */}
-      <Field label="Backdrop">
-        <Select
-          value={surround}
-          onChange={setSurround}
-          options={SURROUNDS}
-          className="flex-1"
-        />
-      </Field>
-      <Field label="Preview quality">
-        <Select
-          value={previewQuality}
-          onChange={setPreviewQuality}
-          options={PREVIEW_QUALITIES}
-          className="flex-1"
-        />
-      </Field>
-      {/* Expressed as stops-from-clipping would be truer to how the numbers are
-          used and unreadable on a slider. Percent of full scale is what the
-          histogram already shows, so the two agree on screen. */}
-      <Field label="Highlight warning">
-        <Slider
-          value={clipHighlight * 100}
-          onChange={(v) => setClipThreshold("highlights", v / 100)}
-          min={90}
-          max={100}
-          step={0.1}
-          origin={99.5}
-          size="S"
-          className="min-w-0 flex-1"
-          aria-label="Highlight clipping threshold"
-        />
-        <Readout>{(clipHighlight * 100).toFixed(1)}%</Readout>
-      </Field>
-      <Field label="Shadow warning">
-        <Slider
-          value={clipShadow * 100}
-          onChange={(v) => setClipThreshold("shadows", v / 100)}
-          min={0}
-          max={5}
-          step={0.05}
-          origin={0.25}
-          size="S"
-          className="min-w-0 flex-1"
-          aria-label="Shadow clipping threshold"
-        />
-        <Readout>{(clipShadow * 100).toFixed(2)}%</Readout>
-      </Field>
+      <FieldGroup title="Colour management">
+        <Field label="Proof against">
+          <Select
+            value={softProof}
+            onChange={setSoftProof}
+            options={PROOF_SPACES}
+            aria-label="Proof against"
+            className="flex-1"
+          />
+        </Field>
+        <Field
+          label="Dynamic range"
+          hint={reach === "none" ? "Not available in this browser." : undefined}
+        >
+          <Checkbox
+            checked={hdr}
+            onChange={setHdr}
+            disabled={reach === "none"}
+            label="Enable HDR preview"
+          />
+        </Field>
+      </FieldGroup>
+      <FieldGroup title="Previews">
+        <Field label="Backdrop">
+          <Select
+            value={surround}
+            onChange={setSurround}
+            options={SURROUNDS}
+            aria-label="Backdrop"
+            className="flex-1"
+          />
+        </Field>
+        <Field label="Preview quality">
+          <Select
+            value={previewQuality}
+            onChange={setPreviewQuality}
+            options={PREVIEW_QUALITIES}
+            aria-label="Preview quality"
+            className="flex-1"
+          />
+        </Field>
+      </FieldGroup>
+      <FieldGroup title="Clipping warnings">
+        <Field label="Highlights">
+          <Slider
+            value={clipHighlight * 100}
+            onChange={(v) => setClipThreshold("highlights", v / 100)}
+            min={90}
+            max={100}
+            step={0.1}
+            origin={99.5}
+            size="S"
+            className="min-w-0 flex-1"
+            aria-label="Highlight clipping threshold"
+          />
+          <Readout>{(clipHighlight * 100).toFixed(1)}%</Readout>
+        </Field>
+        <Field label="Shadows">
+          <Slider
+            value={clipShadow * 100}
+            onChange={(v) => setClipThreshold("shadows", v / 100)}
+            min={0}
+            max={5}
+            step={0.05}
+            origin={0.25}
+            size="S"
+            className="min-w-0 flex-1"
+            aria-label="Shadow clipping threshold"
+          />
+          <Readout>{(clipShadow * 100).toFixed(2)}%</Readout>
+        </Field>
+      </FieldGroup>
     </>
   );
 }
@@ -369,8 +333,6 @@ const TEXT_SIZES = Object.entries(TEXT_SIZE_LABELS).map(([value, label]) => ({
 function InterfacePane() {
   const appearance = useUI((s) => s.appearance);
   const setAppearance = useUI((s) => s.setAppearance);
-  const accent = useUI((s) => s.accent);
-  const setAccent = useUI((s) => s.setAccent);
   const textSize = useUI((s) => s.textSize);
   const setTextSize = useUI((s) => s.setTextSize);
   const soloPanels = useUI((s) => s.soloPanels);
@@ -382,136 +344,59 @@ function InterfacePane() {
 
   return (
     <>
-      {/* Three appearances, not two. Dim exists because a fully black chrome
-          around a bright photo is the highest-contrast thing on the desk and
-          the eye keeps re-adapting to it; Dark is for a dark room, Dim for a
-          lit one, and Light for working next to a window. */}
-      <Field label="Appearance">
-        <SegmentedControl
-          options={APPEARANCES}
-          value={appearance}
-          onChange={setAppearance}
-          size="sm"
-          full
-        />
-      </Field>
-      {/* The selected swatch carries a 2px ring at a 2px offset, so the row is
-          4px taller on each side than it measures. Packed to the field's own
-          3px rhythm that ring all but touched the control above and the select
-          below; this gives it the air the other rows get for free. */}
-      <Field label="Accent" className="pt-3 pb-2.5">
-        <AccentPicker value={accent} onChange={setAccent} />
-      </Field>
-      <Field label="Text size">
-        <Select
-          value={textSize}
-          onChange={setTextSize}
-          options={TEXT_SIZES}
-          className="flex-1"
-        />
-      </Field>
-      {/* Every control starts on the column's left edge — select, slider,
-          switch alike. A 26px toggle floated out to the right edge instead put
-          a hand's width of nothing between a label and the thing it names. */}
-      <Field label="Solo panels">
-        <Switch
-          checked={soloPanels}
-          onChange={toggleSoloPanels}
-          label="Solo panels"
-        />
-      </Field>
-      <Field label="Grid badges">
-        <Switch
-          checked={showGridExtras}
-          onChange={toggleGridExtras}
-          label="Grid badges"
-        />
-      </Field>
-      <Field label="Thumbnail size">
-        <Slider
-          value={thumbSize}
-          onChange={setThumbSize}
-          min={90}
-          max={420}
-          step={1}
-          origin={90}
-          size="S"
-          className="min-w-0 flex-1"
-          aria-label="Thumbnail size"
-        />
-      </Field>
-    </>
-  );
-}
-
-/**
- * Nine colours as nine colours.
- *
- * A select naming them would be the consistent choice and the wrong one: the
- * value *is* the swatch, and reading the word "Teal" to find out what teal
- * looks like is a step the eye does not need. The names stay as the accessible
- * label, so nothing is lost to anyone not using the picker by sight.
- */
-function AccentPicker({
-  value,
-  onChange,
-}: {
-  value: Accent;
-  onChange: (a: Accent) => void;
-}) {
-  const swatches = useRef<Array<HTMLButtonElement | null>>([]);
-
-  const onKeyDown = (e: React.KeyboardEvent) => {
-    const step = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0;
-    if (!step) return;
-    e.preventDefault();
-    const next =
-      (ACCENTS.indexOf(value) + step + ACCENTS.length) % ACCENTS.length;
-    onChange(ACCENTS[next]);
-    swatches.current[next]?.focus();
-  };
-
-  return (
-    <div
-      role="radiogroup"
-      aria-label="Accent colour"
-      onKeyDown={onKeyDown}
-      className="flex min-w-0 flex-1 items-center justify-between"
-    >
-      {ACCENTS.map((name, i) => {
-        const active = name === value;
-        return (
-          <button
-            key={name}
-            ref={(el) => {
-              swatches.current[i] = el;
-            }}
-            type="button"
-            role="radio"
-            aria-checked={active}
-            aria-label={ACCENT_LABELS[name]}
-            title={ACCENT_LABELS[name]}
-            tabIndex={active ? 0 : -1}
-            onClick={() => onChange(name)}
-            className={cn(
-              "grid size-[18px] shrink-0 place-items-center rounded-full",
-              "transition-transform duration-[--duration-fast] ease-[--ease-out]",
-              "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-(--color-label)",
-              active ? "scale-100" : "scale-[0.82] hover:scale-95",
-            )}
-            style={{
-              backgroundColor: ACCENT_SWATCHES[name],
-              // An outline rather than a ring of box-shadows: the offset gap is
-              // transparent, so it shows whatever the dialog is painted in and
-              // the selected state reads the same in all three appearances
-              // without naming a background colour it would have to keep in step.
-              outline: active ? `2px solid ${ACCENT_SWATCHES[name]}` : undefined,
-              outlineOffset: active ? 2 : undefined,
-            }}
+      <FieldGroup title="Appearance">
+        <Field label="Theme">
+          <Select
+            options={APPEARANCES}
+            value={appearance}
+            onChange={setAppearance}
+            aria-label="Appearance"
+            className="flex-1"
           />
-        );
-      })}
-    </div>
+        </Field>
+        <Field label="Text size">
+          <Select
+            value={textSize}
+            onChange={setTextSize}
+            options={TEXT_SIZES}
+            aria-label="Text size"
+            className="flex-1"
+          />
+        </Field>
+      </FieldGroup>
+      <FieldGroup title="Workspace">
+        <Field label="Develop panels">
+          <Checkbox
+            checked={soloPanels}
+            onChange={toggleSoloPanels}
+            label="Open one panel at a time"
+          />
+        </Field>
+      </FieldGroup>
+      <FieldGroup title="Library">
+        <Field label="Overlays">
+          <Checkbox
+            checked={showGridExtras}
+            onChange={toggleGridExtras}
+            label="Show grid badges"
+          />
+        </Field>
+        <Field label="Thumbnail size">
+          <Slider
+            value={thumbSize}
+            onChange={setThumbSize}
+            min={90}
+            max={420}
+            step={1}
+            origin={90}
+            size="S"
+            className="min-w-0 flex-1"
+            aria-label="Thumbnail size"
+          />
+          <Readout>{thumbSize} px</Readout>
+        </Field>
+      </FieldGroup>
+    </>
   );
 }
 
@@ -586,65 +471,70 @@ function FilesPane({ onBackupBusyChange }: { onBackupBusyChange: (busy: boolean)
 
   return (
     <>
-      {/* Named for what it reads rather than for the file format: someone
-          arriving from Lightroom is looking for their ratings and edits, and
-          would not necessarily know those live in a file called .xmp. */}
-      <Field label="Read sidecars">
-        <Switch
-          checked={importSidecars}
-          onChange={setImportSidecars}
-          label="Read sidecars on import"
-        />
-      </Field>
-      <Field label="Write sidecars">
-        <Switch
-          checked={autoWriteSidecars}
-          onChange={(on) => void toggleWrite(on)}
-          label="Write sidecars automatically"
-        />
-      </Field>
-      <Field label="Develop on import">
-        <Select
-          value={importDevelop}
-          onChange={setImportDevelop}
-          options={IMPORT_DEVELOP}
-          className="flex-1"
-        />
-      </Field>
-      {importDevelop === "preset" && (
-        <Field>
+      <FieldGroup title="Import">
+        <Field label="XMP sidecars">
+          <Checkbox
+            checked={importSidecars}
+            onChange={setImportSidecars}
+            label="Read sidecars on import"
+          />
+        </Field>
+        <Field label="Develop">
           <Select
-            value={importPresetId ?? ""}
-            onChange={(id) => setImportPresetId(id || null)}
-            options={
-              presets === null
-                ? [{ value: "", label: "Loading…" }]
-                : presetOptions.length
-                  ? presetOptions
-                  : [{ value: "", label: "No presets" }]
-            }
-            disabled={presets === null || !presetOptions.length}
+            value={importDevelop}
+            onChange={setImportDevelop}
+            options={IMPORT_DEVELOP}
+            aria-label="Develop on import"
             className="flex-1"
           />
         </Field>
-      )}
-      <Field label="Build previews">
-        <Switch
-          checked={previewOnImport}
-          onChange={setPreviewOnImport}
-          label="Build previews on import"
-        />
-      </Field>
-      <Field label="Export folder">
-        <Switch
-          checked={rememberDestination}
-          onChange={(on) => {
-            setRememberDestination(on);
-            if (!on) forgetDestination();
-          }}
-          label="Remember the last export folder"
-        />
-      </Field>
+        {importDevelop === "preset" && (
+          <Field label="Preset">
+            <Select
+              value={importPresetId ?? ""}
+              onChange={(id) => setImportPresetId(id || null)}
+              options={
+                presets === null
+                  ? [{ value: "", label: "Loading…" }]
+                  : presetOptions.length
+                    ? presetOptions
+                    : [{ value: "", label: "No presets" }]
+              }
+              aria-label="Import preset"
+              disabled={presets === null || !presetOptions.length}
+              className="flex-1"
+            />
+          </Field>
+        )}
+        <Field label="Previews">
+          <Checkbox
+            checked={previewOnImport}
+            onChange={setPreviewOnImport}
+            label="Build previews on import"
+          />
+        </Field>
+      </FieldGroup>
+      <FieldGroup title="Sidecar files">
+        <Field label="Automatic writes">
+          <Checkbox
+            checked={autoWriteSidecars}
+            onChange={(on) => void toggleWrite(on)}
+            label="Write sidecars automatically"
+          />
+        </Field>
+      </FieldGroup>
+      <FieldGroup title="Export">
+        <Field label="Destination">
+          <Checkbox
+            checked={rememberDestination}
+            onChange={(on) => {
+              setRememberDestination(on);
+              if (!on) forgetDestination();
+            }}
+            label="Remember the last export folder"
+          />
+        </Field>
+      </FieldGroup>
       <CatalogBackup onBusyChange={onBackupBusyChange} />
     </>
   );
@@ -686,9 +576,9 @@ function CachePane() {
   const clear = async () => {
     setClearing(true);
     try {
-      await cacheClear();
-      toast.show("Cache cleared", {
-        detail: "Previews rebuild as you browse.",
+      await cacheClear({ previewsOnly: true });
+      toast.show("Preview cache cleared", {
+        detail: "AI models and saved mask coverage are unchanged.",
       });
       refresh();
     } catch (err) {
@@ -708,37 +598,42 @@ function CachePane() {
   const empty = !stats || stats.bytes === 0;
 
   return (
-    // With the label gone there is no field grid left to align to, so the pane
-    // sits on its own left edge instead of indenting past a 116px gutter that
-    // now holds nothing. The readout carries what the label used to say.
-    <div className="flex flex-col gap-3 pt-1">
-      <div className="flex items-center gap-2.5">
+    <>
+      <FieldGroup title="Local cache">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+          <Readout disabled={!stats}>
+            {stats && ceiling > 0
+              ? `${formatBytes(stats.bytes)} of ${formatBytes(ceiling)}`
+              : "Measuring…"}
+          </Readout>
+          <Button onClick={() => void clear()} disabled={clearing || empty}>
+            {clearing ? "Clearing…" : "Clear previews"}
+          </Button>
+        </div>
         <div className="h-1 min-w-0 flex-1 overflow-hidden rounded-full bg-control">
           <div
-            className="h-full rounded-full bg-accent/70 transition-[width] duration-[--duration-slow] ease-[--ease-out]"
+            className="h-full rounded-full bg-label-secondary transition-[width] duration-[--duration-slow] ease-[--ease-out]"
             style={{
               width: `${Math.max(usedShare * 100, stats && stats.bytes ? 1 : 0)}%`,
             }}
           />
         </div>
-        <Readout disabled={!stats}>
-          {stats && ceiling > 0
-            ? `${formatBytes(stats.bytes)} of ${formatBytes(ceiling)}`
-            : "Measuring…"}
-        </Readout>
-      </div>
-      <div>
-        <Button onClick={() => void clear()} disabled={clearing || empty}>
-          {clearing ? "Clearing…" : "Clear cache"}
-        </Button>
-      </div>
-
-      <div className="pt-1">
+        <p className="mt-2 text-mini leading-relaxed text-label-secondary">
+          Includes previews, AI models and saved masks. Clearing previews keeps AI
+          models and mask coverage. Manage model downloads in AI models.
+        </p>
+      </FieldGroup>
+      <FieldGroup title="Cache limits">
+        <p className="mb-3 text-mini leading-relaxed text-label-secondary">
+          Cleanup removes previews first. AI models and saved masks are protected,
+          so total storage can remain above the size limit.
+        </p>
         <Field label="Size limit">
           <Select
             value={String(cacheLimit)}
             onChange={(v) => setCacheLimit(Number(v))}
             options={CACHE_LIMITS}
+            aria-label="Cache size limit"
             className="flex-1"
           />
         </Field>
@@ -747,11 +642,12 @@ function CachePane() {
             value={String(cacheMaxAgeDays)}
             onChange={(v) => setCacheMaxAgeDays(Number(v))}
             options={CACHE_AGES}
+            aria-label="Keep previews"
             className="flex-1"
           />
         </Field>
-      </div>
-    </div>
+      </FieldGroup>
+    </>
   );
 }
 
@@ -843,11 +739,7 @@ function KeyboardPane() {
   const changed = Object.keys(keyBindings).length;
 
   return (
-    // Held to the same right edge the field grid closes on — 116px of label
-    // column, the gap, then the control measure — so the chords line up with
-    // the selects and switches in every other pane instead of running out to
-    // the dialog's own margin.
-    <div className="flex max-w-[calc(116px+0.75rem+var(--field-measure))] flex-col gap-2">
+    <div className="flex flex-col gap-3">
       <div className="flex items-center gap-2.5">
         <TextField
           value={query}
@@ -869,7 +761,7 @@ function KeyboardPane() {
 
       {groups.map(({ group, commands }) => (
         <section key={group} className="pt-1">
-          <h3 className="pb-1 text-mini font-medium text-label-tertiary">
+          <h3 className="pb-2 text-ui font-medium text-label">
             {GROUP_LABELS[group]}
           </h3>
           <div>
@@ -880,10 +772,10 @@ function KeyboardPane() {
               return (
                 <div
                   key={command.id}
-                  className="grid grid-cols-[1fr_auto] items-center gap-x-3 py-[3px] [&+&]:hairline-t"
+                  className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 py-1.5 [&+&]:hairline-t"
                 >
                   <span className="flex min-w-0 items-baseline gap-2">
-                    <span className="truncate text-ui text-label">
+                    <span className="text-ui text-label">
                       {command.label}
                     </span>
                     {command.scope && (
@@ -896,11 +788,11 @@ function KeyboardPane() {
                     type="button"
                     disabled={command.fixed}
                     onClick={() => setCapturing(armed ? null : command.id)}
-                    aria-label={`${command.label}: ${chords.map(formatChord).join(" or ")}${
+                    aria-label={`${command.label}: ${chords.map((chord) => formatChord(chord)).join(" or ")}${
                       command.fixed ? " (fixed)" : ". Press to change."
                     }`}
                     className={cn(
-                      "h-6 shrink-0 rounded-md px-2 text-mini tabular-nums",
+                      "h-6 shrink-0 rounded-sm px-2 text-mini tabular-nums coarse:h-9",
                       "transition-colors duration-[--duration-fast] ease-[--ease-out]",
                       armed
                         ? "bg-accent-soft text-accent"
@@ -924,40 +816,31 @@ function KeyboardPane() {
   );
 }
 
-/**
- * The one pane that is not a settings grid: the mark over the name, centred in
- * the frame with nothing else competing for the eye. The line of small print
- * sits on the floor of the pane rather than trailing the tagline, so it reads
- * as a footer and can be set legibly instead of being hidden by its own colour.
- */
 function AboutPane() {
   const [credits, setCredits] = useState(false);
 
   return (
-    <div className="flex min-h-full flex-col items-center text-center">
-      <div className="my-auto flex flex-col items-center gap-4">
-        <div className="flex flex-col items-center gap-2.5">
-          <Logo size={40} />
-          <div>
-            <p className="font-display text-headline font-[590] text-label">
-              esque
-            </p>
-            <p className="mt-1 text-ui leading-relaxed text-label-secondary">
-              Non-destructive RAW editing in the browser.
-            </p>
-          </div>
-        </div>
-
-        <div className="flex items-center gap-2">
-          {/* Same weight as Acknowledgements on purpose: both are the pane's
-              reading matter, and neither is the thing you came to Settings for. */}
-          <Button onClick={openWhatsNew}>What's new…</Button>
-          <Button onClick={() => setCredits(true)}>Acknowledgements…</Button>
+    <div className="flex flex-col gap-5">
+      <div className="flex items-center gap-3">
+        <Logo size={32} />
+        <div>
+          <p className="font-display text-headline font-[590] text-label">
+            esque
+          </p>
+          <p className="mt-1 text-ui leading-relaxed text-label-secondary">
+            Version {APP_VERSION}
+          </p>
         </div>
       </div>
-
-      <p className="pt-2 pb-1 text-mini tabular-nums text-label-tertiary">
-        Version {APP_VERSION} · AGPL-3.0
+      <p className="text-ui leading-relaxed text-label-secondary">
+        A photo editor that runs in your browser.
+      </p>
+      <div className="flex flex-wrap items-center gap-2">
+        <Button onClick={openWhatsNew}>What's new…</Button>
+        <Button onClick={() => setCredits(true)}>Acknowledgements…</Button>
+      </div>
+      <p className="text-mini text-label-secondary">
+        Free software under the AGPL-3.0 licence.
       </p>
 
       <AcknowledgementsDialog

@@ -10,7 +10,8 @@ export const opfsSupported = () =>
 const unavailable = (error: unknown) => error instanceof Error &&
   ['NotSupportedError', 'SecurityError', 'NotAllowedError'].includes(error.name)
 const missing = (error: unknown) => error instanceof Error && error.name === 'NotFoundError'
-const pinned = (key: string) => key.startsWith('models/')
+// AI coverage is part of an edit, not a regenerable preview.
+const pinned = (key: string) => key.startsWith('models/') || key.startsWith('ai/')
 const CACHE_DIRS = new Set(['thumb', 'preview', 'proxy', 'ai', 'models'])
 
 const asBlob = (data: CacheData) => data instanceof Blob ? data
@@ -163,8 +164,11 @@ export function createBinaryCache(
     return freed
   }
 
-  async function cacheClear() {
-    for (const entry of await entries()) await remove(entry)
+  async function cacheClear(options: { previewsOnly?: boolean } = {}) {
+    for (const entry of await entries()) {
+      if (options.previewsOnly && pinned(entry.key)) continue
+      await remove(entry)
+    }
   }
 
   return { cacheWrite, cacheRead, cacheDelete, cacheStats, cacheEvict, cacheClear }

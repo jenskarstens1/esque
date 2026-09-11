@@ -202,7 +202,7 @@ export function ColorWheel({
               d="M3 3 L9 9 M9 3 L3 9"
               fill="none"
               stroke="currentColor"
-              strokeWidth="1.6"
+              strokeWidth="1.4"
               strokeLinecap="round"
             />
           </svg>

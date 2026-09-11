@@ -38,6 +38,32 @@ interface PanelSectionProps {
   className?: string
 }
 
+function PanelSectionBody({
+  id,
+  fill,
+  open,
+  children,
+}: Pick<PanelSectionProps, 'id' | 'fill' | 'children'> & { open: boolean }) {
+  if (fill) {
+    return <div className="flex min-h-0 flex-1 flex-col px-3 pb-3">{children}</div>
+  }
+
+  return (
+    <div
+      id={id ? `${id}-body` : undefined}
+      inert={!open}
+      className={cn(
+        'grid transition-[grid-template-rows] duration-[--duration-base] ease-[--ease-out]',
+        open ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]',
+      )}
+    >
+      <div className="overflow-hidden">
+        <div className="px-3 pb-3">{children}</div>
+      </div>
+    </div>
+  )
+}
+
 export function PanelSection({
   id,
   title,
@@ -122,22 +148,9 @@ export function PanelSection({
           </div>
         )}
       </header>
-      {fill ? (
-        <div className="flex min-h-0 flex-1 flex-col px-3 pb-3">{children}</div>
-      ) : (
-        <div
-          id={id ? `${id}-body` : undefined}
-          inert={!open}
-          className={cn(
-            'grid transition-[grid-template-rows] duration-[--duration-base] ease-[--ease-out]',
-            open ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]',
-          )}
-        >
-          <div className="overflow-hidden">
-            <div className="px-3 pb-3">{children}</div>
-          </div>
-        </div>
-      )}
+      <PanelSectionBody id={id} fill={fill} open={open}>
+        {children}
+      </PanelSectionBody>
       {menu}
     </section>
   )
@@ -160,7 +173,7 @@ export function Chevron({ open, className }: { open: boolean; className?: string
         d="M3.5 1.5 L7 5 L3.5 8.5"
         fill="none"
         stroke="currentColor"
-        strokeWidth="1.6"
+        strokeWidth="1.3"
         strokeLinecap="round"
         strokeLinejoin="round"
       />

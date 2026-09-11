@@ -1,8 +1,8 @@
 /**
- * The chrome's own appearance: how dark it is, what colour it points with, how
- * large it sets its type, and what tone the photograph sits on.
+ * The chrome's own appearance: how dark it is, how large it sets its type,
+ * and what tone the photograph sits on.
  *
- * None of this is state a component reads. It is four attributes on `<html>`
+ * None of this is state a component reads. It is two attributes on `<html>`
  * and one custom property, because the tokens they switch are consumed by every
  * generated utility in the app — re-theming through React would mean every
  * subscriber re-rendering to change values the cascade can swap on its own.
@@ -21,25 +21,6 @@
  * panels by in daylight.
  */
 export type Appearance = "dark" | "dim" | "light";
-
-/**
- * The one colour in a deliberately colourless UI.
- *
- * The chrome is strictly neutral so it never biases colour perception next to
- * the image, which leaves the accent as the only hue on screen — and therefore
- * the only thing that can be a matter of taste without costing anything.
- * `graphite` is for people who want even that much colour gone.
- */
-export type Accent =
-  | "blue"
-  | "purple"
-  | "pink"
-  | "red"
-  | "orange"
-  | "yellow"
-  | "green"
-  | "teal"
-  | "graphite";
 
 /**
  * The tone the photograph sits on.
@@ -96,40 +77,8 @@ const TEXT_SCALE: Record<TextSize, number> = {
   large: 1.14,
 };
 
-/**
- * Swatch colours for the accent picker, which cannot read `--color-accent` —
- * it has to paint all nine at once while only one of them is live.
- * Kept in step with `appearance.css`.
- */
-export const ACCENT_SWATCHES: Record<Accent, string> = {
-  blue: "#0a84ff",
-  purple: "#bf5af2",
-  pink: "#ff375f",
-  red: "#ff453a",
-  orange: "#ff9f0a",
-  yellow: "#ffd60a",
-  green: "#30d158",
-  teal: "#40c8e0",
-  graphite: "#98989f",
-};
-
-export const ACCENT_LABELS: Record<Accent, string> = {
-  blue: "Blue",
-  purple: "Purple",
-  pink: "Pink",
-  red: "Red",
-  orange: "Orange",
-  yellow: "Yellow",
-  green: "Green",
-  teal: "Teal",
-  graphite: "Graphite",
-};
-
-export const ACCENTS = Object.keys(ACCENT_SWATCHES) as Accent[];
-
 export interface AppearanceSettings {
   appearance: Appearance;
-  accent: Accent;
   surround: Surround;
   textSize: TextSize;
 }
@@ -145,7 +94,7 @@ export function applyAppearance(s: AppearanceSettings) {
   if (typeof document === "undefined") return;
   const el = document.documentElement;
   el.dataset.appearance = s.appearance;
-  el.dataset.accent = s.accent;
+  delete el.dataset.accent;
   el.dataset.surround = s.surround;
   el.style.setProperty("--ui-scale", String(TEXT_SCALE[s.textSize] ?? 1));
 }

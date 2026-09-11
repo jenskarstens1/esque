@@ -172,8 +172,10 @@ export function SegmentedControl<T extends string>({
     <div
       role="tablist"
       className={cn(
-        'relative inline-flex shrink-0 items-center rounded-md bg-raised p-0.5',
+        'relative inline-flex shrink-0 items-center bg-raised p-0.5',
         'shadow-[inset_0_0.5px_1.5px_rgb(0_0_0/0.28)]',
+        // Concentric with the chip inside: chip radius + the 2px of track.
+        size === 'sm' ? 'rounded-lg' : 'rounded-md',
         full && 'w-full',
         className,
       )}
@@ -189,12 +191,20 @@ export function SegmentedControl<T extends string>({
             aria-selected={selected}
             onClick={() => onChange(opt.value)}
             className={cn(
-              'relative flex flex-1 items-center justify-center whitespace-nowrap rounded-[5px] font-medium',
+              'relative flex flex-1 items-center justify-center whitespace-nowrap font-medium',
               'transition-[color,background-color,box-shadow] duration-[--duration-fast] ease-[--ease-out]',
               focusRing,
+              /*
+               * The `sm` chip is sized to the `sm` Select's box, not to the
+               * track's. The two carry the same fill and stand side by side in
+               * the photo toolbar, so those are the edges the eye pairs up; the
+               * track is nine levels off the chrome behind it and reads as a
+               * shadow rather than as the control's height. Matching the track
+               * instead leaves the lit chip 4px short and the row looks ragged.
+               */
               size === 'sm'
-                ? 'h-[19px] coarse:h-8 esq-tap px-2 text-micro'
-                : 'h-6 coarse:h-11 px-2.5 text-mini',
+                ? 'h-6 coarse:h-8 esq-tap rounded-md px-2 text-micro'
+                : 'h-6 coarse:h-11 rounded-[5px] px-2.5 text-mini',
               selected
                 ? // The fill alone is nine levels of grey off the track it sits
                   // in — enough to read as a tint, not as an edge. The hairline
@@ -372,7 +382,7 @@ export function Checkbox({
               d="M2.5 6.2 L4.8 8.5 L9.5 3.6"
               fill="none"
               stroke="currentColor"
-              strokeWidth="1.7"
+              strokeWidth="1.4"
               strokeLinecap="round"
               strokeLinejoin="round"
             />
@@ -395,6 +405,7 @@ export function Select<T extends string>({
   disabled,
   className,
   size = 'md',
+  'aria-label': ariaLabel,
 }: {
   value: T
   onChange: (v: T) => void
@@ -402,11 +413,13 @@ export function Select<T extends string>({
   disabled?: boolean
   className?: string
   size?: 'sm' | 'md'
+  'aria-label'?: string
 }) {
   return (
     <div className={cn('relative inline-flex min-w-0', className)}>
       <select
         value={value}
+        aria-label={ariaLabel}
         disabled={disabled}
         onChange={(e) => onChange(e.target.value as T)}
         className={cn(
@@ -465,6 +478,7 @@ export function TextField({
   min,
   max,
   'aria-label': ariaLabel,
+  autoFocus,
 }: {
   value: string
   onChange: (v: string) => void
@@ -478,6 +492,7 @@ export function TextField({
   min?: number
   max?: number
   'aria-label'?: string
+  autoFocus?: boolean
 }) {
   const [draft, setDraft] = useState(value)
   const dirty = useRef(false)
@@ -499,6 +514,7 @@ export function TextField({
     <input
       value={draft}
       aria-label={ariaLabel}
+      autoFocus={autoFocus}
       placeholder={placeholder}
       disabled={disabled}
       style={style}
@@ -511,7 +527,14 @@ export function TextField({
       }}
       onBlur={commit}
       onKeyDown={(e) => {
-        if (e.key === 'Enter') e.currentTarget.blur()
+        if (e.key === 'Enter') {
+          // Blur is how Enter normally commits, but inside a form it also
+          // cancels the browser's implicit submission — the field stops being
+          // the focused control before the default action runs. Commit in
+          // place instead and let the form's own submit handler continue.
+          if (e.currentTarget.form) commit()
+          else e.currentTarget.blur()
+        }
         if (e.key === 'Escape') {
           setDraft(value)
           dirty.current = false

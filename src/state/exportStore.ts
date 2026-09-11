@@ -21,6 +21,7 @@ import { stem } from '../export/naming'
 import { useDevelop } from '../develop/session'
 import { ensurePermission, fsSupported } from '../catalog/fs'
 import { prepareDownload, reserveDownloadName, startDownload, type DownloadFile } from '../export/download'
+import type { Photo } from '../core/types'
 
 const STORAGE_KEY = 'esque.export.settings'
 const PRESET_KEY = 'esque.export.presets'
@@ -268,6 +269,232 @@ async function preparePendingDownloads() {
   }
 }
 
+type ExportSignal = { cancelled: boolean }
+type ExporterModule = typeof import('../export/exporter')
+type ExportResult = Awaited<ReturnType<ExporterModule['exportPhoto']>>
+
+const STAGE_WEIGHTS = {
+  decoding: 0.55,
+  rendering: 0.3,
+  resizing: 0.08,
+  encoding: 0.05,
+  writing: 0.02,
+} as const
+const STAGE_ORDER = ['decoding', 'rendering', 'resizing', 'encoding', 'writing'] as const
+
+function patchJob(id: string, next: Partial<ExportJob>) {
+  useExport.setState((state) => ({
+    jobs: state.jobs.map((job) => job.id === id ? { ...job, ...next } : job),
+  }))
+}
+
+function updateExportProgress() {
+  const { jobs } = useExport.getState()
+  const progress = jobs.length
+    ? jobs.reduce((sum, job) => sum + job.progress, 0) / jobs.length
+    : 0
+  useExport.setState({ progress })
+}
+
+function checkCancelled(currentSignal: ExportSignal) {
+  if (currentSignal.cancelled) throw new Error('Export cancelled')
+}
+
+function reportJobProgress(
+  jobId: string,
+  stage: Parameters<NonNullable<Parameters<ExporterModule['exportPhoto']>[3]>>[0],
+  fraction: number,
+) {
+  let base = 0
+  for (const step of STAGE_ORDER) {
+    if (step === stage) break
+    base += STAGE_WEIGHTS[step]
+  }
+  patchJob(jobId, { progress: base + STAGE_WEIGHTS[stage] * fraction })
+  updateExportProgress()
+}
+
+function buildJobs(
+  initial: ExportState,
+  ids: string[],
+  photos: Array<Photo | undefined>,
+  retry: boolean,
+) {
+  const previous = new Map(useExport.getState().jobs.map((job) => [job.photoId, job]))
+  const jobs: ExportJob[] = ids.map((photoId, index) => previous.get(photoId) ?? ({
+    id: nextId(),
+    photoId,
+    filename: photos[index]?.filename ?? 'Photo no longer in catalog',
+    state: 'queued',
+    progress: 0,
+    outputName: null,
+    bytes: 0,
+    error: null,
+  }))
+  if (!retry || !initial.jobs.length) useExport.setState({ jobs })
+  return jobs
+}
+
+async function exportDirectory(
+  delivery: ExportState['delivery'],
+  destination: FileSystemDirectoryHandle | null,
+  settings: ExportSettings,
+  exporter: ExporterModule,
+) {
+  if (delivery !== 'folder' || !destination) return null
+  return exporter.resolveDestination(destination, settings.subfolder)
+}
+
+async function storeExportResult(
+  job: ExportJob,
+  result: ExportResult,
+  dir: FileSystemDirectoryHandle | null,
+  settings: ExportSettings,
+  usedNames: Set<string>,
+  exporter: ExporterModule,
+  currentSignal: ExportSignal,
+) {
+  const name = dir
+    ? await exporter.uniqueName(dir, result.filename, settings.overwrite)
+    : reserveDownloadName(result.filename, usedNames, !!result.sidecar)
+  checkCancelled(currentSignal)
+  if (!name) {
+    patchJob(job.id, { state: 'skipped', progress: 1 })
+    return
+  }
+
+  let warning: string | null = null
+  if (dir) {
+    await exporter.writeFile(dir, name, result.blob)
+    if (result.sidecar) {
+      try {
+        await exporter.writeFile(dir, `${stem(name)}.xmp`, new Blob([result.sidecar], {
+          type: 'application/rdf+xml',
+        }))
+      } catch (error) {
+        warning = `Photo written, but the XMP sidecar failed: ${errorMessage(error)}`
+      }
+    }
+  } else {
+    const files = [{ jobId: job.id, name, blob: result.blob }]
+    if (result.sidecar) {
+      files.push({
+        jobId: job.id,
+        name: `${stem(name)}.xmp`,
+        blob: new Blob([result.sidecar], { type: 'application/rdf+xml' }),
+      })
+    }
+    useExport.setState((state) => ({
+      pendingDownloads: [...state.pendingDownloads, ...files],
+    }))
+  }
+
+  patchJob(job.id, {
+    state: dir ? 'done' : 'prepared',
+    progress: 1,
+    outputName: name,
+    bytes: result.blob.size,
+    error: warning,
+    overLimit: result.limit && !result.limit.met
+      ? { requestedKb: settings.limitSizeKb, quality: result.limit.quality }
+      : null,
+  })
+}
+
+async function runExportJob({
+  job,
+  photo,
+  index,
+  total,
+  photoIds,
+  settings,
+  currentSignal,
+  dir,
+  usedNames,
+  exporter,
+}: {
+  job: ExportJob
+  photo: Photo | undefined
+  index: number
+  total: number
+  photoIds: string[]
+  settings: ExportSettings
+  currentSignal: ExportSignal
+  dir: FileSystemDirectoryHandle | null
+  usedNames: Set<string>
+  exporter: ExporterModule
+}) {
+  patchJob(job.id, { state: 'running' })
+  useExport.setState({ stage: `${job.filename} · ${index + 1} of ${total}` })
+  try {
+    if (!photo) throw new Error('This photo is no longer in the catalog.')
+    const result = await exporter.exportPhoto(
+      photo,
+      settings,
+      settings.startNumber + photoIds.indexOf(photo.id),
+      (stage, fraction) => reportJobProgress(job.id, stage, fraction),
+      currentSignal,
+    )
+    checkCancelled(currentSignal)
+    await storeExportResult(job, result, dir, settings, usedNames, exporter, currentSignal)
+  } catch (error) {
+    if (!currentSignal.cancelled) {
+      patchJob(job.id, { state: 'failed', progress: 1, error: errorMessage(error) })
+    }
+  }
+  updateExportProgress()
+}
+
+function finishExport(currentSignal: ExportSignal, batchError: string | null) {
+  useExport.setState((state) => ({
+    running: false,
+    stage: '',
+    batchError,
+    jobs: state.jobs.map((job) => {
+      if (job.state !== 'queued' && job.state !== 'running') return job
+      return currentSignal.cancelled
+        ? { ...job, state: 'cancelled' }
+        : { ...job, state: 'failed', error: batchError ?? 'The export did not finish.' }
+    }),
+  }))
+  updateExportProgress()
+}
+
+function reportExportOutcome(currentSignal: ExportSignal, batchError: string | null) {
+  const { jobs } = useExport.getState()
+  const written = jobs.filter((job) => job.state === 'done').length
+  const prepared = jobs.filter((job) => job.state === 'prepared').length
+  const failed = jobs.filter((job) => job.state === 'failed').length
+  const skipped = jobs.filter((job) => job.state === 'skipped').length
+  const oversized = jobs.filter((job) => !!job.overLimit).length
+  const warnings = jobs.filter((job) => job.state === 'done' && job.error).length
+
+  if (batchError) return toast.error('Export could not finish', batchError)
+  if (currentSignal.cancelled) {
+    const detail = prepared
+      ? `${prepared} prepared photos kept. Finish their download or retry the rest.`
+      : written ? `${written} already written` : 'No files written.'
+    return toast.show('Export cancelled', { detail })
+  }
+  if (failed || skipped || oversized || warnings) {
+    const parts = [
+      written ? `${written} exported` : '',
+      prepared ? `${prepared} ready to download` : '',
+      failed ? `${failed} failed` : '',
+      skipped ? `${skipped} skipped` : '',
+      oversized ? `${oversized} over the size limit — try resizing` : '',
+      warnings ? `${warnings} sidecars not written` : '',
+    ].filter(Boolean)
+    return toast.error('Export finished with problems', parts.join(' · '))
+  }
+  if (prepared) return toast.show('Export ready', { detail: 'Choose Download to save the prepared files.' })
+  if (!written) return
+  toast.show(written === 1 ? 'Photo exported' : `${written} photos exported`, {
+    detail: formatBytes(jobs.reduce((sum, job) => sum + job.bytes, 0)),
+  })
+  useExport.setState({ open: false })
+}
+
 async function runExport(retry: boolean) {
   const initial = useExport.getState()
   if (initial.running) return
@@ -297,19 +524,6 @@ async function runExport(retry: boolean) {
       : [],
   })
 
-  const patch = (id: string, next: Partial<ExportJob>) =>
-    useExport.setState((s) => ({
-      jobs: s.jobs.map((job) => job.id === id ? { ...job, ...next } : job),
-    }))
-  const updateProgress = () => {
-    const { jobs } = useExport.getState()
-    useExport.setState({
-      progress: jobs.length ? jobs.reduce((sum, job) => sum + job.progress, 0) / jobs.length : 0,
-    })
-  }
-  const checkCancelled = () => {
-    if (currentSignal.cancelled) throw new Error('Export cancelled')
-  }
   let batchError: string | null = null
 
   try {
@@ -320,164 +534,49 @@ async function runExport(retry: boolean) {
         throw new Error('Write access was not granted. Choose the destination folder again, then retry.')
       }
     }
-    checkCancelled()
+    checkCancelled(currentSignal)
     useExport.setState({ stage: 'Saving edits…' })
     try {
       await useDevelop.getState().flush()
     } catch (err) {
       throw new Error(`Edits could not be saved. ${useDevelop.getState().saveError ?? errorMessage(err)}`)
     }
-    checkCancelled()
+    checkCancelled(currentSignal)
 
     useExport.setState({ stage: 'Preparing photos…' })
     const photos = await db.photos.bulkGet(ids)
-    const previous = new Map(useExport.getState().jobs.map((job) => [job.photoId, job]))
-    const jobs: ExportJob[] = ids.map((photoId, i) => previous.get(photoId) ?? ({
-      id: nextId(),
-      photoId,
-      filename: photos[i]?.filename ?? 'Photo no longer in catalog',
-      state: 'queued',
-      progress: 0,
-      outputName: null,
-      bytes: 0,
-      error: null,
-    }))
-    if (!retry || !initial.jobs.length) useExport.setState({ jobs })
-    checkCancelled()
+    const jobs = buildJobs(initial, ids, photos, retry)
+    checkCancelled(currentSignal)
 
-    const { exportPhoto, resolveDestination, uniqueName, writeFile } = await import('../export/exporter')
-    checkCancelled()
-    const dir = delivery === 'folder' && destination
-      ? await resolveDestination(destination, settings.subfolder)
-      : null
+    const exporter = await import('../export/exporter')
+    checkCancelled(currentSignal)
+    const dir = await exportDirectory(delivery, destination, settings, exporter)
     const usedNames = new Set(useExport.getState().pendingDownloads.map((file) => file.name))
-    checkCancelled()
+    checkCancelled(currentSignal)
 
-    for (let i = 0; i < jobs.length; i++) {
+    for (let index = 0; index < jobs.length; index++) {
       if (currentSignal.cancelled) break
-      const job = jobs[i]
-      const photo = photos[i]
-      patch(job.id, { state: 'running' })
-      useExport.setState({ stage: `${job.filename} · ${i + 1} of ${jobs.length}` })
-
-      try {
-        if (!photo) throw new Error('This photo is no longer in the catalog.')
-        const result = await exportPhoto(
-          photo,
-          settings,
-          settings.startNumber + photoIds.indexOf(photo.id),
-          (stage, fraction) => {
-            const weights = { decoding: 0.55, rendering: 0.3, resizing: 0.08, encoding: 0.05, writing: 0.02 }
-            const order = ['decoding', 'rendering', 'resizing', 'encoding', 'writing'] as const
-            let base = 0
-            for (const step of order) {
-              if (step === stage) break
-              base += weights[step]
-            }
-            patch(job.id, { progress: base + weights[stage] * fraction })
-            updateProgress()
-          },
-          currentSignal,
-        )
-        checkCancelled()
-        const name = dir
-          ? await uniqueName(dir, result.filename, settings.overwrite)
-          : reserveDownloadName(result.filename, usedNames, !!result.sidecar)
-        checkCancelled()
-        if (!name) {
-          patch(job.id, { state: 'skipped', progress: 1 })
-          updateProgress()
-          continue
-        }
-        let warning: string | null = null
-        if (dir) {
-          await writeFile(dir, name, result.blob)
-          if (result.sidecar) {
-            try {
-              await writeFile(dir, `${stem(name)}.xmp`, new Blob([result.sidecar], {
-                type: 'application/rdf+xml',
-              }))
-            } catch (err) {
-              warning = `Photo written, but the XMP sidecar failed: ${errorMessage(err)}`
-            }
-          }
-        } else {
-          const files = [{ jobId: job.id, name, blob: result.blob }]
-          if (result.sidecar) files.push({
-            jobId: job.id, name: `${stem(name)}.xmp`,
-            blob: new Blob([result.sidecar], { type: 'application/rdf+xml' }),
-          })
-          useExport.setState((s) => ({
-            pendingDownloads: [...s.pendingDownloads, ...files],
-          }))
-        }
-        patch(job.id, {
-          state: dir ? 'done' : 'prepared',
-          progress: 1,
-          outputName: name,
-          bytes: result.blob.size,
-          error: warning,
-          overLimit: result.limit && !result.limit.met
-            ? { requestedKb: settings.limitSizeKb, quality: result.limit.quality }
-            : null,
-        })
-      } catch (err) {
-        if (currentSignal.cancelled) break
-        patch(job.id, { state: 'failed', progress: 1, error: errorMessage(err) })
-      }
-      updateProgress()
+      await runExportJob({
+        job: jobs[index],
+        photo: photos[index],
+        index,
+        total: jobs.length,
+        photoIds,
+        settings,
+        currentSignal,
+        dir,
+        usedNames,
+        exporter,
+      })
     }
     await assembleDownload(currentSignal)
   } catch (err) {
     if (!currentSignal.cancelled) batchError = errorMessage(err)
   } finally {
-    useExport.setState((s) => ({
-      running: false,
-      stage: '',
-      batchError,
-      jobs: s.jobs.map((job) => {
-        if (job.state !== 'queued' && job.state !== 'running') return job
-        return currentSignal.cancelled
-          ? { ...job, state: 'cancelled' }
-          : { ...job, state: 'failed', error: batchError ?? 'The export did not finish.' }
-      }),
-    }))
-    updateProgress()
+    finishExport(currentSignal, batchError)
   }
 
-  const { jobs } = useExport.getState()
-  const written = jobs.filter((job) => job.state === 'done').length
-  const prepared = jobs.filter((job) => job.state === 'prepared').length
-  const failed = jobs.filter((job) => job.state === 'failed').length
-  const skipped = jobs.filter((job) => job.state === 'skipped').length
-  const oversized = jobs.filter((job) => !!job.overLimit).length
-  const warnings = jobs.filter((job) => job.state === 'done' && job.error).length
-
-  if (batchError) {
-    toast.error('Export could not finish', batchError)
-  } else if (currentSignal.cancelled) {
-    toast.show('Export cancelled', {
-      detail: prepared ? `${prepared} prepared photos kept. Finish their download or retry the rest.`
-        : written ? `${written} already written` : 'No files written.',
-    })
-  } else if (failed || skipped || oversized || warnings) {
-    const parts = [
-      written ? `${written} exported` : '',
-      prepared ? `${prepared} ready to download` : '',
-      failed ? `${failed} failed` : '',
-      skipped ? `${skipped} skipped` : '',
-      oversized ? `${oversized} over the size limit — try resizing` : '',
-      warnings ? `${warnings} sidecars not written` : '',
-    ].filter(Boolean)
-    toast.error('Export finished with problems', parts.join(' · '))
-  } else if (prepared) {
-    toast.show('Export ready', { detail: 'Choose Download to save the prepared files.' })
-  } else if (written) {
-    toast.show(written === 1 ? 'Photo exported' : `${written} photos exported`, {
-      detail: formatBytes(jobs.reduce((sum, job) => sum + job.bytes, 0)),
-    })
-    useExport.setState({ open: false })
-  }
+  reportExportOutcome(currentSignal, batchError)
 }
 
 // ---------------------------------------------------------------------------

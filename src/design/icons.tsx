@@ -100,18 +100,11 @@ import {
 type P = LucideProps
 
 /**
- * Lucide scales its 2px stroke with the icon box, so a 13px glyph would render
- * a 1.08px hairline that goes soft on a 1× display. `absoluteStrokeWidth`
- * pins the stroke instead, giving every icon the same optical weight at every
- * size — the trick SF Symbols uses, and what the rest of this UI expects.
- *
- * 1.75px, not the 1.4px this started at: a 12px glyph is mostly negative
- * space, and a stroke thin enough to disappear into the panel makes the icon
- * look half-rendered rather than quiet. Paired with the opaque `--color-icon`
- * ramp, every glyph now has a body.
+ * A light, fixed stroke keeps small toolbar glyphs open without changing their
+ * hit areas. The opaque icon ramp provides contrast independently of weight.
  */
 function wrap(C: React.ComponentType<LucideProps>) {
-  const Wrapped = (p: P) => <C size={16} strokeWidth={1.75} absoluteStrokeWidth {...p} />
+  const Wrapped = (p: P) => <C size={16} strokeWidth={1.4} absoluteStrokeWidth {...p} />
   Wrapped.displayName = `Icon(${C.displayName ?? 'lucide'})`
   return Wrapped
 }
@@ -321,7 +314,7 @@ export const EyeIcon = ({ off, ...p }: P & { off?: boolean }) =>
  * somebody else's logo rather than our vocabulary.
  *
  * It renders a pixel under the 16 its neighbours use. A solid silhouette puts
- * far more ink on the same box than a 1.75px outline does, and matching the
+ * far more ink on the same box than a thin outline does, and matching the
  * boxes would leave this one shouting across the title bar. Equal ink, not
  * equal box, for the same reason `wrap()` pins the stroke instead of scaling it.
  */

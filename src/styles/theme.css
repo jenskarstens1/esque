@@ -31,7 +31,7 @@
    *
    * The label hierarchy is translucent white, which is right for text: a
    * letterform is a solid mass, so 32% of it still reads as a definite shape.
-   * A 1.75px stroke has no mass to spare — at the same alpha the glyph stops
+   * A thin stroke has no mass to spare — at the same alpha the glyph stops
    * looking dim and starts looking ghosted, like it failed to finish drawing.
    * These are the same tones set solid, one step up in presence, so an icon is
    * always a drawn object rather than a faint one.
