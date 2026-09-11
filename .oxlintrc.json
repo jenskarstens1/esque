@@ -6,6 +6,13 @@
     "oxc"
   ],
   "rules": {
+    "complexity": [
+      "error",
+      {
+        "max": 20,
+        "variant": "classic"
+      }
+    ],
     "react/rules-of-hooks": "error",
     "react/only-export-components": [
       "warn",
