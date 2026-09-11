@@ -46,6 +46,64 @@ export const KIND_ORDER: ChangeKind[] = ['added', 'improved', 'fixed']
 
 export const RELEASES: Release[] = [
   {
+    version: '0.4.0',
+    date: '2026-09-11',
+    summary:
+      'A shared layer system for local edits, more predictable photo looks, and a quieter, more consistent editing interface.',
+    changes: [
+      {
+        kind: 'added',
+        term: 'Local edit layers',
+        text: 'Drawn and detected masks now share a layer system. Existing masks are converted when opened, keeping their shapes and adjustments; layers are carried through previews, exports, presets and sidecars.',
+      },
+      {
+        kind: 'improved',
+        term: 'Masking',
+        text: 'Detection starts automatically once its model is permitted, and download permission can be granted directly in the masking panel. Masks and their components are easier to manage, with adjustments grouped into collapsible sections.',
+      },
+      {
+        kind: 'improved',
+        term: 'Photo looks',
+        text: 'Sixteen built-in looks have been retuned from credited public recipes. Switching looks replaces the previous colour, curves, grain and vignette instead of mixing leftovers. Exposure, white balance, camera corrections and local edits stay yours; Tools presets still stack.',
+      },
+      {
+        kind: 'improved',
+        term: 'White balance',
+        text: 'The temperature slider now gives useful lighting ranges more room instead of squeezing them into one end of the track. Temperature and tint ramps mark each photo\'s as-shot balance, while typed values and keyboard steps stay in their original units.',
+      },
+      {
+        kind: 'improved',
+        term: 'Editing controls',
+        text: 'Dropdowns and grouped controls use the same sentence-case captions as sliders. Tab selections slide quickly into place, with reduced-motion preferences respected.',
+      },
+      {
+        kind: 'improved',
+        term: 'Badges',
+        text: 'Comparison captions, tool readouts, thumbnail markers and library tags share compact rectangular badges. Icons and divided metadata replace pill shapes and dot separators, while image markers keep their contrast over the photo.',
+      },
+      {
+        kind: 'improved',
+        term: 'Context menus',
+        text: 'Menus are narrower with tighter pointer spacing, inset highlights and better-aligned submenus. Touch targets keep their larger spacing.',
+      },
+      {
+        kind: 'improved',
+        term: 'AI model settings',
+        text: 'Settings shows current models with shorter permission and storage explanations. Legacy models remain available to existing saved detections without crowding the list.',
+      },
+      {
+        kind: 'fixed',
+        term: 'Switching modules',
+        text: 'Moving between Library and Develop no longer briefly shows an incorrectly cropped or empty photo while the view measures itself and reloads catalog data. Returning to Library restores the layout you left.',
+      },
+      {
+        kind: 'fixed',
+        term: 'Notifications',
+        text: 'Toasts use a solid surface and no longer scale their corners into halos or flicker. Routine saving stays quiet; failed saves still show the error and a retry action.',
+      },
+    ],
+  },
+  {
     version: '0.3.0',
     date: '2026-09-06',
     summary:
