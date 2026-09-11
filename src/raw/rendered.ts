@@ -386,6 +386,22 @@ export function orientLinear(image: LinearImage, flip: number): LinearImage {
  * Orientation is applied by the caller: PNG has none of its own, and TIFF's
  * lives in a tag the caller has already read.
  */
+function sampleReaders(
+  data: Uint16Array | Float32Array,
+  alreadyLinear: boolean,
+  profile: SourceProfile | null,
+) {
+  const lut = alreadyLinear ? null : profile ? profileLUT(profile) : null
+  const srgb = alreadyLinear || profile ? null : getSrgb16LUT()
+  const raw =
+    data instanceof Float32Array ? (value: number) => value : (value: number) => value / 65535
+  return {
+    r: lut ? (value: number) => lut[0][value] : srgb ? (value: number) => srgb[value] : raw,
+    g: lut ? (value: number) => lut[1][value] : srgb ? (value: number) => srgb[value] : raw,
+    b: lut ? (value: number) => lut[2][value] : srgb ? (value: number) => srgb[value] : raw,
+  }
+}
+
 function samplesToLinear(
   src: { width: number; height: number; channels: number; data: Uint16Array | Float32Array },
   maxEdge: number,
@@ -395,19 +411,7 @@ function samplesToLinear(
   const { width: sw, height: sh, channels, data } = src
   const grey = channels < 3
   const toWorking = profile ? mul3(XYZ_D50_TO_PROPHOTO, profile.toXyzD50) : SRGB_D65_TO_PROPHOTO_D50
-  // The curve is sampled into a table for the same reason sRGB is: a 16-bit
-  // image is millions of pixels and `Math.pow` per sample is not free.
-  const lut = alreadyLinear ? null : profile ? profileLUT(profile) : null
-  const srgb = alreadyLinear || profile ? null : getSrgb16LUT()
-  // Float samples are already the value; integer samples are a code that has to
-  // be normalised and run back through the transfer curve. Per channel, since
-  // a profile may give each one its own.
-  const rv = lut ? (v: number) => lut[0][v] : srgb ? (v: number) => srgb[v] : null
-  const gv = lut ? (v: number) => lut[1][v] : srgb ? (v: number) => srgb[v] : null
-  const bv = lut ? (v: number) => lut[2][v] : srgb ? (v: number) => srgb[v] : null
-  const raw =
-    data instanceof Float32Array ? (v: number) => v : (v: number) => v / 65535
-  const value = { r: rv ?? raw, g: gv ?? raw, b: bv ?? raw }
+  const value = sampleReaders(data, alreadyLinear, profile)
 
   const scale = Math.min(1, maxEdge / Math.max(sw, sh))
   const dw = Math.max(1, Math.round(sw * scale))

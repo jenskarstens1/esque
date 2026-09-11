@@ -49,6 +49,50 @@ const s15f16 = (b: Uint8Array, o: number) => (u32(b, o) | 0) / 65536
 /** The identity, for a profile whose curve says "already linear". */
 const LINEAR = (v: number) => v
 
+function profileTags(bytes: Uint8Array): Map<string, Uint8Array> | null {
+  if (bytes.length < 132 || sig(bytes, 16) !== 'RGB ') return null
+  const pcs = sig(bytes, 20)
+  if (pcs !== 'XYZ ' && pcs !== 'Lab ') return null
+
+  const count = u32(bytes, 128)
+  if (!count || count > 128 || 132 + count * 12 > bytes.length) return null
+
+  const tags = new Map<string, Uint8Array>()
+  for (let index = 0; index < count; index++) {
+    const entry = 132 + index * 12
+    const offset = u32(bytes, entry + 4)
+    const size = u32(bytes, entry + 8)
+    if (offset + size > bytes.length || size < 8) continue
+    tags.set(sig(bytes, entry), bytes.subarray(offset, offset + size))
+  }
+  return tags
+}
+
+function profileMatrix(tags: Map<string, Uint8Array>): Mat3 | null {
+  const red = colorant(tags.get('rXYZ'))
+  const green = colorant(tags.get('gXYZ'))
+  const blue = colorant(tags.get('bXYZ'))
+  if (!red || !green || !blue) return null
+
+  const matrix: Mat3 = [
+    red[0], green[0], blue[0],
+    red[1], green[1], blue[1],
+    red[2], green[2], blue[2],
+  ]
+  const determinant = det3(matrix)
+  return isFinite(determinant) && Math.abs(determinant) >= 1e-9 ? matrix : null
+}
+
+function profileCurves(
+  tags: Map<string, Uint8Array>,
+): SourceProfile['toLinear'] | null {
+  const grey = curve(tags.get('kTRC'))
+  const red = curve(tags.get('rTRC')) ?? grey
+  const green = curve(tags.get('gTRC')) ?? grey
+  const blue = curve(tags.get('bTRC')) ?? grey
+  return red && green && blue ? [red, green, blue] : null
+}
+
 /**
  * Reads a matrix/shaper profile, or returns null for anything else.
  *
@@ -56,52 +100,12 @@ const LINEAR = (v: number) => v
  * the caller has a documented fallback.
  */
 export function parseIccProfile(bytes: Uint8Array): SourceProfile | null {
-  // 128-byte header, then a tag table of at least a count.
-  if (bytes.length < 132) return null
-  // Only RGB device spaces have colorant tags to read.
-  if (sig(bytes, 16) !== 'RGB ') return null
-  const pcs = sig(bytes, 20)
-  if (pcs !== 'XYZ ' && pcs !== 'Lab ') return null
-
-  const count = u32(bytes, 128)
-  // A profile with hundreds of tags is not one of ours; treat it as corrupt
-  // rather than walking off the end of the buffer.
-  if (!count || count > 128 || 132 + count * 12 > bytes.length) return null
-
-  const tags = new Map<string, Uint8Array>()
-  for (let i = 0; i < count; i++) {
-    const entry = 132 + i * 12
-    const offset = u32(bytes, entry + 4)
-    const size = u32(bytes, entry + 8)
-    if (offset + size > bytes.length || size < 8) continue
-    tags.set(sig(bytes, entry), bytes.subarray(offset, offset + size))
-  }
-
-  const r = colorant(tags.get('rXYZ'))
-  const g = colorant(tags.get('gXYZ'))
-  const b = colorant(tags.get('bXYZ'))
-  // No colorants means a LUT profile — 'A2B0' and friends — which this does
-  // not attempt.
-  if (!r || !g || !b) return null
-
-  // Columns are the colorants, so the matrix maps [1,0,0] to the red primary.
-  const toXyzD50: Mat3 = [
-    r[0], g[0], b[0],
-    r[1], g[1], b[1],
-    r[2], g[2], b[2],
-  ]
-  // A degenerate matrix would send every colour to black. Better to decline.
-  if (!isFinite(det3(toXyzD50)) || Math.abs(det3(toXyzD50)) < 1e-9) return null
-
-  // A grey profile writes one 'kTRC' for all three; an RGB one writes three,
-  // which are usually but not always identical.
-  const grey = curve(tags.get('kTRC'))
-  const r0 = curve(tags.get('rTRC')) ?? grey
-  const g0 = curve(tags.get('gTRC')) ?? grey
-  const b0 = curve(tags.get('bTRC')) ?? grey
-  if (!r0 || !g0 || !b0) return null
-
-  return { toXyzD50, toLinear: [r0, g0, b0] }
+  const tags = profileTags(bytes)
+  if (!tags) return null
+  const toXyzD50 = profileMatrix(tags)
+  const toLinear = profileCurves(tags)
+  if (!toXyzD50 || !toLinear) return null
+  return { toXyzD50, toLinear }
 }
 
 function det3(m: Mat3): number {

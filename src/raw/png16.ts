@@ -146,55 +146,70 @@ function unfilter(
   }
 }
 
+function chromaticities(bytes: Uint8Array, start: number): Chromaticities {
+  const at = (index: number) => u32(bytes, start + index * 4) / 100000
+  return {
+    wx: at(0), wy: at(1),
+    rx: at(2), ry: at(3),
+    gx: at(4), gy: at(5),
+    bx: at(6), by: at(7),
+  }
+}
+
+function compressedProfile(bytes: Uint8Array, start: number, length: number) {
+  let index = start
+  const limit = Math.min(start + length, start + 80)
+  while (index < limit && bytes[index] !== 0) index++
+  return index + 2 <= start + length ? bytes.subarray(index + 2, start + length) : null
+}
+
+function pngChunks(bytes: Uint8Array) {
+  const idat: Uint8Array[] = []
+  let iccRaw: Uint8Array | null = null
+  let gamma: number | null = null
+  let chrm: Chromaticities | null = null
+  let srgb = false
+  let offset = 8
+
+  while (offset + 8 <= bytes.length) {
+    const length = u32(bytes, offset)
+    const start = offset + 8
+    if (start + length + 4 > bytes.length) break
+    const type = String.fromCharCode(
+      bytes[offset + 4],
+      bytes[offset + 5],
+      bytes[offset + 6],
+      bytes[offset + 7],
+    )
+    if (type === 'IDAT') idat.push(bytes.subarray(start, start + length))
+    if (type === 'IEND') break
+    if (type === 'iCCP') iccRaw = compressedProfile(bytes, start, length)
+    if (type === 'sRGB') srgb = true
+    if (type === 'gAMA' && length >= 4) {
+      const value = u32(bytes, start)
+      if (value > 0) gamma = value / 100000
+    }
+    if (type === 'cHRM' && length >= 32) chrm = chromaticities(bytes, start)
+    offset = start + length + 4
+  }
+
+  return { idat, iccRaw, gamma, chrm, srgb }
+}
+
 export async function decodeDeepPng(bytes: Uint8Array): Promise<Png16 | null> {
   const h = header(bytes)
   if (!h || h.depth !== 16 || h.interlace !== 0) return null
   const channels = CHANNELS[h.colorType]
   if (!channels || !h.width || !h.height) return null
 
-  const idat: Uint8Array[] = []
-  let iccRaw: Uint8Array | null = null
-  let gamma: number | null = null
-  let chrm: Chromaticities | null = null
-  let srgbChunk = false
-  let o = 8
-  while (o + 8 <= bytes.length) {
-    const len = u32(bytes, o)
-    const start = o + 8
-    if (start + len + 4 > bytes.length) break
-    const type = String.fromCharCode(bytes[o + 4], bytes[o + 5], bytes[o + 6], bytes[o + 7])
-    if (type === 'IDAT') {
-      idat.push(bytes.subarray(start, start + len))
-    } else if (type === 'IEND') {
-      break
-    } else if (type === 'iCCP') {
-      // A null-terminated name, a one-byte compression method, then the
-      // zlib-compressed profile.
-      let i = start
-      const limit = Math.min(start + len, start + 80)
-      while (i < limit && bytes[i] !== 0) i++
-      if (i + 2 <= start + len) iccRaw = bytes.subarray(i + 2, start + len)
-    } else if (type === 'sRGB') {
-      srgbChunk = true
-    } else if (type === 'gAMA' && len >= 4) {
-      const v = u32(bytes, start)
-      if (v > 0) gamma = v / 100000
-    } else if (type === 'cHRM' && len >= 32) {
-      const at = (i: number) => u32(bytes, start + i * 4) / 100000
-      chrm = {
-        wx: at(0), wy: at(1),
-        rx: at(2), ry: at(3),
-        gx: at(4), gy: at(5),
-        bx: at(6), by: at(7),
-      }
-    }
-    o = start + len + 4
-  }
+  const chunks = pngChunks(bytes)
+  const { idat, iccRaw } = chunks
+  let { gamma, chrm } = chunks
   if (!idat.length) return null
 
   // An explicit `sRGB` chunk is the authoritative answer, and it outranks any
   // `gAMA`/`cHRM` a writer left beside it for older decoders.
-  if (srgbChunk && !iccRaw) {
+  if (chunks.srgb && !iccRaw) {
     gamma = null
     chrm = null
   }

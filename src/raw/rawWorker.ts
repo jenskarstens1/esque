@@ -12,7 +12,11 @@
 
 import * as Comlink from 'comlink'
 import LibRaw from 'libraw-wasm'
-import type { LibRawSettings } from 'libraw-wasm'
+import type {
+  LibRawImageData,
+  LibRawMetadata,
+  LibRawSettings,
+} from 'libraw-wasm'
 import { floatToHalf, HALF_ONE } from '../core/half'
 import { LINEAR_SETTINGS } from './settings'
 import { flipTransposes } from './orientation'
@@ -335,37 +339,61 @@ async function releaseRaw() {
   }
 }
 
-/** Pulls the catalog-facing metadata out of an already-open LibRaw handle. */
-async function metaFrom(raw: LibRaw): Promise<DecodedMeta | null> {
-  const m = await raw.metadata(true)
-  if (!m) return null
-  const c = m.color_data
-  const inset = m.raw_inset_crops?.find(
-    (crop) =>
-      crop.cwidth > 0 &&
-      crop.cheight > 0 &&
-      crop.cleft >= m.left_margin &&
-      crop.ctop >= m.top_margin &&
-      crop.cleft + crop.cwidth <= m.raw_width &&
-      crop.ctop + crop.cheight <= m.raw_height,
+function cropIsUsable(
+  crop: NonNullable<LibRawMetadata['raw_inset_crops']>[number],
+  m: LibRawMetadata,
+) {
+  return (
+    crop.cwidth > 0 &&
+    crop.cheight > 0 &&
+    crop.cleft >= m.left_margin &&
+    crop.ctop >= m.top_margin &&
+    crop.cleft + crop.cwidth <= m.raw_width &&
+    crop.ctop + crop.cheight <= m.raw_height
   )
-  const rawCrop: RawCrop | null = inset
-    ? [
-        inset.cleft - m.left_margin,
-        inset.ctop - m.top_margin,
-        inset.cwidth,
-        inset.cheight,
-      ]
-    : null
-  const transposed = flipTransposes(m.flip)
-  const width = rawCrop ? (transposed ? rawCrop[3] : rawCrop[2]) : m.width
-  const height = rawCrop ? (transposed ? rawCrop[2] : rawCrop[3]) : m.height
+}
+
+function rawCropFrom(m: LibRawMetadata): RawCrop | null {
+  const inset = m.raw_inset_crops?.find((crop) => cropIsUsable(crop, m))
+  if (!inset) return null
+  return [
+    inset.cleft - m.left_margin,
+    inset.ctop - m.top_margin,
+    inset.cwidth,
+    inset.cheight,
+  ]
+}
+
+function orientedMetaSize(
+  m: LibRawMetadata,
+  rawCrop: RawCrop | null,
+): Pick<DecodedMeta, 'width' | 'height'> {
+  if (!rawCrop) return { width: m.width, height: m.height }
+  if (flipTransposes(m.flip)) {
+    return { width: rawCrop[3], height: rawCrop[2] }
+  }
+  return { width: rawCrop[2], height: rawCrop[3] }
+}
+
+function captureTimeFrom(timestamp: unknown): number | null {
+  return timestamp instanceof Date ? timestamp.getTime() : null
+}
+
+function cameraMetaFrom(
+  m: LibRawMetadata,
+): Pick<
+  DecodedMeta,
+  | 'cameraMake'
+  | 'cameraModel'
+  | 'lens'
+  | 'iso'
+  | 'shutter'
+  | 'aperture'
+  | 'focalLength'
+  | 'captureTime'
+  | 'artist'
+> {
   return {
-    width,
-    height,
-    frameWidth: m.width,
-    frameHeight: m.height,
-    flip: m.flip,
     cameraMake: m.camera_make ?? '',
     cameraModel: m.camera_model ?? '',
     lens: m.lens?.Lens?.trim() || '',
@@ -373,23 +401,69 @@ async function metaFrom(raw: LibRaw): Promise<DecodedMeta | null> {
     shutter: m.shutter ?? 0,
     aperture: m.aperture ?? 0,
     focalLength: m.focal_len ?? 0,
-    captureTime: m.timestamp instanceof Date ? m.timestamp.getTime() : null,
+    captureTime: captureTimeFrom(m.timestamp),
     artist: m.artist ?? '',
-    gps: m.gps_data?.gpsparsed
-      ? {
-          lat: dms(m.gps_data.latitude, m.gps_data.latref),
-          lon: dms(m.gps_data.longitude, m.gps_data.longref),
-          alt: m.gps_data.altitude ?? 0,
-        }
-      : null,
-    camMul: c?.cam_mul ? Array.from(c.cam_mul) : null,
-    preMul: c?.pre_mul ? Array.from(c.pre_mul) : null,
-    camXyz: c?.cam_xyz ? c.cam_xyz.map((r) => Array.from(r)) : null,
-    black: c?.black ?? null,
-    maximum: c?.maximum ?? null,
+  }
+}
+
+function gpsFrom(m: LibRawMetadata): DecodedMeta['gps'] {
+  const gps = m.gps_data
+  if (!gps?.gpsparsed) return null
+  return {
+    lat: dms(gps.latitude, gps.latref),
+    lon: dms(gps.longitude, gps.longref),
+    alt: gps.altitude ?? 0,
+  }
+}
+
+function numberArray(value: number[] | undefined): number[] | null {
+  return value ? Array.from(value) : null
+}
+
+function numberMatrix(value: number[][] | undefined): number[][] | null {
+  return value ? value.map((row) => Array.from(row)) : null
+}
+
+function colorMetaFrom(
+  m: LibRawMetadata,
+): Pick<DecodedMeta, 'camMul' | 'preMul' | 'camXyz' | 'black' | 'maximum'> {
+  const color = m.color_data
+  if (!color) {
+    return { camMul: null, preMul: null, camXyz: null, black: null, maximum: null }
+  }
+  return {
+    camMul: numberArray(color.cam_mul),
+    preMul: numberArray(color.pre_mul),
+    camXyz: numberMatrix(color.cam_xyz),
+    black: color.black ?? null,
+    maximum: color.maximum ?? null,
+  }
+}
+
+function sensorMetaFrom(
+  m: LibRawMetadata,
+): Pick<DecodedMeta, 'thumbWidth' | 'thumbHeight' | 'filters'> {
+  return {
     thumbWidth: m.thumb_width ?? 0,
     thumbHeight: m.thumb_height ?? 0,
     filters: m.filters ?? 0,
+  }
+}
+
+/** Pulls the catalog-facing metadata out of an already-open LibRaw handle. */
+async function metaFrom(raw: LibRaw): Promise<DecodedMeta | null> {
+  const m = await raw.metadata(true)
+  if (!m) return null
+  const rawCrop = rawCropFrom(m)
+  return {
+    ...orientedMetaSize(m, rawCrop),
+    frameWidth: m.width,
+    frameHeight: m.height,
+    flip: m.flip,
+    ...cameraMetaFrom(m),
+    gps: gpsFrom(m),
+    ...colorMetaFrom(m),
+    ...sensorMetaFrom(m),
     rawCrop,
   }
 }
@@ -519,6 +593,245 @@ function transferLinearImage(image: LinearImage): LinearImage {
   return buffer instanceof ArrayBuffer ? Comlink.transfer(image, [buffer]) : image
 }
 
+interface PreviewDecodeContext {
+  meta: DecodedMeta | null
+}
+
+async function previewDemosaicSettings(
+  buffer: ArrayBuffer,
+  halfSize: boolean,
+): Promise<LibRawSettings> {
+  if (halfSize) return {}
+  const header = await probe(buffer.slice(0))
+  return demosaicSettings(header?.filters === XTRANS_FILTERS, 'interactive')
+}
+
+async function embeddedPreviewIfLargeEnough(
+  context: PreviewDecodeContext,
+  raw: LibRaw,
+  maxEdge: number,
+  preferEmbedded: boolean,
+): Promise<Blob | null> {
+  if (!preferEmbedded) return null
+  context.meta = await metaFrom(raw).catch(() => null)
+  const embeddedEdge = Math.max(
+    context.meta?.thumbWidth ?? 0,
+    context.meta?.thumbHeight ?? 0,
+  )
+  if (!(maxEdge <= 0 || embeddedEdge >= maxEdge)) return null
+  return embeddedThumbFrom(raw, maxEdge, 0.88, context.meta?.flip ?? 0)
+}
+
+async function decodedRawPreview(
+  context: PreviewDecodeContext,
+  raw: LibRaw,
+  maxEdge: number,
+  preferEmbedded: boolean,
+): Promise<Blob> {
+  const embedded = await embeddedPreviewIfLargeEnough(
+    context,
+    raw,
+    maxEdge,
+    preferEmbedded,
+  )
+  if (embedded) return embedded
+
+  const img = await raw.imageData()
+  if (!img?.data?.length) {
+    throw new RawError('no-pixels', 'LibRaw returned no pixels')
+  }
+  return imageDataToJpeg(
+    img.data,
+    img.width,
+    img.height,
+    img.colors,
+    img.bits,
+    maxEdge > 0 ? maxEdge : EMBEDDED_PREVIEW_EDGE,
+    0,
+    0.88,
+  )
+}
+
+async function fallbackRawPreview(
+  context: PreviewDecodeContext,
+  raw: LibRaw,
+  maxEdge: number,
+): Promise<Blob | null> {
+  context.meta ??= await metaFrom(raw).catch(() => null)
+  return embeddedThumbFrom(
+    raw,
+    maxEdge,
+    0.88,
+    context.meta?.flip ?? 0,
+  )
+}
+
+async function makeRawPreview(
+  buffer: ArrayBuffer,
+  maxEdge: number,
+  halfSize: boolean,
+  iso: number,
+  rawCrop: RawCrop | null | undefined,
+  preferEmbedded: boolean,
+): Promise<Blob | null> {
+  const quality = await previewDemosaicSettings(buffer, halfSize)
+  const context: PreviewDecodeContext = { meta: null }
+  let raw: LibRaw | undefined
+  try {
+    try {
+      raw = await openRaw(new Uint8Array(buffer), {
+        ...PREVIEW_SETTINGS,
+        ...rawNoiseSettings(iso),
+        ...quality,
+        halfSize,
+        cropbox: rawCrop ?? null,
+      })
+      return await decodedRawPreview(context, raw, maxEdge, preferEmbedded)
+    } catch (error) {
+      if (!raw) throw error
+      const fallback = await fallbackRawPreview(context, raw, maxEdge)
+      if (fallback) return fallback
+      throw error
+    }
+  } catch {
+    return null
+  } finally {
+    if (raw) await releaseRaw()
+  }
+}
+
+async function makePreview(
+  buffer: ArrayBuffer,
+  isRaw: boolean,
+  maxEdge = 1920,
+  halfSize = true,
+  iso = 0,
+  rawCrop?: RawCrop | null,
+  preferEmbedded = true,
+): Promise<Blob | null> {
+  if (!isRaw) return renderedThumb(buffer, maxEdge, 0.88, true).catch(() => null)
+  return makeRawPreview(
+    buffer,
+    maxEdge,
+    halfSize,
+    iso,
+    rawCrop,
+    preferEmbedded,
+  )
+}
+
+async function rawUsesXtrans(
+  buffer: ArrayBuffer,
+  header: DecodedMeta | null | undefined,
+): Promise<boolean> {
+  const metadata = header ?? (await probe(buffer.slice(0)))
+  return metadata?.filters === XTRANS_FILTERS
+}
+
+function linearImageFrom(
+  img: LibRawImageData,
+  meta: DecodedMeta | null,
+  maxEdge: number,
+  whiteLevel: number,
+): LinearImage {
+  const src = img.data as Uint16Array
+  const sw = img.width
+  const sh = img.height
+  const fullWidth = meta?.width ?? sw
+  const fullHeight = meta?.height ?? sh
+  const scale = Math.min(1, maxEdge / Math.max(sw, sh))
+  const width = Math.max(1, Math.round(sw * scale))
+  const height = Math.max(1, Math.round(sh * scale))
+  const data =
+    width === sw && height === sh
+      ? toHalfRGBA(src, sw, sh, img.colors, whiteLevel)
+      : downsampleToHalfRGBA(
+          src,
+          sw,
+          sh,
+          img.colors,
+          width,
+          height,
+          whiteLevel,
+        )
+
+  // dcraw_make_mem_image() already applies S.flip while copying its output.
+  // Rotating this buffer again was the old pipeline's double-orientation bug.
+  return {
+    width,
+    height,
+    data,
+    scale: width / fullWidth,
+    fullWidth,
+    fullHeight,
+    fromRaw: true,
+    meta,
+    whiteLevel,
+  }
+}
+
+async function decodedLinearFrom(
+  raw: LibRaw,
+  maxEdge: number,
+): Promise<LinearImage> {
+  const img = await raw.imageData()
+  if (!img?.data?.length) {
+    throw new RawError('no-pixels', 'LibRaw returned no pixels')
+  }
+  // Read this after processing: `pre_mul` has now been normalised by the exact
+  // scale_colors() run that produced these pixels.
+  const meta = await metaFrom(raw)
+  return linearImageFrom(img, meta, maxEdge, workingHeadroom(meta))
+}
+
+async function fallbackLinearFrom(
+  raw: LibRaw | undefined,
+  maxEdge: number,
+): Promise<LinearImage | null> {
+  if (!raw) return null
+  const meta = await metaFrom(raw).catch(() => null)
+  return embeddedPreviewLinearFrom(raw, maxEdge, meta?.flip ?? 0).catch(() => null)
+}
+
+async function decodeLinear(
+  buffer: ArrayBuffer,
+  isRaw: boolean,
+  maxEdge = 2560,
+  iso = 0,
+  rawCrop?: RawCrop | null,
+  quality: RawDecodeQuality = 'full',
+  header?: DecodedMeta | null,
+  threads?: number,
+): Promise<LinearImage | null> {
+  if (!isRaw) {
+    return transferLinearImage(await decodeRenderedLinear(buffer, maxEdge))
+  }
+
+  // Settings are fixed at open(), so identify the CFA before selecting its
+  // demosaic algorithm. The pool has usually read the header already.
+  const xtrans = await rawUsesXtrans(buffer, header)
+  let raw: LibRaw | undefined
+  try {
+    await limitThreads(threads)
+    raw = await openRaw(new Uint8Array(buffer), {
+      ...LINEAR_SETTINGS,
+      ...rawNoiseSettings(iso),
+      ...demosaicSettings(xtrans, quality),
+      cropbox: rawCrop ?? null,
+    })
+    return transferLinearImage(await decodedLinearFrom(raw, maxEdge))
+  } catch (error) {
+    // A camera LibRaw can't demosaic yet still usually has a large embedded
+    // JPEG. Showing that beats showing nothing, so long as the caller knows
+    // not to apply the RAW base curve to it.
+    const fallback = await fallbackLinearFrom(raw, maxEdge)
+    if (fallback) return transferLinearImage(fallback)
+    throw classify(error)
+  } finally {
+    if (raw) await releaseRaw()
+  }
+}
+
 const api = {
   /**
    * Size of the OpenMP team this worker's LibRaw can form, or 1 when the build
@@ -612,74 +925,7 @@ const api = {
    * shown large enough for the range to be worth keeping. Grid thumbnails stay
    * standard: a 512 px tile is not where a gain map earns its bytes.
    */
-  async makePreview(
-    buffer: ArrayBuffer,
-    isRaw: boolean,
-    maxEdge = 1920,
-    halfSize = true,
-    iso = 0,
-    rawCrop?: RawCrop | null,
-    preferEmbedded = true,
-  ): Promise<Blob | null> {
-    if (!isRaw) return renderedThumb(buffer, maxEdge, 0.88, true).catch(() => null)
-
-    // A full-size preview is about to demosaic the whole sensor, and which
-    // algorithm that picks is worth 9 s on X-Trans. The probe that answers it
-    // costs a copy of the file, so only the expensive branch pays for it.
-    let quality: LibRawSettings = {}
-    if (!halfSize) {
-      quality = demosaicSettings(
-        (await probe(buffer.slice(0)))?.filters === XTRANS_FILTERS,
-        'interactive',
-      )
-    }
-
-    let raw: LibRaw | undefined
-    let meta: DecodedMeta | null = null
-    try {
-      try {
-        raw = await openRaw(new Uint8Array(buffer), {
-          ...PREVIEW_SETTINGS,
-          ...rawNoiseSettings(iso),
-          ...quality,
-          halfSize,
-          cropbox: rawCrop ?? null,
-        })
-        if (preferEmbedded) {
-          meta = await metaFrom(raw).catch(() => null)
-          if (
-            maxEdge <= 0 ||
-            Math.max(meta?.thumbWidth ?? 0, meta?.thumbHeight ?? 0) >= maxEdge
-          ) {
-            const embedded = await embeddedThumbFrom(raw, maxEdge, 0.88, meta?.flip ?? 0)
-            if (embedded) return embedded
-          }
-        }
-        const img = await raw.imageData()
-        if (!img?.data?.length) throw new RawError('no-pixels', 'LibRaw returned no pixels')
-        return await imageDataToJpeg(
-          img.data,
-          img.width,
-          img.height,
-          img.colors,
-          img.bits,
-          maxEdge > 0 ? maxEdge : EMBEDDED_PREVIEW_EDGE,
-          0,
-          0.88,
-        )
-      } catch (error) {
-        if (!raw) throw error
-        meta ??= await metaFrom(raw).catch(() => null)
-        const fallback = await embeddedThumbFrom(raw, maxEdge, 0.88, meta?.flip ?? 0)
-        if (fallback) return fallback
-        throw error
-      }
-    } catch {
-      return null
-    } finally {
-      if (raw) await releaseRaw()
-    }
-  },
+  makePreview,
 
   /**
    * The camera's own preview as a linear working image.
@@ -737,82 +983,7 @@ const api = {
    * the same output size. The embedded camera JPEG remains the fast loading tier;
    * pixels presented as the editable RAW always take the quality path.
    */
-  async decodeLinear(
-    buffer: ArrayBuffer,
-    isRaw: boolean,
-    maxEdge = 2560,
-    iso = 0,
-    rawCrop?: RawCrop | null,
-    quality: RawDecodeQuality = 'full',
-    header?: DecodedMeta | null,
-    threads?: number,
-  ): Promise<LinearImage | null> {
-    if (!isRaw) return transferLinearImage(await decodeRenderedLinear(buffer, maxEdge))
-
-    // Settings are fixed at open(), so identify the CFA before selecting its
-    // demosaic algorithm. The pool has usually read the header already, in which
-    // case this costs nothing.
-    const xtrans = (header ?? (await probe(buffer.slice(0))))?.filters === XTRANS_FILTERS
-
-    let raw: LibRaw | undefined
-    try {
-      await limitThreads(threads)
-      raw = await openRaw(new Uint8Array(buffer), {
-        ...LINEAR_SETTINGS,
-        ...rawNoiseSettings(iso),
-        ...demosaicSettings(xtrans, quality),
-        cropbox: rawCrop ?? null,
-      })
-      const img = await raw.imageData()
-      if (!img?.data?.length) throw new RawError('no-pixels', 'LibRaw returned no pixels')
-      // Read this after processing: `pre_mul` has now been normalised by the
-      // exact scale_colors() run that produced these pixels.
-      const meta = await metaFrom(raw)
-      const whiteLevel = workingHeadroom(meta)
-
-      const src = img.data as Uint16Array
-      const sw = img.width
-      const sh = img.height
-      const fullW = meta?.width ?? sw
-      const fullH = meta?.height ?? sh
-
-      const scale = Math.min(1, maxEdge / Math.max(sw, sh))
-      const dw = Math.max(1, Math.round(sw * scale))
-      const dh = Math.max(1, Math.round(sh * scale))
-      const data =
-        dw === sw && dh === sh
-          ? toHalfRGBA(src, sw, sh, img.colors, whiteLevel)
-          : downsampleToHalfRGBA(src, sw, sh, img.colors, dw, dh, whiteLevel)
-
-      // dcraw_make_mem_image() already applies S.flip while copying its output.
-      // Rotating this buffer again was the old pipeline's double-orientation
-      // bug: portrait RAWs ended up transposed twice while their dimensions were
-      // swapped a second time.
-      return transferLinearImage({
-        width: dw,
-        height: dh,
-        data,
-        scale: dw / fullW,
-        fullWidth: fullW,
-        fullHeight: fullH,
-        fromRaw: true,
-        meta,
-        whiteLevel,
-      })
-    } catch (err) {
-      // A camera LibRaw can't demosaic yet still usually has a large embedded
-      // JPEG. Showing that beats showing nothing, so long as the caller knows
-      // not to apply the RAW base curve to it.
-      const meta = raw ? await metaFrom(raw).catch(() => null) : null
-      const fallback = raw
-        ? await embeddedPreviewLinearFrom(raw, maxEdge, meta?.flip ?? 0).catch(() => null)
-        : null
-      if (fallback) return transferLinearImage(fallback)
-      throw classify(err)
-    } finally {
-      if (raw) await releaseRaw()
-    }
-  },
+  decodeLinear,
 
   /**
    * One horizontal slice of {@link decodeLinear}, for running a demosaic across

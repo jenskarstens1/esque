@@ -111,6 +111,40 @@ function rawBytes(
   return bytes.subarray(at, at + count)
 }
 
+function valueAt(
+  view: DataView,
+  le: boolean,
+  type: number,
+  offset: number,
+): number | undefined {
+  switch (type) {
+    case 1:
+    case 2:
+    case 7:
+      return view.getUint8(offset)
+    case 3:
+      return view.getUint16(offset, le)
+    case 4:
+      return view.getUint32(offset, le)
+    case 5:
+      return view.getUint32(offset, le) / (view.getUint32(offset + 4, le) || 1)
+    case 6:
+      return view.getInt8(offset)
+    case 8:
+      return view.getInt16(offset, le)
+    case 9:
+      return view.getInt32(offset, le)
+    case 10:
+      return view.getInt32(offset, le) / (view.getInt32(offset + 4, le) || 1)
+    case 11:
+      return view.getFloat32(offset, le)
+    case 12:
+      return view.getFloat64(offset, le)
+    default:
+      return undefined
+  }
+}
+
 /** Reads an IFD entry's values, following the offset when they don't fit inline. */
 function values(view: DataView, le: boolean, entry: number | undefined): number[] {
   if (entry === undefined) return []
@@ -129,43 +163,9 @@ function values(view: DataView, le: boolean, entry: number | undefined): number[
 
   const out = new Array<number>(count)
   for (let i = 0; i < count; i++) {
-    const o = at + i * size
-    switch (type) {
-      case 1:
-      case 2:
-      case 7:
-        out[i] = view.getUint8(o)
-        break
-      case 3:
-        out[i] = view.getUint16(o, le)
-        break
-      case 4:
-        out[i] = view.getUint32(o, le)
-        break
-      case 5:
-        out[i] = view.getUint32(o, le) / (view.getUint32(o + 4, le) || 1)
-        break
-      case 6:
-        out[i] = view.getInt8(o)
-        break
-      case 8:
-        out[i] = view.getInt16(o, le)
-        break
-      case 9:
-        out[i] = view.getInt32(o, le)
-        break
-      case 10:
-        out[i] = view.getInt32(o, le) / (view.getInt32(o + 4, le) || 1)
-        break
-      case 11:
-        out[i] = view.getFloat32(o, le)
-        break
-      case 12:
-        out[i] = view.getFloat64(o, le)
-        break
-      default:
-        return []
-    }
+    const value = valueAt(view, le, type, at + i * size)
+    if (value === undefined) return []
+    out[i] = value
   }
   return out
 }
@@ -368,11 +368,56 @@ function unpredictFloat(
 
 // --- main -------------------------------------------------------------------
 
-export async function decodeTiff(bytes: Uint8Array): Promise<TiffImage | null> {
-  if (!isTiff(bytes)) return null
-  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
-  const le = bytes[0] === 0x49
+interface ImageSpec {
+  width: number
+  height: number
+  depth: number
+  spp: number
+  photometric: number
+  channels: number
+  isFloat: boolean
+  isSigned: boolean
+  compression: number
+  predictor: number
+  planar: boolean
+  orientation: number
+  icc: Uint8Array | null
+}
 
+interface StorageSpec {
+  tiled: boolean
+  tileWidth: number
+  tileHeight: number
+  offsets: number[]
+  counts: number[]
+  rowsPerStrip: number
+  chunkCols: number
+  across: number
+  perPlane: number
+  planes: number
+  bytesPer: number
+  samplesPerRow: number
+  rowBytes: number
+}
+
+interface DecodeContext {
+  bytes: Uint8Array
+  le: boolean
+  image: ImageSpec
+  storage: StorageSpec
+  out: Uint16Array | Float32Array
+}
+
+interface Chunk {
+  plane: number
+  col0: number
+  row0: number
+  rows: number
+  expected: number
+  raw: Uint8Array
+}
+
+function fullResolutionIfd(view: DataView, le: boolean): Ifd | null {
   // Some writers park a reduced-resolution preview in IFD0, so walk to the
   // first full-resolution image rather than trusting the first directory.
   let ifd = readIfd(view, le, view.getUint32(4, le))
@@ -381,23 +426,52 @@ export async function decodeTiff(bytes: Uint8Array): Promise<TiffImage | null> {
     if (!(sub & 1)) break
     ifd = readIfd(view, le, ifd.next)
   }
-  if (!ifd) return null
+  return ifd
+}
 
-  const num = (tag: number, fallback: number) =>
-    first(values(view, le, ifd!.entries.get(tag)), fallback)
+function tagNumber(
+  view: DataView,
+  le: boolean,
+  ifd: Ifd,
+  tag: number,
+  fallback: number,
+): number {
+  return first(values(view, le, ifd.entries.get(tag)), fallback)
+}
 
-  const width = num(TAG.width, 0)
-  const height = num(TAG.height, 0)
+function imageDimensions(
+  view: DataView,
+  le: boolean,
+  ifd: Ifd,
+): Pick<ImageSpec, 'width' | 'height'> | null {
+  const width = tagNumber(view, le, ifd, TAG.width, 0)
+  const height = tagNumber(view, le, ifd, TAG.height, 0)
   if (width <= 0 || height <= 0 || width * height > 1 << 30) return null
+  return { width, height }
+}
 
+function sampleSpec(
+  view: DataView,
+  le: boolean,
+  ifd: Ifd,
+): Pick<
+  ImageSpec,
+  'depth' | 'spp' | 'photometric' | 'channels' | 'isFloat' | 'isSigned'
+> | null {
   const bitsPer = values(view, le, ifd.entries.get(TAG.bits))
   const depth = bitsPer.length ? bitsPer[0] : 1
-  if (depth !== 8 && depth !== 16 && depth !== 32) return null
-  if (bitsPer.some((b) => b !== depth)) return null
+  if (![8, 16, 32].includes(depth)) return null
+  if (bitsPer.some((bits) => bits !== depth)) return null
 
-  const spp = num(TAG.samplesPerPixel, bitsPer.length || 1)
-  const photometric = num(TAG.photometric, spp >= 3 ? 2 : 1)
-  if (photometric !== 0 && photometric !== 1 && photometric !== 2) return null
+  const spp = tagNumber(view, le, ifd, TAG.samplesPerPixel, bitsPer.length || 1)
+  const photometric = tagNumber(
+    view,
+    le,
+    ifd,
+    TAG.photometric,
+    spp >= 3 ? 2 : 1,
+  )
+  if (![0, 1, 2].includes(photometric)) return null
 
   const channels = photometric === 2 ? 3 : 1
   if (spp < channels) return null
@@ -407,131 +481,327 @@ export async function decodeTiff(bytes: Uint8Array): Promise<TiffImage | null> {
   const isSigned = format === 2
   if (isFloat && depth !== 32) return null
   if (!isFloat && format !== 1 && !isSigned) return null
+  return { depth, spp, photometric, channels, isFloat, isSigned }
+}
 
-  const compression = num(TAG.compression, COMPRESSION.none)
-  const predictor = num(TAG.predictor, 1)
-  if (predictor !== 1 && predictor !== 2 && predictor !== 3) return null
+function encodingSpec(
+  view: DataView,
+  le: boolean,
+  ifd: Ifd,
+  isFloat: boolean,
+): Pick<ImageSpec, 'compression' | 'predictor' | 'planar' | 'orientation'> | null {
+  const compression = tagNumber(view, le, ifd, TAG.compression, COMPRESSION.none)
+  const predictor = tagNumber(view, le, ifd, TAG.predictor, 1)
+  if (![1, 2, 3].includes(predictor)) return null
   if (predictor === 3 && !isFloat) return null
-  const planar = num(TAG.planar, 1) === 2
-  const orientation = Math.min(8, Math.max(1, num(TAG.orientation, 1)))
+  return {
+    compression,
+    predictor,
+    planar: tagNumber(view, le, ifd, TAG.planar, 1) === 2,
+    orientation: Math.min(
+      8,
+      Math.max(1, tagNumber(view, le, ifd, TAG.orientation, 1)),
+    ),
+  }
+}
 
-  const tileWidth = num(TAG.tileWidth, 0)
-  const tileHeight = num(TAG.tileLength, 0)
+function imageSpec(
+  bytes: Uint8Array,
+  view: DataView,
+  le: boolean,
+  ifd: Ifd,
+): ImageSpec | null {
+  const dimensions = imageDimensions(view, le, ifd)
+  if (!dimensions) return null
+  const samples = sampleSpec(view, le, ifd)
+  if (!samples) return null
+  const encoding = encodingSpec(view, le, ifd, samples.isFloat)
+  if (!encoding) return null
+  return {
+    ...dimensions,
+    ...samples,
+    ...encoding,
+    icc: rawBytes(bytes, view, le, ifd.entries.get(TAG.icc)),
+  }
+}
+
+function storageSpec(
+  view: DataView,
+  le: boolean,
+  ifd: Ifd,
+  image: ImageSpec,
+): StorageSpec | null {
+  const tileWidth = tagNumber(view, le, ifd, TAG.tileWidth, 0)
+  const tileHeight = tagNumber(view, le, ifd, TAG.tileLength, 0)
   const tiled = tileWidth > 0 && tileHeight > 0
-  const icc = rawBytes(bytes, view, le, ifd.entries.get(TAG.icc))
-
-  const offsets = values(view, le, ifd.entries.get(tiled ? TAG.tileOffsets : TAG.stripOffsets))
-  const counts = values(
-    view,
-    le,
-    ifd.entries.get(tiled ? TAG.tileByteCounts : TAG.stripByteCounts),
-  )
+  const offsetTag = tiled ? TAG.tileOffsets : TAG.stripOffsets
+  const countTag = tiled ? TAG.tileByteCounts : TAG.stripByteCounts
+  const offsets = values(view, le, ifd.entries.get(offsetTag))
+  const counts = values(view, le, ifd.entries.get(countTag))
   if (!offsets.length || offsets.length !== counts.length) return null
 
-  const rowsPerStrip = tiled ? tileHeight : Math.min(height, num(TAG.rowsPerStrip, height))
+  const rowsPerStrip = tiled
+    ? tileHeight
+    : Math.min(
+        image.height,
+        tagNumber(view, le, ifd, TAG.rowsPerStrip, image.height),
+      )
   if (rowsPerStrip <= 0) return null
 
-  const chunkCols = tiled ? tileWidth : width
-  const across = tiled ? Math.ceil(width / tileWidth) : 1
-  const down = Math.ceil(height / rowsPerStrip)
-  const perPlane = across * down
+  const chunkCols = tiled ? tileWidth : image.width
+  const across = tiled ? Math.ceil(image.width / tileWidth) : 1
+  const perPlane = across * Math.ceil(image.height / rowsPerStrip)
   // Planar files repeat the whole chunk grid once per sample plane.
-  const planes = planar ? spp : 1
+  const planes = image.planar ? image.spp : 1
   if (offsets.length < perPlane * planes) return null
 
-  const bytesPer = depth >> 3
-  const samplesPerRow = chunkCols * (planar ? 1 : spp)
-  const rowBytes = samplesPerRow * bytesPer
+  const bytesPer = image.depth >> 3
+  const samplesPerRow = chunkCols * (image.planar ? 1 : image.spp)
+  return {
+    tiled,
+    tileWidth,
+    tileHeight,
+    offsets,
+    counts,
+    rowsPerStrip,
+    chunkCols,
+    across,
+    perPlane,
+    planes,
+    bytesPer,
+    samplesPerRow,
+    rowBytes: samplesPerRow * bytesPer,
+  }
+}
+
+function chunkAt(context: DecodeContext, chunkIndex: number): Chunk | null {
+  const { bytes, image, storage } = context
+  const plane = image.planar
+    ? Math.floor(chunkIndex / storage.perPlane)
+    : 0
+  // Extra samples (alpha and friends) have their own planes; skip them.
+  if (image.planar && plane >= image.channels) return null
+
+  const index = image.planar
+    ? chunkIndex % storage.perPlane
+    : chunkIndex
+  const col0 = storage.tiled
+    ? (index % storage.across) * storage.tileWidth
+    : 0
+  const row0 = Math.floor(index / storage.across) * storage.rowsPerStrip
+  if (row0 >= image.height) return null
+
+  const start = storage.offsets[chunkIndex]
+  const size = storage.counts[chunkIndex]
+  if (start < 0 || size <= 0 || start + size > bytes.length) return null
+
+  // Tiles are always stored full size; strips are clipped by the image edge.
+  const rows = storage.tiled
+    ? storage.tileHeight
+    : Math.min(storage.rowsPerStrip, image.height - row0)
+  return {
+    plane,
+    col0,
+    row0,
+    rows,
+    expected: storage.rowBytes * rows,
+    raw: bytes.subarray(start, start + size),
+  }
+}
+
+async function decompressChunk(
+  raw: Uint8Array,
+  compression: number,
+  expected: number,
+): Promise<Uint8Array | null | undefined> {
+  switch (compression) {
+    case COMPRESSION.none:
+      return raw
+    case COMPRESSION.lzw:
+      return lzw(raw, expected)
+    case COMPRESSION.deflate:
+    case COMPRESSION.deflateAlt:
+      return inflate(raw).catch(() => null)
+    case COMPRESSION.packbits:
+      return packBits(raw, expected)
+    default:
+      return undefined
+  }
+}
+
+function applyPredictor(
+  row: Uint8Array,
+  context: DecodeContext,
+  stride: number,
+): void {
+  const { image, storage, le } = context
+  if (image.predictor === 2) {
+    unpredictHorizontal(
+      row,
+      storage.samplesPerRow,
+      stride,
+      storage.bytesPer,
+      le,
+    )
+  } else if (image.predictor === 3) {
+    unpredictFloat(
+      row,
+      storage.samplesPerRow,
+      stride,
+      storage.bytesPer,
+      le,
+    )
+  }
+}
+
+function integerSample(
+  view: DataView,
+  row: Uint8Array,
+  sample: number,
+  depth: number,
+  isSigned: boolean,
+  le: boolean,
+): number {
+  switch (depth) {
+    case 8:
+      // 257 maps 255 to exactly 65535 rather than leaving a dark gap.
+      return (isSigned ? view.getInt8(sample) + 128 : row[sample]) * 257
+    case 16:
+      return isSigned
+        ? view.getInt16(sample * 2, le) + 32768
+        : view.getUint16(sample * 2, le)
+    default: {
+      const code = isSigned
+        ? view.getInt32(sample * 4, le) + 2147483648
+        : view.getUint32(sample * 4, le)
+      return code / 65537
+    }
+  }
+}
+
+function storedSample(
+  view: DataView,
+  row: Uint8Array,
+  sample: number,
+  image: ImageSpec,
+  le: boolean,
+): number {
+  let value: number
+  if (image.isFloat) {
+    value = view.getFloat32(sample * 4, le)
+    // NaN and negatives are what a compositing app leaves behind in untouched
+    // regions; they poison every average downstream.
+    if (!(value > 0)) value = 0
+  } else {
+    value = integerSample(
+      view,
+      row,
+      sample,
+      image.depth,
+      image.isSigned,
+      le,
+    )
+  }
+  // WhiteIsZero stores an inverted image, as scanners and fax do.
+  if (image.photometric === 0) {
+    return image.isFloat ? 1 - value : 65535 - value
+  }
+  return value
+}
+
+function writeChunkRow(
+  context: DecodeContext,
+  chunk: Chunk,
+  row: Uint8Array,
+  y: number,
+  validCols: number,
+): void {
+  const { image, le, out } = context
+  const view = new DataView(row.buffer, row.byteOffset, row.byteLength)
+  const channelLimit = image.planar ? 1 : image.channels
+  for (let x = 0; x < validCols; x++) {
+    const output =
+      (y * image.width + chunk.col0 + x) * image.channels +
+      (image.planar ? chunk.plane : 0)
+    for (let channel = 0; channel < channelLimit; channel++) {
+      const sample = image.planar ? x : x * image.spp + channel
+      out[output + channel] = storedSample(view, row, sample, image, le)
+    }
+  }
+}
+
+function decodeChunkRows(
+  context: DecodeContext,
+  chunk: Chunk,
+  data: Uint8Array,
+): void {
+  const { image, storage } = context
+  const usableRows = Math.min(
+    chunk.rows,
+    Math.floor(data.length / storage.rowBytes),
+  )
+  const stride = image.planar ? 1 : image.spp
+  const validCols = Math.min(storage.chunkCols, image.width - chunk.col0)
+
+  for (let rowIndex = 0; rowIndex < usableRows; rowIndex++) {
+    const y = chunk.row0 + rowIndex
+    if (y >= image.height) break
+    // subarray keeps the predictor writing back into `data`, which is what the
+    // next row's differencing needs.
+    const row = data.subarray(
+      rowIndex * storage.rowBytes,
+      (rowIndex + 1) * storage.rowBytes,
+    )
+    applyPredictor(row, context, stride)
+    writeChunkRow(context, chunk, row, y, validCols)
+  }
+}
+
+async function decodeChunks(context: DecodeContext): Promise<boolean> {
+  const { image, storage } = context
+  for (let index = 0; index < storage.perPlane * storage.planes; index++) {
+    const chunk = chunkAt(context, index)
+    if (!chunk) continue
+    const data = await decompressChunk(
+      chunk.raw,
+      image.compression,
+      chunk.expected,
+    )
+    if (data === undefined) return false
+    if (!data || data.length < storage.rowBytes) continue
+    decodeChunkRows(context, chunk, data)
+  }
+  return true
+}
+
+export async function decodeTiff(bytes: Uint8Array): Promise<TiffImage | null> {
+  if (!isTiff(bytes)) return null
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+  const le = bytes[0] === 0x49
+  const ifd = fullResolutionIfd(view, le)
+  if (!ifd) return null
+
+  const image = imageSpec(bytes, view, le, ifd)
+  if (!image) return null
+  const storage = storageSpec(view, le, ifd, image)
+  if (!storage) return null
+
   // A float TIFF is scene-linear and may carry values above 1. Quantising it
   // into 16-bit integers would clip exactly the highlights it was written to
   // preserve, so the float path keeps its own buffer.
-  const out = isFloat
-    ? new Float32Array(width * height * channels)
-    : new Uint16Array(width * height * channels)
-
-  for (let c = 0; c < perPlane * planes; c++) {
-    const plane = planar ? Math.floor(c / perPlane) : 0
-    // Extra samples (alpha and friends) have their own planes; skip them.
-    if (planar && plane >= channels) continue
-
-    const index = planar ? c % perPlane : c
-    const col0 = tiled ? (index % across) * tileWidth : 0
-    const row0 = Math.floor(index / across) * rowsPerStrip
-    if (row0 >= height) continue
-
-    const start = offsets[c]
-    const size = counts[c]
-    if (start < 0 || size <= 0 || start + size > bytes.length) continue
-    const raw = bytes.subarray(start, start + size)
-
-    // Tiles are always stored full size; strips are clipped by the image edge.
-    const rows = tiled ? tileHeight : Math.min(rowsPerStrip, height - row0)
-    const expected = rowBytes * rows
-
-    let data: Uint8Array | null
-    switch (compression) {
-      case COMPRESSION.none:
-        data = raw
-        break
-      case COMPRESSION.lzw:
-        data = lzw(raw, expected)
-        break
-      case COMPRESSION.deflate:
-      case COMPRESSION.deflateAlt:
-        data = await inflate(raw).catch(() => null)
-        break
-      case COMPRESSION.packbits:
-        data = packBits(raw, expected)
-        break
-      default:
-        return null
-    }
-    if (!data || data.length < rowBytes) continue
-
-    const usableRows = Math.min(rows, Math.floor(data.length / rowBytes))
-    const stride = planar ? 1 : spp
-    const validCols = Math.min(chunkCols, width - col0)
-
-    for (let r = 0; r < usableRows; r++) {
-      const y = row0 + r
-      if (y >= height) break
-
-      // subarray keeps the predictor writing back into `data`, which is what
-      // the next row's differencing needs.
-      const row = data.subarray(r * rowBytes, (r + 1) * rowBytes)
-      if (predictor === 2) unpredictHorizontal(row, samplesPerRow, stride, bytesPer, le)
-      else if (predictor === 3) unpredictFloat(row, samplesPerRow, stride, bytesPer, le)
-
-      const rv = new DataView(row.buffer, row.byteOffset, row.byteLength)
-      for (let x = 0; x < validCols; x++) {
-        const o = ((y * width + col0 + x) * channels + (planar ? plane : 0)) * 1
-        const limit = planar ? 1 : channels
-        for (let ch = 0; ch < limit; ch++) {
-          const s = planar ? x : x * spp + ch
-          let v: number
-          if (isFloat) {
-            v = rv.getFloat32(s * 4, le)
-            // NaN and negatives are what a compositing app leaves behind in
-            // untouched regions; they poison every average downstream.
-            if (!(v > 0)) v = 0
-          } else if (depth === 8) {
-            // 257 maps 255 to exactly 65535 rather than leaving a dark gap.
-            v = (isSigned ? rv.getInt8(s) + 128 : row[s]) * 257
-          } else if (depth === 16) {
-            v = isSigned ? rv.getInt16(s * 2, le) + 32768 : rv.getUint16(s * 2, le)
-          } else {
-            const code = isSigned
-              ? rv.getInt32(s * 4, le) + 2147483648
-              : rv.getUint32(s * 4, le)
-            v = code / 65537
-          }
-          // WhiteIsZero stores an inverted image, as scanners and fax do.
-          if (photometric === 0) v = isFloat ? 1 - v : 65535 - v
-          out[o + ch] = v
-        }
-      }
-    }
+  const out = image.isFloat
+    ? new Float32Array(image.width * image.height * image.channels)
+    : new Uint16Array(image.width * image.height * image.channels)
+  const decoded = await decodeChunks({ bytes, le, image, storage, out })
+  if (!decoded) return null
+  return {
+    width: image.width,
+    height: image.height,
+    channels: image.channels,
+    data: out,
+    orientation: image.orientation,
+    linear: image.isFloat,
+    depth: image.depth,
+    icc: image.icc,
   }
-
-  return { width, height, channels, data: out, orientation, linear: isFloat, depth, icc }
 }

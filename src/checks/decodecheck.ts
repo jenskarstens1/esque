@@ -30,14 +30,24 @@ declare global {
 }
 
 const failures: string[] = []
-const same = (actual: ArrayLike<number>, expected: ArrayLike<number>, label: string, tolerance = 0) => {
+interface CheckContext {
+  failures: string[]
+}
+
+const same = (
+  context: CheckContext,
+  actual: ArrayLike<number>,
+  expected: ArrayLike<number>,
+  label: string,
+  tolerance = 0,
+) => {
   if (actual.length !== expected.length) {
-    failures.push(`${label}: length ${actual.length}, expected ${expected.length}`)
+    context.failures.push(`${label}: length ${actual.length}, expected ${expected.length}`)
     return
   }
   for (let i = 0; i < actual.length; i++) {
     if (Math.abs(actual[i] - expected[i]) > tolerance) {
-      failures.push(`${label}: sample ${i} is ${actual[i]}, expected ${expected[i]}`)
+      context.failures.push(`${label}: sample ${i} is ${actual[i]}, expected ${expected[i]}`)
       return
     }
   }
@@ -169,7 +179,7 @@ function signedPredictorTiff() {
   return writeTiff(true, entries, [], pixelOffset, payload)
 }
 
-async function run() {
+async function checkEncodedFormats(context: CheckContext) {
   const rgb16 = new Uint16Array([
     0, 1, 65535,
     32768, 4096, 60000,
@@ -180,10 +190,10 @@ async function run() {
   ])
 
   const png = await decodeDeepPng(await encodePng16({ width: 3, height: 2, data: rgb16 }))
-  if (!png) failures.push('PNG16 did not decode')
+  if (!png) context.failures.push('PNG16 did not decode')
   else {
-    same(png.data, rgb16, 'PNG16')
-    if (png.width !== 3 || png.height !== 2 || png.channels !== 3) failures.push('PNG16 shape')
+    same(context, png.data, rgb16, 'PNG16')
+    if (png.width !== 3 || png.height !== 2 || png.channels !== 3) context.failures.push('PNG16 shape')
   }
 
   for (const compress of [false, true]) {
@@ -195,21 +205,23 @@ async function run() {
       compress,
     })
     const decoded = await decodeTiff(new Uint8Array(await encoded.arrayBuffer()))
-    if (!decoded) failures.push(`TIFF16 ${compress ? 'deflate' : 'plain'} did not decode`)
-    else same(decoded.data, rgb16, `TIFF16 ${compress ? 'deflate' : 'plain'}`)
+    if (!decoded) context.failures.push(`TIFF16 ${compress ? 'deflate' : 'plain'} did not decode`)
+    else same(context, decoded.data, rgb16, `TIFF16 ${compress ? 'deflate' : 'plain'}`)
   }
 
   for (const le of [true, false]) {
     const fixture = floatPredictorTiff(le)
     const decoded = await decodeTiff(fixture.bytes)
-    if (!decoded) failures.push(`float TIFF ${le ? 'LE' : 'BE'} did not decode`)
-    else same(decoded.data, fixture.expected, `float TIFF ${le ? 'LE' : 'BE'}`, 1e-6)
+    if (!decoded) context.failures.push(`float TIFF ${le ? 'LE' : 'BE'} did not decode`)
+    else same(context, decoded.data, fixture.expected, `float TIFF ${le ? 'LE' : 'BE'}`, 1e-6)
   }
 
   const signed = await decodeTiff(signedPredictorTiff())
-  if (!signed) failures.push('signed TIFF did not decode')
-  else same(signed.data, new Uint16Array([0, 32768, 65535]), 'signed TIFF')
+  if (!signed) context.failures.push('signed TIFF did not decode')
+  else same(context, signed.data, new Uint16Array([0, 32768, 65535]), 'signed TIFF')
+}
 
+async function checkDemandQueue(context: CheckContext) {
   const cache = new Map<string, { demand: number }>()
   let produced = 0
   const request = createDemandQueue<string, { demand: number }>({
@@ -235,17 +247,19 @@ async function run() {
   controller.abort()
   try {
     await cancelled
-    failures.push('cancelled demand resolved')
+    context.failures.push('cancelled demand resolved')
   } catch (error) {
     if (!(error instanceof DOMException) || error.name !== 'AbortError') {
-      failures.push('cancelled demand lost its AbortError')
+      context.failures.push('cancelled demand lost its AbortError')
     }
   }
   const replacement = await request('photo', 200)
   if (replacement?.demand !== 200 || produced !== 2) {
-    failures.push(`demand queue did not recover after cancellation (${produced})`)
+    context.failures.push(`demand queue did not recover after cancellation (${produced})`)
   }
+}
 
+async function checkInProgressCache(context: CheckContext) {
   // A writer creates the OPFS entry before close() publishes its bytes. React
   // StrictMode can mount a second preview consumer inside that interval, so an
   // empty in-progress file must remain a cache miss rather than becoming a
@@ -254,9 +268,11 @@ async function run() {
   const root = await navigator.storage.getDirectory()
   const dir = await root.getDirectoryHandle('decodecheck', { create: true })
   await dir.getFileHandle('in-progress.jpg', { create: true })
-  if ((await cacheRead(emptyKey)) !== null) failures.push('empty in-progress cache entry was published')
+  if ((await cacheRead(emptyKey)) !== null) context.failures.push('empty in-progress cache entry was published')
   await cacheDelete(emptyKey)
+}
 
+async function checkProxyCache(context: CheckContext) {
   const photo: Photo = {
     id: '__decodecheck_proxy__',
     folderId: '__decodecheck__',
@@ -330,19 +346,26 @@ async function run() {
       hit.data.join(',') !== proxy.data.join(',') ||
       Math.abs(hit.asShot.temp - proxy.asShot.temp) > 0.01
     ) {
-      failures.push('linear proxy cache did not round-trip')
+      context.failures.push('linear proxy cache did not round-trip')
     }
     if (
       saved &&
       (await readProxyCache({ ...saved, fileSize: saved.fileSize + 1 }, PROXY_TIER)) !== null
     ) {
-      failures.push('linear proxy cache ignored the source fingerprint')
+      context.failures.push('linear proxy cache ignored the source fingerprint')
     }
   } finally {
     await cacheDelete(linearKey)
     await db.photos.delete(photo.id)
   }
+}
 
+async function run() {
+  const context = { failures }
+  await checkEncodedFormats(context)
+  await checkDemandQueue(context)
+  await checkInProgressCache(context)
+  await checkProxyCache(context)
   return { pass: failures.length === 0, failures }
 }
 

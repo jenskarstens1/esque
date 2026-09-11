@@ -229,6 +229,8 @@ async function blobSize(blob: Blob | null): Promise<[number, number] | null> {
 
 async function run() {
   const started = performance.now()
+  async function checkDecodePipeline() {
+  async function loadPrimaryDecode() {
   const response = await fetch(fixture)
   if (!response.ok) throw new Error(`Fixture download failed: HTTP ${response.status}`)
   const buffer = await response.arrayBuffer()
@@ -266,6 +268,35 @@ async function run() {
   const image = sourceOf(full)
   const stats = sourceStats(image)
   const meta = full.meta
+  return {
+    buffer,
+    metadataMs,
+    decodedMeta,
+    iso,
+    linearTimed,
+    embeddedTimed,
+    full,
+    embedded,
+    image,
+    stats,
+    meta,
+  }
+  }
+  const {
+    buffer,
+    metadataMs,
+    decodedMeta,
+    iso,
+    linearTimed,
+    embeddedTimed,
+    full,
+    embedded,
+    image,
+    stats,
+    meta,
+  } = await loadPrimaryDecode()
+
+  async function loadRelatedImages() {
   const [renderedRgb, nativePreviewSize, previewSize, generatedPreviewSize, thumbSize, ingest] =
     await Promise.all([
       renderedRoundTrip(),
@@ -284,6 +315,18 @@ async function run() {
         thumbSize: await blobSize(result.thumb),
       })),
     ])
+  return { renderedRgb, nativePreviewSize, previewSize, generatedPreviewSize, thumbSize, ingest }
+  }
+  const {
+    renderedRgb,
+    nativePreviewSize,
+    previewSize,
+    generatedPreviewSize,
+    thumbSize,
+    ingest,
+  } = await loadRelatedImages()
+
+  function checkDecodedDimensions() {
   const expectedSize =
     meta?.cameraModel === 'EOS 5D Mark II'
       ? flipTransposes(meta.flip)
@@ -309,6 +352,10 @@ async function run() {
     Math.abs(full.scale - full.width / full.fullWidth) < 1e-6,
     `decode scale ${full.scale} does not match its dimensions`,
   )
+  }
+  checkDecodedDimensions()
+
+  function checkEmbeddedDimensions() {
   // The embedded tier is what Develop paints first, so it has to agree with the
   // real conversion about the shape of the photo — a stand-in that is rotated
   // or a different aspect would make the swap a visible jump.
@@ -323,6 +370,10 @@ async function run() {
       ((embedded.width > embedded.height) === (full.width > full.height) && !embedded.fromRaw),
     `embedded tier orientation is ${embedded?.width}x${embedded?.height}`,
   )
+  }
+  checkEmbeddedDimensions()
+
+  function checkPreviewDimensions() {
   ok(
     !!nativePreviewSize &&
       (nativePreviewSize[0] > nativePreviewSize[1]) === (full.fullWidth > full.fullHeight) &&
@@ -343,6 +394,10 @@ async function run() {
       Math.max(...generatedPreviewSize) === 640,
     `generated preview orientation/size is ${generatedPreviewSize?.join('x') ?? 'missing'}`,
   )
+  }
+  checkPreviewDimensions()
+
+  function checkThumbnailDimensions() {
   ok(
     !!thumbSize &&
       (thumbSize[0] > thumbSize[1]) === (full.fullWidth > full.fullHeight) &&
@@ -355,6 +410,10 @@ async function run() {
       Math.max(...ingest.thumbSize) === 160,
     `ingest thumbnail orientation/size is ${ingest.thumbSize?.join('x') ?? 'missing'}`,
   )
+  }
+  checkThumbnailDimensions()
+
+  function checkMetadataAndSamples() {
   ok(
     fixture === DEFAULT_FIXTURE ? meta?.cameraMake === 'Canon' : !!meta?.cameraMake,
     `camera make is ${meta?.cameraMake || 'missing'}`,
@@ -377,7 +436,46 @@ async function run() {
     ) <= 3,
     `rendered sRGB round-trip produced ${renderedRgb.join(', ')}`,
   )
+  }
+  checkMetadataAndSamples()
+  return {
+    buffer,
+    metadataMs,
+    linearTimed,
+    embeddedTimed,
+    full,
+    embedded,
+    image,
+    stats,
+    meta,
+    renderedRgb,
+    nativePreviewSize,
+    previewSize,
+    generatedPreviewSize,
+    thumbSize,
+    ingest,
+  }
+  }
+  const decoded = await checkDecodePipeline()
+  const {
+    buffer,
+    metadataMs,
+    linearTimed,
+    embeddedTimed,
+    full,
+    embedded,
+    image,
+    stats,
+    meta,
+    renderedRgb,
+    nativePreviewSize,
+    previewSize,
+    generatedPreviewSize,
+    thumbSize,
+    ingest,
+  } = decoded
 
+  async function checkDefaultAppearance() {
   const defaultAppearance = await renderedStats(
     image,
     defaultEdits('raw', image.asShot, meta?.iso),
@@ -552,6 +650,28 @@ async function run() {
       'luminance noise contrast does not restore local contrast',
     )
   }
+  return {
+    defaultAppearance,
+    cameraJpegAppearance,
+    matchedAppearance,
+    qualityVariants,
+    detailControls,
+    edits,
+    renderedBeforeAuto,
+  }
+  }
+  const appearance = await checkDefaultAppearance()
+  const {
+    defaultAppearance,
+    cameraJpegAppearance,
+    matchedAppearance,
+    qualityVariants,
+    detailControls,
+    edits,
+    renderedBeforeAuto,
+  } = appearance
+
+  async function checkAutoDevelop() {
   const auto = autoDevelop(image, edits)
   applyAuto(edits, auto)
   const autoAgain = autoDevelop(image, edits)
@@ -587,6 +707,9 @@ async function run() {
     renderedAfterAuto.p50 > 0.16 && renderedAfterAuto.p50 < 0.72,
     `Auto mid-tone landed at ${renderedAfterAuto.p50}`,
   )
+  return { auto, renderedAfterAuto }
+  }
+  const { auto, renderedAfterAuto } = await checkAutoDevelop()
 
   return {
     pass: failures.length === 0,
