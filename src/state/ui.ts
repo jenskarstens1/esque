@@ -83,6 +83,16 @@ export type DevelopTool = "none" | "crop" | "heal" | "redeye" | "mask";
 export interface UIState {
   module: Module;
   viewMode: ViewMode;
+  /**
+   * The Library's own layout, held while Develop is open.
+   *
+   * Develop is a single photograph by definition, so entering it puts
+   * `viewMode` in the loupe. Writing that over the Library's layout means a
+   * grid you spent the morning culling in comes back as a loupe you never
+   * asked for, and a Compare you set up is simply gone. So the Library's
+   * choice is kept here and handed back on the way in.
+   */
+  libraryView: ViewMode;
   developTool: DevelopTool;
   /**
    * Whether the white-balance dropper is armed.
@@ -344,6 +354,7 @@ export const useUI = create<UIState>()(
   persist(
     (set, get) => ({      module: "library",
       viewMode: "grid",
+      libraryView: "grid",
       developTool: "none",
       wbPicking: false,
 
@@ -393,15 +404,19 @@ export const useUI = create<UIState>()(
       setModule: (module) =>
         set((s) => ({
           module,
-          // Entering Develop always lands on the single-image view.
-          viewMode: module === "develop" ? "loupe" : s.viewMode,
+          // Entering Develop always lands on the single-image view; leaving it
+          // gives the Library back the layout it was in, rather than stranding
+          // the photographer in a loupe Develop chose for them.
+          viewMode: module === "develop" ? "loupe" : s.libraryView,
           developTool: "none",
           wbPicking: false,
           // A drawer belongs to the module that opened it — carrying the Library's
           // catalog tree into Develop would show a panel nothing in view uses.
           overlayPanel: null,
         })),
-      setViewMode: (viewMode) => set({ viewMode }),
+      // Every control that sets a view mode is a Library control, so choosing
+      // one is also choosing what the Library goes back to.
+      setViewMode: (viewMode) => set({ viewMode, libraryView: viewMode }),
       setDevelopTool: (developTool) =>
         set((s) => ({
           developTool: s.developTool === developTool ? "none" : developTool,

@@ -23,11 +23,23 @@ const NO_PHOTOS: Photo[] = []
  * creates a new one — so "nothing yet" and "nothing here" are the same value to
  * anyone reading `?? []`. `usePhotos` has to tell them apart, because acting on
  * the first as though it were the second throws away the selection.
+ *
+ * For the same reason the *previous* answer is held across a remount. Crossing
+ * back from Develop rebuilds this query from scratch, and for those frames the
+ * Library honestly believed it was empty — long enough to put the "no photos
+ * here" screen on top of a full catalogue, mid-switch. The same source resolved
+ * a moment ago to a set that is still true, so that is what it shows until
+ * Dexie answers. A *different* source has nothing to stand in with and waits,
+ * exactly as before.
  */
+let lastSourceAnswer: { key: string; photos: Photo[] } | null = null
+
 export function useSourceQuery(): Photo[] | undefined {
   const source = useCatalog((s) => s.source)
+  const sourceId = 'id' in source ? source.id : ''
+  const key = `${source.kind}/${sourceId}`
 
-  return useLiveQuery(async () => {
+  const answer = useLiveQuery(async () => {
     if (source.kind === 'folder') {
       return db.photos.where('folderId').equals(source.id).toArray()
     }
@@ -47,7 +59,13 @@ export function useSourceQuery(): Photo[] | undefined {
       return latest ? all.filter((p) => p.addedAt === latest) : []
     }
     return db.photos.toArray()
-  }, [source.kind, 'id' in source ? source.id : ''])
+  }, [source.kind, sourceId])
+
+  if (answer) {
+    if (lastSourceAnswer?.photos !== answer) lastSourceAnswer = { key, photos: answer }
+    return answer
+  }
+  return lastSourceAnswer?.key === key ? lastSourceAnswer.photos : undefined
 }
 
 /** Photos for the current source, before filtering — what the filter bar counts. */
@@ -97,8 +115,50 @@ export function usePhotos(): Photo[] {
   return photos
 }
 
+/**
+ * The last row each id answered with, so a remount has something true to draw.
+ *
+ * A live query has no result on the render it is created, and crossing between
+ * Library and Develop creates a new one. For those frames Develop has no photo
+ * at all: no stand-in, nothing under the canvas that hasn't drawn yet, so the
+ * viewport goes black in the middle of a switch that should have been
+ * continuous. Standing in with the row this very id last resolved to is not a
+ * guess — it is the same photograph, a few frames old, and it is replaced the
+ * moment Dexie answers.
+ *
+ * A handful of entries is all it takes to bridge a remount, so the map is
+ * capped rather than left to grow with everything ever opened.
+ */
+const lastKnownPhoto = new Map<string, Photo>()
+const LAST_KNOWN_PHOTOS = 8
+
 export function usePhoto(id: string | null): Photo | undefined {
-  return useLiveQuery(async () => (id ? db.photos.get(id) : undefined), [id])
+  // Wrapped, because `undefined` from the query itself cannot tell "not
+  // answered yet" from "answered: this photo is gone" — and standing in for a
+  // photo that has been deleted would keep it on screen after it was removed.
+  const answer = useLiveQuery(
+    async () => ({ row: id ? await db.photos.get(id) : undefined }),
+    [id],
+  )
+
+  if (!id) return undefined
+  if (!answer) return lastKnownPhoto.get(id)
+
+  if (!answer.row) {
+    lastKnownPhoto.delete(id)
+    return undefined
+  }
+  if (lastKnownPhoto.get(id) !== answer.row) {
+    // Re-inserted rather than updated: Map keeps insertion order, which is what
+    // makes the eviction below drop the least recently seen photo.
+    lastKnownPhoto.delete(id)
+    lastKnownPhoto.set(id, answer.row)
+    if (lastKnownPhoto.size > LAST_KNOWN_PHOTOS) {
+      const oldest = lastKnownPhoto.keys().next().value
+      if (oldest !== undefined) lastKnownPhoto.delete(oldest)
+    }
+  }
+  return answer.row
 }
 
 export function useSelectedPhotos(): Photo[] {

@@ -376,7 +376,10 @@ export const COMMANDS: Command[] = [
     // A tool is the innermost thing open, so it unwinds first.
     run: ({ ui }) => {
       if (ui.module === 'develop' && ui.developTool !== 'none') ui.setDevelopTool('none')
-      else if (ui.viewMode !== 'grid') ui.setViewMode('grid')
+      // View modes belong to the Library. Pressing Escape in Develop used to
+      // set one anyway — invisible at the time, and it threw away the layout
+      // the Library was holding for the trip back.
+      else if (ui.module === 'library' && ui.viewMode !== 'grid') ui.setViewMode('grid')
     },
   },
 
