@@ -9,6 +9,7 @@ export function ImportHUD() {
   const active = useImporter((s) => s.active)
   const cancelling = useImporter((s) => s.cancelling)
   const progress = useImporter((s) => s.progress)
+  const batch = useImporter((s) => s.batch)
   const cancel = useImporter((s) => s.cancel)
 
   /*
@@ -34,6 +35,13 @@ export function ImportHUD() {
   const scanning = progress.phase === 'scanning'
   const developing = progress.phase === 'developing'
   const pct = progress.total ? Math.min(1, progress.done / progress.total) : 0
+  /*
+   * A drop of several folders is several scans, each counting from zero. Naming
+   * the one in hand is what keeps that from reading as a progress bar that
+   * restarts for no reason.
+   */
+  const where = batch ? `${batch.done + 1} of ${batch.total}` : ''
+  const detail = [where, progress.current].filter(Boolean).join(' · ')
 
   return (
     <div className="pointer-events-none fixed inset-x-0 bottom-20 z-50 flex justify-center sm:bottom-6">
@@ -64,7 +72,7 @@ export function ImportHUD() {
             <div className="truncate text-micro text-label-tertiary">
               {cancelling
                 ? 'Finishing files already in progress'
-                : progress.current ||
+                : detail ||
                   (scanning ? 'Looking for photos' : developing ? 'Almost done' : '')}
             </div>
           </div>

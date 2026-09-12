@@ -862,7 +862,7 @@ export function sourceMenuItems(
             {
               label: 'Import Files…',
               icon: <FilePlusIcon size={MENU_ICON} />,
-              onSelect: () => void useImporter.getState().runFiles(),
+              onSelect: () => void useImporter.getState().runFiles(null, true),
             } as MenuItem,
           ]),
       { kind: 'separator' },

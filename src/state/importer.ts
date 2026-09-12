@@ -1,25 +1,43 @@
 import { create } from 'zustand'
 import { importFiles, importFolder, syncFolder, type ImportProgress } from '../catalog/import'
-import { filePickerSupported, fsSupported, pickFiles, pickFolder } from '../catalog/fs'
+import { filePickerSupported, fsSupported, isSupported, pickFiles, pickFolder } from '../catalog/fs'
 import { scheduleEvict } from '../catalog/opfs'
 import { useCatalog } from './catalog'
 import { toast } from '../design/toast'
 import type { CatalogFolder } from '../core/types'
 
+/**
+ * Where a job is in a run made of several sources.
+ *
+ * A drop can carry three folders and a handful of loose files, and each of
+ * those is a separate scan with its own file count. Without this the HUD would
+ * restart at zero four times with nothing to say why.
+ */
+export interface ImportBatch {
+  /** Sources finished so far, so the one in progress is `done + 1`. */
+  done: number
+  total: number
+}
+
 interface ImporterState {
   active: boolean
   cancelling: boolean
   progress: ImportProgress | null
+  /** Set only while a run covers more than one source. */
+  batch: ImportBatch | null
   controller: AbortController | null
   run: (handle?: FileSystemDirectoryHandle | null) => Promise<void>
   /** Imports individually picked files rather than a whole folder. */
   runFiles: (handles?: FileSystemFileHandle[] | null, multiple?: boolean) => Promise<void>
+  /** Imports a dropped mix of folders and files as one job. */
+  runDropped: (handles: FileSystemHandle[]) => Promise<void>
   sync: (folder: CatalogFolder) => Promise<void>
   cancel: () => void
 }
 
 interface ImportResult {
-  folder: CatalogFolder
+  /** What the summary calls this import: a folder name, or how many there were. */
+  name: string
   added: number
   skipped: number
   failed: number
@@ -34,7 +52,7 @@ function showImportResult(
   cancelled: boolean,
   source: 'folder' | 'files',
 ) {
-  const { folder, added, skipped, failed } = result
+  const { name, added, skipped, failed } = result
   if (cancelled) {
     toast.show('Import cancelled', {
       detail: `${added} ${plural(added, 'photo')} added before stopping`,
@@ -47,7 +65,7 @@ function showImportResult(
       failed ? `${failed} could not be read` : '',
     ].filter(Boolean)
     toast.show(`Imported ${added} ${plural(added, 'photo')}`, {
-      detail: notes.join(' · ') || folder.name,
+      detail: notes.join(' · ') || name,
     })
     return
   }
@@ -78,10 +96,33 @@ function showImportError(error: unknown, cancelled: boolean) {
   toast.error('Import failed', error instanceof Error ? error.message : String(error))
 }
 
+/**
+ * What a summary calls a drop.
+ *
+ * One folder is its own name, because that is what was dragged. Several are
+ * counted rather than listed — a toast that names four directories is a list,
+ * not a sentence — and loose files are counted beside them, since "Imported
+ * Files" is an implementation detail of where they went, not of what was
+ * dropped.
+ */
+function droppedName(
+  folders: number,
+  files: number,
+  landed: CatalogFolder | null,
+): string {
+  const parts = [
+    folders ? `${folders} ${plural(folders, 'folder')}` : '',
+    files ? `${files} ${plural(files, 'file')}` : '',
+  ].filter(Boolean)
+  if (folders === 1 && !files) return landed?.name ?? parts.join(' and ')
+  return parts.join(' and ')
+}
+
 export const useImporter = create<ImporterState>((set, get) => ({
   active: false,
   cancelling: false,
   progress: null,
+  batch: null,
   controller: null,
 
   run: async (given) => {
@@ -109,11 +150,11 @@ export const useImporter = create<ImporterState>((set, get) => ({
       const { folder } = result
       useCatalog.getState().setSource({ kind: 'folder', id: folder.id })
       scheduleEvict(true)
-      showImportResult(result, controller.signal.aborted, 'folder')
+      showImportResult({ ...result, name: folder.name }, controller.signal.aborted, 'folder')
     } catch (err) {
       showImportError(err, controller.signal.aborted)
     } finally {
-      set({ active: false, cancelling: false, controller: null, progress: null })
+      set({ active: false, cancelling: false, controller: null, progress: null, batch: null })
     }
   },
 
@@ -142,11 +183,101 @@ export const useImporter = create<ImporterState>((set, get) => ({
       const { folder } = result
       useCatalog.getState().setSource({ kind: 'folder', id: folder.id })
       scheduleEvict(true)
-      showImportResult(result, controller.signal.aborted, 'files')
+      showImportResult({ ...result, name: folder.name }, controller.signal.aborted, 'files')
     } catch (err) {
       showImportError(err, controller.signal.aborted)
     } finally {
-      set({ active: false, cancelling: false, controller: null, progress: null })
+      set({ active: false, cancelling: false, controller: null, progress: null, batch: null })
+    }
+  },
+
+  /**
+   * Imports what was dropped on the window: any number of folders, any number
+   * of loose files, in whatever mixture the photographer dragged.
+   *
+   * Each source is imported the way it would have been had it been picked —
+   * folders keep their directory handle and their structure, loose files go to
+   * the synthetic folder that can re-read them — but the run is one job. One
+   * cancel button stops the lot, and one summary reports it, because dropping
+   * four folders was one action and four toasts would read as four mistakes.
+   */
+  runDropped: async (handles) => {
+    if (get().active) {
+      toast.show('Import already running', {
+        detail: 'Wait for it to finish, then drop these in.',
+      })
+      return
+    }
+    const folders = handles.filter(
+      (h): h is FileSystemDirectoryHandle => h.kind === 'directory',
+    )
+    const files = handles.filter((h): h is FileSystemFileHandle => h.kind === 'file')
+    const loose = files.filter((h) => isSupported(h.name))
+    if (!folders.length && !loose.length) {
+      toast.show('Nothing to import', {
+        detail: files.length
+          ? 'None of those files are photos esque can read.'
+          : 'Drop a folder or a photo.',
+      })
+      return
+    }
+
+    const controller = new AbortController()
+    // The loose files are one source however many of them there are: they are
+    // scanned, counted and reported together.
+    const total = folders.length + (loose.length ? 1 : 0)
+    const batch = (done: number) => (total > 1 ? { done, total } : null)
+    set({
+      active: true,
+      cancelling: false,
+      controller,
+      batch: batch(0),
+      progress: { phase: 'scanning', total: 0, done: 0, skipped: 0, current: '' },
+    })
+
+    const opts = {
+      signal: controller.signal,
+      onProgress: (progress: ImportProgress) => set({ progress }),
+    }
+    const totals = { added: 0, skipped: 0, failed: 0 }
+    let landed: CatalogFolder | null = null
+    let done = 0
+
+    try {
+      for (const handle of folders) {
+        if (controller.signal.aborted) break
+        set({ batch: batch(done) })
+        const result = await importFolder(handle, opts)
+        totals.added += result.added
+        totals.skipped += result.skipped
+        totals.failed += result.failed
+        landed = result.folder
+        done++
+      }
+      if (loose.length && !controller.signal.aborted) {
+        set({ batch: batch(done) })
+        const result = await importFiles(loose, opts)
+        totals.added += result.added
+        totals.skipped += result.skipped
+        totals.failed += result.failed
+        landed = result.folder
+      }
+
+      if (landed) {
+        // The last source imported is the one the Library opens on, which for a
+        // single drop is the only one and for several is the one that finished.
+        useCatalog.getState().setSource({ kind: 'folder', id: landed.id })
+        scheduleEvict(true)
+      }
+      showImportResult(
+        { ...totals, name: droppedName(folders.length, loose.length, landed) },
+        controller.signal.aborted,
+        folders.length ? 'folder' : 'files',
+      )
+    } catch (err) {
+      showImportError(err, controller.signal.aborted)
+    } finally {
+      set({ active: false, cancelling: false, controller: null, progress: null, batch: null })
     }
   },
 
@@ -185,7 +316,7 @@ export const useImporter = create<ImporterState>((set, get) => ({
         toast.error('Sync failed', err instanceof Error ? err.message : String(err))
       }
     } finally {
-      set({ active: false, cancelling: false, controller: null, progress: null })
+      set({ active: false, cancelling: false, controller: null, progress: null, batch: null })
     }
   },
 

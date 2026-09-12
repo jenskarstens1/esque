@@ -59,7 +59,9 @@ self-hosted deployment.
 
 - **Import.** Every stills RAW format LibRaw can open (Canon, Nikon, Sony,
   Fujifilm, DNG and the rest), compiled to WebAssembly, plus JPEG, PNG, TIFF,
-  WebP, AVIF and HEIC. Photos stay where they are on disk.
+  WebP, AVIF and HEIC. Pick folders and files, or drop them anywhere in the
+  window — a drop mixing folders and loose files imports as one job. Photos stay
+  where they are on disk.
 - **Library.** Folders, ratings, flags, colour labels and stacks, kept in
   IndexedDB with previews cached in OPFS.
 - **Develop.** A WebGPU pipeline covering white balance, tone, curves, colour

@@ -76,10 +76,10 @@ export function LibraryLeftPanel() {
           <>
             <button
               type="button"
-              title="Import a file…"
+              title="Import photos…"
               onClick={(e) => {
                 e.stopPropagation()
-                runFiles(null, e.altKey)
+                runFiles(null, true)
               }}
               className="text-icon-tertiary transition-colors hover:text-icon"
             >
@@ -114,9 +114,9 @@ export function LibraryLeftPanel() {
               size="sm"
               variant="ghost"
               icon={<FilePlusIcon size={12} />}
-              onClick={() => runFiles()}
+              onClick={() => runFiles(null, true)}
             >
-              Import a file…
+              Import photos…
             </Button>
           </Hint>
         ) : (

@@ -46,6 +46,29 @@ export const KIND_ORDER: ChangeKind[] = ['added', 'improved', 'fixed']
 
 export const RELEASES: Release[] = [
   {
+    version: '0.4.1',
+    date: '2026-09-12',
+    summary:
+      'Photographs can be dropped straight onto the window, however many folders and files come at once.',
+    changes: [
+      {
+        kind: 'added',
+        term: 'Drag and drop',
+        text: 'Folders and photos can be dropped anywhere in the window rather than only onto an empty catalog — over the grid, over Develop, over a panel. A drop mixing several folders with loose files imports as one job, with one progress readout naming the source in hand, one cancel and one summary, and the Library comes forward to show what landed.',
+      },
+      {
+        kind: 'improved',
+        term: 'Importing photos',
+        text: 'Importing files now selects as many as you like by default, in the menu, the left panel and the empty catalog.',
+      },
+      {
+        kind: 'improved',
+        term: 'Settings',
+        text: 'One row of sections at every width, which gives the pane the dialog\u2019s full measure instead of spending it on a column of seven words.',
+      },
+    ],
+  },
+  {
     version: '0.4.0',
     date: '2026-09-11',
     summary:

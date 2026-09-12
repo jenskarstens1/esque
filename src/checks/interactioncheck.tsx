@@ -159,7 +159,7 @@ async function checkSheetAndDrawer() {
 
   await click('#open-drawer')
   await wait(240)
-  check(document.activeElement?.id === 'drawer-action', 'A drawer claims focus')
+  check(!!document.activeElement?.closest('[role="dialog"]'), 'A drawer claims focus')
   press('Escape')
   await tick()
   check(document.activeElement?.id === 'open-drawer' && !element('#root').inert, 'Drawer dismissal restores focus and isolation')
@@ -223,6 +223,10 @@ export function Harness() {
         await tick()
         const modal = element('[role="dialog"][aria-label="Parent dialog"]')
         check(modal.contains(document.activeElement), 'Opening a dialog from a menu keeps focus in the dialog')
+        // The surface itself takes the focus, not the first control: with no
+        // pointer or key press behind an auto-opened dialog the browser reads
+        // programmatic focus as keyboard intent and rings whatever it lands on.
+        check(document.activeElement === modal, 'A dialog without an autofocus target does not light up its first control')
         check(element('#root').inert, 'A dialog makes the application background inert')
         element('#background').focus()
         check(modal.contains(document.activeElement), 'Background controls cannot steal modal focus')

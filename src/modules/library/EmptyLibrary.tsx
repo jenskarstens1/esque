@@ -1,6 +1,5 @@
-import { useState, type ReactNode } from "react";
+import { type ReactNode } from "react";
 import { useLiveQuery } from "dexie-react-hooks";
-import { cn } from "../../lib/cn";
 import { CollectionIcon, FolderIcon, Logo, SearchIcon } from "../../design/icons";
 import { Button } from "../../design/Controls";
 import { useImporter } from "../../state/importer";
@@ -145,80 +144,29 @@ function FirstRun() {
   const run = useImporter((s) => s.run);
   const runFiles = useImporter((s) => s.runFiles);
   const active = useImporter((s) => s.active);
-  const [over, setOver] = useState(false);
-
-  async function onDrop(e: React.DragEvent) {
-    e.preventDefault();
-    setOver(false);
-    const files: FileSystemFileHandle[] = [];
-    for (const item of Array.from(e.dataTransfer.items)) {
-      // Chromium hands back a real directory handle, so a dropped folder
-      // imports exactly like one chosen through the picker.
-      const handle = await (
-        item as DataTransferItem & {
-          getAsFileSystemHandle?: () => Promise<FileSystemHandle | null>;
-        }
-      ).getAsFileSystemHandle?.();
-      if (handle?.kind === "directory") {
-        run(handle as FileSystemDirectoryHandle);
-        return;
-      }
-      // Dropped files come in one at a time and have no directory of their own.
-      if (handle?.kind === "file") files.push(handle as FileSystemFileHandle);
-    }
-    if (files.length) runFiles(files);
-  }
 
   return (
-    <div
-      onDragOver={(e) => {
-        e.preventDefault();
-        setOver(true);
-      }}
-      onDragLeave={() => setOver(false)}
-      onDrop={onDrop}
-      className="relative size-full"
-    >
-      {/*
-       * The whole view is the drop target, so the whole view is what
-       * acknowledges the drag: one accent edge drawn just inside it. Nothing
-       * moves, nothing blooms.
-       */}
-      <div
-        aria-hidden
-        className={cn(
-          "pointer-events-none absolute inset-2 rounded-xl",
-          "shadow-[inset_0_0_0_1px_var(--color-accent)]",
-          "transition-opacity duration-[--duration-base] ease-[--ease-out]",
-          over ? "opacity-100" : "opacity-0",
-        )}
-      />
+    <Centered>
+      <div className="flex max-w-[32ch] flex-col items-center gap-4 text-center">
+        <Logo size={28} />
 
-      <Centered>
-        <div className="flex max-w-[32ch] flex-col items-center gap-4 text-center">
-          <Logo size={28} />
-
-          <div className="flex flex-col gap-1">
-            <h1 className="text-headline text-label">
-              {over ? "Drop to import" : "No photos yet"}
-            </h1>
-            <p className="text-ui text-balance text-label-secondary">
-              Import a folder or a single file, or drop one anywhere here. Your
-              files stay where they are.
-            </p>
-          </div>
-
-          <div className="mt-0.5 flex items-center gap-2">
-            <Button variant="primary" disabled={active} onClick={() => run()}>
-              {active ? "Importing…" : "Import folder…"}
-            </Button>
-            <Button disabled={active} onClick={() => runFiles()}>
-              Import file…
-            </Button>
-          </div>
+        <div className="flex flex-col gap-1">
+          <h1 className="text-headline text-label">No photos yet</h1>
+          <p className="text-ui text-balance text-label-secondary">
+            Import folders or photos to get started.
+          </p>
         </div>
-      </Centered>
-    </div>
+
+        <div className="mt-0.5 flex items-center gap-2">
+          <Button variant="primary" disabled={active} onClick={() => run()}>
+            {active ? "Importing…" : "Import folder…"}
+          </Button>
+          <Button disabled={active} onClick={() => runFiles(null, true)}>
+            Import photos…
+          </Button>
+        </div>
+      </div>
+    </Centered>
   );
 }
 

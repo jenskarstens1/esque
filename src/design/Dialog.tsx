@@ -18,6 +18,7 @@ export function Dialog({
   dismissable = true,
   scrollable = true,
   dividers,
+  hideTitle,
   bodyClassName,
 }: {
   open: boolean
@@ -49,6 +50,12 @@ export function Dialog({
    * under the edges, false where the panes always fit.
    */
   dividers?: boolean
+  /**
+   * Drops the visible header for a dialog whose own first row already names it
+   * — a rail of tabs, say. `title` still carries the accessible name, so the
+   * heading is only gone from the screen, not from the accessibility tree.
+   */
+  hideTitle?: boolean
   bodyClassName?: string
 }) {
   const { ref, scope } = useModalFocus(open, dismissable ? onClose : undefined)
@@ -111,19 +118,24 @@ export function Dialog({
             'flex flex-col animate-[dialogIn_var(--duration-base)_var(--ease-out)]',
           )}
         >
-          <header
-            className={cn('shrink-0 px-5 pt-5 pb-3', hasBody && divided(scroll.top) && 'hairline-b')}
-          >
-            <div className="flex items-center gap-[3px]">
-              {titleIcon}
-              <h2 className="text-title text-balance text-label">{title}</h2>
-            </div>
-            {description && (
-              <p className="mt-1 text-ui leading-relaxed text-pretty text-label-secondary">
-                {description}
-              </p>
-            )}
-          </header>
+          {!hideTitle && (
+            <header
+              className={cn(
+                'shrink-0 px-5 pt-5 pb-3',
+                hasBody && divided(scroll.top) && 'hairline-b',
+              )}
+            >
+              <div className="flex items-center gap-[3px]">
+                {titleIcon}
+                <h2 className="text-title text-balance text-label">{title}</h2>
+              </div>
+              {description && (
+                <p className="mt-1 text-ui leading-relaxed text-pretty text-label-secondary">
+                  {description}
+                </p>
+              )}
+            </header>
+          )}
           {children &&
             (scrollable ? (
               <Scroller

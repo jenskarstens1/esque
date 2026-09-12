@@ -1,12 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { cn } from '../../lib/cn'
 import { useUI, setGridColumns } from '../../state/ui'
 import { useCatalog } from '../../state/catalog'
 import { usePhotos, useCollections, usePhotoCount } from '../../catalog/hooks'
 import { Thumbnail } from './Thumbnail'
 import { Scroller } from '../../design/Scroller'
-import { Badge, BadgeDetail } from '../../design/Badge'
-import { GridIcon, SelectAllIcon } from '../../design/icons'
 import { LoupeView } from './LoupeView'
 import { EmptyLibrary } from './EmptyLibrary'
 import { FilterBar } from './FilterBar'
@@ -160,43 +157,8 @@ function PhotoGrid({ photos }: { photos: Photo[] }) {
           ))}
         </div>
       </Scroller>
-      <GridStatus count={photos.length} selected={selected.length} at={top} />
       {menu}
     </div>
   )
 }
 
-/**
- * The photo count, on the same terms as the scrollbar it sits beside.
- *
- * A badge parked permanently over the bottom row would put chrome on top of the
- * one thing this view exists to show. It surfaces while the field is moving or
- * the selection changes, then withdraws — except while a multiple selection is
- * live, which is a state worth keeping in sight.
- */
-function GridStatus({ count, selected, at }: { count: number; selected: number; at: number }) {
-  const [visible, setVisible] = useState(false)
-  const pinned = selected > 1
-
-  useEffect(() => {
-    setVisible(true)
-    const timer = setTimeout(() => setVisible(false), 1400)
-    return () => clearTimeout(timer)
-  }, [at, count, selected])
-
-  return (
-    <div
-      className={cn(
-        'pointer-events-none absolute inset-x-0 bottom-3 flex justify-center',
-        'text-micro tnum text-label-secondary',
-        'transition-opacity duration-[--duration-slow] ease-[--ease-out]',
-        visible || pinned ? 'opacity-100' : 'opacity-0',
-      )}
-    >
-      <Badge icon={<GridIcon size={12} />}>
-        {count.toLocaleString()} photo{count === 1 ? '' : 's'}
-        {pinned && <BadgeDetail><SelectAllIcon size={12} aria-hidden />{selected.toLocaleString()} selected</BadgeDetail>}
-      </Badge>
-    </div>
-  )
-}

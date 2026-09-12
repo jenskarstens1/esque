@@ -14,6 +14,8 @@ import { useUI } from '../state/ui'
 import { zoomCommands } from '../lib/useZoomPan'
 import { useCatalog } from '../state/catalog'
 import { useExport } from '../state/exportStore'
+import { useImporter } from '../state/importer'
+import { useDropZone } from '../state/dropImport'
 import { useDevelop } from '../develop/session'
 import { useMasking } from '../develop/masking'
 import { useRetouch } from '../develop/retouch'
@@ -32,6 +34,8 @@ export interface DevBridge {
   zoomCommands: typeof zoomCommands
   useCatalog: typeof useCatalog
   useExport: typeof useExport
+  useImporter: typeof useImporter
+  useDropZone: typeof useDropZone
   useDevelop: typeof useDevelop
   useMasking: typeof useMasking
   useRetouch: typeof useRetouch
@@ -59,6 +63,8 @@ export function installDevBridge() {
     zoomCommands,
     useCatalog,
     useExport,
+    useImporter,
+    useDropZone,
     useDevelop,
     useMasking,
     useRetouch,

@@ -136,9 +136,21 @@ export function useModalFocus(open: boolean, dismiss?: () => void) {
       observer.observe(document.body, { childList: true })
     }
     syncIsolation()
+    /*
+     * Only an explicit request takes the focus. Handing it to the first control
+     * instead lit that control up: a dialog opened on load has no pointer or key
+     * press behind it, so Chromium treats the programmatic focus as keyboard
+     * intent and `:focus-visible` draws the accent ring — the About tab in the
+     * welcome dialog appeared pre-selected before anyone had touched it. The
+     * dialog itself is focusable, so the scope, Escape and Tab all still work:
+     * the first Tab moves into the content from here.
+     */
     const preferred = ref.current.querySelector<HTMLElement>('[autofocus], [data-autofocus]')
     if (preferred && canFocus(preferred)) preferred.focus({ preventScroll: true })
-    else focusInside(scope)
+    // React's own `autoFocus` focuses the field during the commit that opened
+    // the surface, so a control already holding focus inside it asked for it.
+    else if (!(restore && contains(scope, restore) && canFocus(restore)))
+      ref.current.focus({ preventScroll: true })
 
     return () => {
       scopes.splice(scopes.indexOf(scope), 1)

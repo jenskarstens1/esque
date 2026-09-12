@@ -32,7 +32,6 @@ import { formatBytes } from "../lib/math";
 import { useUI } from "../state/ui";
 import { hdrReach } from "../core/hdr";
 import { cn } from "../lib/cn";
-import { useIsPhone } from "../lib/useViewport";
 import { APP_VERSION } from "./changelog";
 import { openWhatsNew } from "./whatsNew";
 import {
@@ -121,11 +120,18 @@ export function SettingsDialog({
       onClose={() => { if (!backupBusy) onClose(); }}
       dismissable={!backupBusy}
       title="Settings"
+      // The rail names the dialog better than a heading above it would, and it
+      // is where the hand goes first. The surface clips it to the top corners.
+      hideTitle
       width={720}
       height={560}
       scrollable={false}
-      dividers
-      bodyClassName="items-stretch max-md:flex-col [--field-measure:100%] [--field-label-width:104px] md:[--field-label-width:132px]"
+      // The rail draws the one rule this dialog needs. Past the pane's own
+      // edges the fade says there is more, the way the welcome dialog does.
+      dividers={false}
+      // The pane now has the dialog's whole width, but a select holding "sRGB"
+      // should not: controls keep the measure they had beside the old column.
+      bodyClassName="flex-col items-stretch [--field-measure:100%] [--field-label-width:104px] md:[--field-label-width:132px] md:[--field-measure:400px]"
       footer={
         <Button variant="primary" className="min-w-20" disabled={backupBusy} onClick={onClose}>
           Done
@@ -139,6 +145,7 @@ export function SettingsDialog({
         key={pane}
         frameClassName="min-h-0 min-w-0 flex-1"
         className="px-5 py-4"
+        edgeFade
         role="tabpanel"
         id={`settings-pane-${pane}`}
         aria-labelledby={`settings-tab-${pane}`}
@@ -169,14 +176,13 @@ function Rail({
   disabled: boolean;
 }) {
   const tabs = useRef<Array<HTMLButtonElement | null>>([]);
-  const phone = useIsPhone();
 
-  // The keyboard direction follows the rail when it moves above the pane.
+  // One rail at every width. The row of tabs reads as a set you can take in at
+  // a glance and leaves the pane the dialog's full measure, where the column
+  // spent 148px of it on seven words.
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (disabled) return;
-    const nextKey = phone ? "ArrowRight" : "ArrowDown";
-    const previousKey = phone ? "ArrowLeft" : "ArrowUp";
-    const step = e.key === nextKey ? 1 : e.key === previousKey ? -1 : 0;
+    const step = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0;
     const index = PANES.findIndex((p) => p.id === pane);
     let next = -1;
     if (step) next = (index + step + PANES.length) % PANES.length;
@@ -192,9 +198,9 @@ function Rail({
     <div
       role="tablist"
       aria-label="Settings sections"
-      aria-orientation={phone ? "horizontal" : "vertical"}
+      aria-orientation="horizontal"
       onKeyDown={onKeyDown}
-      className="flex min-h-0 min-w-0 shrink-0 gap-1 bg-base p-3 max-md:hairline-b max-md:overflow-x-auto md:w-[148px] md:flex-col md:overflow-y-auto md:hairline-r"
+      className="flex min-w-0 shrink-0 gap-1 overflow-x-auto bg-base p-3 hairline-b"
     >
       {PANES.map(({ id, label, icon: Icon }, i) => {
         const active = id === pane;

@@ -225,20 +225,38 @@ function FilmstripCell({
       <ThumbImage photo={photo} url={url} dim={rejected} />
 
       {marked && (
-        <span className="pointer-events-none absolute inset-x-0 bottom-0 flex items-center gap-1 bg-gradient-to-t from-black/80 to-transparent px-1 pt-3 pb-0.5 text-white">
-          {photo.flag === 'pick' && <FlagIcon size={8} filled className="shrink-0" />}
-          {rejected && <RejectIcon size={8} className="shrink-0" />}
+        <span
+          style={{ paddingTop: Math.round(Math.max(10, Math.min(26, height * 0.3))) }}
+          className={cn(
+            'pointer-events-none absolute inset-x-0 bottom-0 flex items-center gap-1 px-1.5 pb-1',
+            // The grid's scrim, scaled to the strip: dark enough under the
+            // marks to hold them against a white sky, gone by mid-frame.
+            'bg-gradient-to-t from-black/85 via-black/40 to-transparent text-white',
+          )}
+        >
+          {photo.flag !== 'unflagged' &&
+            (rejected ? (
+              <RejectIcon size={10} className="shrink-0" />
+            ) : (
+              <FlagIcon size={10} filled className="shrink-0" />
+            ))}
           {photo.rating > 0 && (
-            <span className="flex items-center">
-              {Array.from({ length: photo.rating }, (_, i) => (
-                <StarIcon key={i} size={7} filled />
-              ))}
+            /*
+             * A count, not a row of stars. A portrait slot is about 47px wide,
+             * and five glyphs plus a flag overran it — five stars and four came
+             * out as the same white smear, which is the one thing a rating has
+             * to distinguish. One star and a figure reads at a glance and costs
+             * the same width at every rating.
+             */
+            <span className="flex shrink-0 items-center gap-0.5 text-micro leading-none font-medium tabular-nums">
+              <StarIcon size={9} filled />
+              {photo.rating}
             </span>
           )}
           <span className="min-w-0 flex-1" />
           {photo.label !== 'none' && (
             <span
-              className="size-1.5 shrink-0 rounded-full ring-1 ring-black/40"
+              className="size-2 shrink-0 rounded-full ring-1 ring-black/45"
               style={{ background: `var(--color-label-${photo.label})` }}
             />
           )}

@@ -16,6 +16,7 @@ import { SmartCollectionDialog } from './modules/library/SmartCollectionDialog'
 import { Toolbar } from './shell/Toolbar'
 import { MobileBar } from './shell/MobileBar'
 import { ImportHUD } from './shell/ImportHUD'
+import { DropOverlay } from './shell/DropOverlay'
 import { useKeymap } from './shell/useKeymap'
 import { useTouchContextMenu } from './shell/useTouchContextMenu'
 import { SettingsDialog } from './shell/SettingsDialog'
@@ -28,6 +29,7 @@ import { usePhotoCount } from './catalog/hooks'
 import { useIsCompact, useIsPhone, useWindowWidth } from './lib/useViewport'
 import { Drawer, Sheet } from './design/Sheet'
 import { installSaveLifecycle } from './develop/session'
+import { installDropImport } from './state/dropImport'
 
 // The export engine (ICC generation, TIFF writer, tiled renderer) is large and
 // only reachable through this dialog, so it loads on demand.
@@ -151,6 +153,7 @@ function CompactLayout({
       <main className="relative flex min-h-0 min-w-0 flex-1 flex-col bg-canvas">
         <div className="relative min-h-0 flex-1">
           {module === 'library' ? <LibraryModule /> : <DevelopModule />}
+          <DropOverlay />
         </div>
         {toolbarOpen && !phone && <Toolbar />}
       </main>
@@ -326,6 +329,7 @@ function DesktopLayout({
         <main className="relative flex min-w-0 flex-1 flex-col bg-canvas">
           <div className="relative min-h-0 flex-1">
             {module === 'library' ? <LibraryModule /> : <DevelopModule />}
+            <DropOverlay />
           </div>
           {toolbarOpen && <Toolbar />}
         </main>
@@ -356,6 +360,7 @@ export default function App() {
   useKeymap()
   useTouchContextMenu()
   useEffect(() => installSaveLifecycle(), [])
+  useEffect(() => installDropImport(), [])
   useEffect(() => setCompact(compact), [compact, setCompact])
 
   useEffect(() => {
