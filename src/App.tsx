@@ -31,6 +31,7 @@ import { useIsCompact, useIsPhone, useWindowWidth } from './lib/useViewport'
 import { Drawer, Sheet } from './design/Sheet'
 import { installSaveLifecycle } from './develop/session'
 import { installDropImport } from './state/dropImport'
+import { requestStorageProtection } from './catalog/storage'
 
 // The export engine (ICC generation, TIFF writer, tiled renderer) is large and
 // only reachable through this dialog, so it loads on demand.
@@ -363,6 +364,11 @@ export default function App() {
   useTouchContextMenu()
   useEffect(() => installSaveLifecycle(), [])
   useEffect(() => installDropImport(), [])
+  useEffect(() => {
+    void requestStorageProtection().catch((error: unknown) => {
+      console.warn('[esque] Could not request persistent browser storage.', error)
+    })
+  }, [])
   useEffect(() => setCompact(compact), [compact, setCompact])
 
   useEffect(() => {

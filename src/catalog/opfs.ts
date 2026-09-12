@@ -3,15 +3,29 @@
  * proxies.
  *
  * A 2560px half-float proxy is roughly 35–52 MB depending on aspect ratio, so it
- * lives under the same quota-aware LRU as the smaller JPEG tiers. Native-detail
- * frames remain memory-only; persisting only the standard tier keeps reopening
- * an edited RAW instant without letting 40 MP buffers consume the whole origin.
+ * lives under the same quota-aware LRU as the smaller JPEG tiers and the
+ * on-demand native-detail decodes.
  */
 import { useUI } from '../state/ui'
-import { createBinaryCache, storageEstimate } from './cache'
+import { createBinaryCache, storageEstimate, type CacheData } from './cache'
 
 export { opfsSupported } from './cache'
-export const { cacheWrite, cacheRead, cacheDelete, cacheStats, cacheEvict, cacheClear } = createBinaryCache()
+const binaryCache = createBinaryCache()
+export const { cacheRead, cacheTouch, cacheDelete, cacheStats, cacheEvict, cacheClear } = binaryCache
+
+export async function cacheWrite(key: string, data: CacheData): Promise<void> {
+  try {
+    await binaryCache.cacheWrite(key, data)
+  } catch (error) {
+    if (!(error instanceof Error) || error.name !== 'QuotaExceededError') throw error
+    const [{ bytes }, budget] = await Promise.all([cacheStats(), cacheBudget()])
+    const size = data instanceof Blob ? data.size : data.byteLength
+    // Retry once after making room; originals, models and saved masks are not
+    // eviction candidates. A second failure remains visible to the caller.
+    await cacheEvict(Math.max(0, Math.min(budget, bytes * 0.8) - size))
+    await binaryCache.cacheWrite(key, data)
+  }
+}
 
 export async function cacheHas(key: string): Promise<boolean> {
   return (await cacheRead(key)) !== null
@@ -48,7 +62,8 @@ export const proxyKey = (
   modifiedAt: number,
   fileSize: number,
   edge: number,
-) => `proxy/v2/${sourceId}-${modifiedAt}-${fileSize}-${edge}.rgba16f`
+  quality: 'interactive' | 'full' = 'interactive',
+) => `proxy/v2/${sourceId}-${modifiedAt}-${fileSize}-${edge}${quality === 'full' ? '-full' : ''}.rgba16f`
 
 /**
  * Trims the cache to a fraction of the origin's storage quota.
@@ -74,7 +89,9 @@ let evicting = false
  */
 export async function cacheBudget(): Promise<number> {
   const est = await storageEstimate()
-  const auto = Math.min(CACHE_CEILING, Math.floor((est.quota ?? 0) * QUOTA_SHARE))
+  const auto = est.quota && est.quota > 0
+    ? Math.min(CACHE_CEILING, Math.floor(est.quota * QUOTA_SHARE))
+    : CACHE_CEILING
   const chosen = useUI.getState().cacheLimit
   if (chosen <= 0) return auto
   const ceiling = Math.floor((est.quota ?? 0) * 0.8)
@@ -92,8 +109,8 @@ export function scheduleEvict(force = false) {
       const budget = await cacheBudget()
       const days = useUI.getState().cacheMaxAgeDays
       if (budget > 0) await cacheEvict(budget, days > 0 ? days * 86_400_000 : 0)
-    } catch {
-      /* eviction is best-effort */
+    } catch (error) {
+      console.warn('[esque] Could not trim the local cache.', error)
     } finally {
       evicting = false
     }

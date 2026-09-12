@@ -579,7 +579,7 @@ export interface RedEyeEdit {
 // The whole edit stack
 // ---------------------------------------------------------------------------
 
-export const EDITS_VERSION = 4
+export const EDITS_VERSION = 5
 
 /**
  * The base rendering a RAW is mapped through — see `core/profiles.ts`.

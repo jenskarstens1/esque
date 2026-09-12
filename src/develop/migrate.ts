@@ -23,6 +23,7 @@ export function migrateEdits<T extends Edits>(edits: T, from?: number): T {
   let out = adoptMasks(edits)
   if (version < 2) out = { ...out, layers: out.layers.map(flipLocalTint) }
   out = expandProfile(out)
+  if (version < 5) out = dropLegacyCaptureSharpening(out)
 
   return { ...out, version: EDITS_VERSION }
 }
@@ -41,6 +42,7 @@ export function migratePartialEdits<T extends Partial<Edits>>(edits: T, from?: n
   let out = adoptMasks(edits)
   if (version < 2 && out.layers) out = { ...out, layers: out.layers.map(flipLocalTint) }
   out = expandProfile(out)
+  if (version < 5) out = dropLegacyCaptureSharpening(out)
 
   return { ...out, version: EDITS_VERSION }
 }
@@ -79,6 +81,21 @@ function flipLocalTint(mask: Layer): Layer {
   const tint = mask.adjustments.tint
   if (!tint) return mask
   return { ...mask, adjustments: { ...mask.adjustments, tint: -tint } }
+}
+
+/**
+ * v4 → v5: remove values matching the old capture-sharpening baseline.
+ * Stored stacks cannot distinguish defaults from deliberate identical values;
+ * this cleanup intentionally resets both. ISO interpolation produced every
+ * integer from 30 through 70; masking also varied with ISO.
+ */
+function dropLegacyCaptureSharpening<T extends Partial<Edits>>(edits: T): T {
+  const detail = edits.detail
+  if (!detail) return edits
+  const amount = detail.sharpenAmount
+  if (!Number.isInteger(amount) || amount < 30 || amount > 70) return edits
+  if (detail.sharpenRadius !== 1 || detail.sharpenDetail !== 25) return edits
+  return { ...edits, detail: { ...detail, sharpenAmount: 0 } }
 }
 
 /**

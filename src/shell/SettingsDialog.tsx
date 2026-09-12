@@ -27,7 +27,8 @@ import {
   KeyboardIcon,
   Logo,
 } from "../design/icons";
-import { cacheClear, cacheStats, type CacheStats } from "../catalog/opfs";
+import { cacheBudget, cacheClear, cacheStats, scheduleEvict, type CacheStats } from "../catalog/opfs";
+import { requestStorageProtection, storageProtection, type StorageProtection } from "../catalog/storage";
 import { formatBytes } from "../lib/math";
 import { useUI } from "../state/ui";
 import { hdrReach } from "../core/hdr";
@@ -586,6 +587,10 @@ const CACHE_AGES = [
 
 function CachePane() {
   const [stats, setStats] = useState<CacheStats | null>(null);
+  const [budget, setBudget] = useState(0);
+  const [protection, setProtection] = useState<StorageProtection | null>(null);
+  const [protecting, setProtecting] = useState(false);
+  const [loadError, setLoadError] = useState(false);
   const [clearing, setClearing] = useState(false);
   const cacheLimit = useUI((s) => s.cacheLimit);
   const setCacheLimit = useUI((s) => s.setCacheLimit);
@@ -593,17 +598,49 @@ function CachePane() {
   const setCacheMaxAgeDays = useUI((s) => s.setCacheMaxAgeDays);
 
   const refresh = useCallback(() => {
-    void cacheStats().then(setStats);
+    setLoadError(false);
+    void Promise.all([cacheStats(), cacheBudget(), storageProtection()])
+      .then(([nextStats, nextBudget, nextProtection]) => {
+        setStats(nextStats);
+        setBudget(nextBudget);
+        setProtection(nextProtection);
+      })
+      .catch((error: unknown) => {
+        setLoadError(true);
+        toast.error("Could not read local storage", error instanceof Error ? error.message : String(error));
+      });
   }, []);
 
   useEffect(refresh, [refresh]);
+  useEffect(() => {
+    void cacheBudget().then(setBudget).catch((error: unknown) => {
+      toast.error("Could not read the cache limit", error instanceof Error ? error.message : String(error));
+    });
+  }, [cacheLimit]);
+
+  const protect = async () => {
+    setProtecting(true);
+    try {
+      const result = await requestStorageProtection();
+      setProtection(result);
+      if (result === "best-effort") {
+        toast.show("Storage protection was not granted", {
+          detail: "Your cache still survives reloads, but the browser may remove it when space is low.",
+        });
+      }
+    } catch (error) {
+      toast.error("Could not protect local storage", error instanceof Error ? error.message : String(error));
+    } finally {
+      setProtecting(false);
+    }
+  };
 
   const clear = async () => {
     setClearing(true);
     try {
       await cacheClear({ previewsOnly: true });
       toast.show("Preview cache cleared", {
-        detail: "AI models and saved mask coverage are unchanged.",
+        detail: "Saved RAW decodes were also cleared. Originals, edits, AI models and saved masks are unchanged.",
       });
       refresh();
     } catch (err) {
@@ -618,7 +655,7 @@ function CachePane() {
 
   // A limit is measured against itself, not the quota: a 2 GB ceiling on a
   // 300 GB allowance would otherwise draw as an empty bar however full it was.
-  const ceiling = cacheLimit > 0 ? cacheLimit : (stats?.quota ?? 0);
+  const ceiling = budget;
   const usedShare = stats && ceiling > 0 ? Math.min(1, stats.bytes / ceiling) : 0;
   const empty = !stats || stats.bytes === 0;
 
@@ -627,7 +664,9 @@ function CachePane() {
       <FieldGroup title="Local cache">
         <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
           <Readout disabled={!stats}>
-            {stats && ceiling > 0
+            {loadError
+              ? "Storage unavailable"
+              : stats && ceiling > 0
               ? `${formatBytes(stats.bytes)} of ${formatBytes(ceiling)}`
               : "Measuring…"}
           </Readout>
@@ -644,19 +683,21 @@ function CachePane() {
           />
         </div>
         <p className="mt-2 text-mini leading-relaxed text-label-secondary">
-          Includes previews, AI models and saved masks. Clearing previews keeps AI
-          models and mask coverage. Manage model downloads in AI models.
+          RAW working and zoomed-in decodes stay on this device across reloads.
+          Includes previews, AI models and saved masks. Clearing previews also
+          removes saved RAW decodes, not originals or edits.
         </p>
       </FieldGroup>
       <FieldGroup title="Cache limits">
         <p className="mb-3 text-mini leading-relaxed text-label-secondary">
-          Cleanup removes previews first. AI models and saved masks are protected,
+          Cleanup removes the least recently used previews and RAW decodes.
+          Usage history survives reloads. AI models and saved masks are protected,
           so total storage can remain above the size limit.
         </p>
         <Field label="Size limit">
           <Select
             value={String(cacheLimit)}
-            onChange={(v) => setCacheLimit(Number(v))}
+            onChange={(v) => { setCacheLimit(Number(v)); scheduleEvict(true); }}
             options={CACHE_LIMITS}
             aria-label="Cache size limit"
             className="flex-1"
@@ -665,12 +706,34 @@ function CachePane() {
         <Field label="Keep previews">
           <Select
             value={String(cacheMaxAgeDays)}
-            onChange={(v) => setCacheMaxAgeDays(Number(v))}
+            onChange={(v) => { setCacheMaxAgeDays(Number(v)); scheduleEvict(true); }}
             options={CACHE_AGES}
             aria-label="Keep previews"
             className="flex-1"
           />
         </Field>
+      </FieldGroup>
+      <FieldGroup title="Storage protection">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <Readout disabled={!protection}>
+            {protection === "persistent" ? "Protected by your browser"
+              : protection === "best-effort" ? "Browser-managed storage"
+              : protection === "unsupported" ? "Not supported by this browser"
+              : loadError ? "Status unavailable" : "Checking…"}
+          </Readout>
+          {protection === "best-effort" && (
+            <Button onClick={() => void protect()} disabled={protecting}>
+              {protecting ? "Requesting…" : "Protect local data"}
+            </Button>
+          )}
+        </div>
+        <p className="mt-2 text-mini leading-relaxed text-label-secondary">
+          {protection === "persistent"
+            ? "The browser has granted protection from automatic storage eviction. Cache limits still apply."
+            : "Saved data survives reloads, but without protection the browser may remove it when storage is low."}
+          {" "}Clearing site data or using a private window can still remove local data.
+          Keep catalog backups separately.
+        </p>
       </FieldGroup>
     </>
   );

@@ -836,47 +836,74 @@ function SnapshotsSection() {
   const snapshots = useDevelop((s) => s.snapshots)
   const create = useDevelop((s) => s.createSnapshot)
   const apply = useDevelop((s) => s.applySnapshot)
+  const rename = useDevelop((s) => s.renameSnapshot)
   const remove = useDevelop((s) => s.deleteSnapshot)
   const photoId = useDevelop((s) => s.photoId)
-  const [naming, setNaming] = useState(false)
-  const [name, setName] = useState('')
-
-  const commit = () => {
-    void create(name.trim() || 'Snapshot')
-    setNaming(false)
-  }
+  const [open, setOpen] = useState(false)
+  const [editing, setEditing] = useState<string | null>(null)
 
   return (
     <PanelSection
       title="Snapshots"
-      defaultOpen={false}
+      open={open}
+      onOpenChange={setOpen}
       actions={
         <MiniAction
           disabled={!photoId}
           onClick={() => {
-            setName(`Snapshot ${snapshots.length + 1}`)
-            setNaming(true)
+            // No dialog: take the snapshot now, name it later if you care to.
+            setOpen(true)
+            void create()
           }}
         >
           <PlusIcon size={10} />
         </MiniAction>
       }
     >
-      {snapshots.length === 0 ? (
-        <p className="px-1 py-1 text-mini text-label-quaternary">
-          Capture the current settings to come back to later.
-        </p>
-      ) : (
-        <Scroller frameClassName="-mx-1 max-h-[min(168px,18vh)]">
+      {/* The frame reaches the panel's own right edge so the thumb rides there
+          rather than floating inside the body padding; `pr-2` gives the rows
+          back the space the frame took. */}
+      {snapshots.length > 0 && (
+        <Scroller frameClassName="-ml-1 -mr-3 max-h-[min(168px,18vh)]" className="pr-2">
           {snapshots.map((s) => (
             <div key={s.id} className="group/snap flex items-center gap-1">
-              <button
-                type="button"
-                onClick={() => apply(s.id)}
-                className={cn(ROW, ROW_QUIET, 'min-w-0 flex-1 truncate text-mini')}
-              >
-                {s.name}
-              </button>
+              {editing === s.id ? (
+                <input
+                  autoFocus
+                  defaultValue={s.name}
+                  onFocus={(e) => e.currentTarget.select()}
+                  onBlur={(e) => {
+                    void rename(s.id, e.currentTarget.value)
+                    setEditing(null)
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') e.currentTarget.blur()
+                    else if (e.key === 'Escape') {
+                      e.currentTarget.value = s.name
+                      e.currentTarget.blur()
+                    }
+                  }}
+                  className={cn(
+                    ROW,
+                    // Edits happen in the row, not in a field dropped on top of
+                    // it: same geometry and type as the label it replaces, and
+                    // no focus halo either — the caret and the selection are
+                    // the whole signal, so the name simply becomes editable.
+                    'min-w-0 flex-1 bg-transparent text-mini text-label caret-accent outline-none',
+                    'focus:shadow-none focus-visible:shadow-none',
+                  )}
+                />
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => apply(s.id)}
+                  onDoubleClick={() => setEditing(s.id)}
+                  title="Double-click to rename"
+                  className={cn(ROW, ROW_QUIET, 'min-w-0 flex-1 truncate text-mini')}
+                >
+                  {s.name}
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => void remove(s.id)}
@@ -889,30 +916,6 @@ function SnapshotsSection() {
           ))}
         </Scroller>
       )}
-
-      <Dialog
-        open={naming}
-        title="New Snapshot"
-        onClose={() => setNaming(false)}
-        footer={
-          <>
-            <Button size="sm" variant="secondary" onClick={() => setNaming(false)}>
-              Cancel
-            </Button>
-            <Button size="sm" variant="primary" onClick={commit}>
-              Create
-            </Button>
-          </>
-        }
-      >
-        <input
-          autoFocus
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && commit()}
-          className="esq-field w-full"
-        />
-      </Dialog>
     </PanelSection>
   )
 }
@@ -928,7 +931,7 @@ function HistorySection() {
 
   return (
     <PanelSection title="History" defaultOpen hairline={false}>
-      <Scroller frameClassName="-mx-1 max-h-[min(280px,32vh)]">
+      <Scroller frameClassName="-ml-1 -mr-3 max-h-[min(280px,32vh)]" className="pr-2">
         {history
           .map((step, i) => ({ step, i }))
           .reverse()

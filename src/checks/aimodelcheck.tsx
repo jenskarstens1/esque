@@ -17,7 +17,7 @@ import { runMaskDetection } from '../modules/develop/panels/maskDetectionActions
 import { defaultEdits } from '../core/defaults'
 import type { AiMaskGeometry } from '../core/types'
 import { createBinaryCache } from '../catalog/cache'
-import type { BinaryCacheEntry } from '../catalog/db'
+import type { BinaryCacheEntry, CacheMetadata } from '../catalog/db'
 import { SettingsDialog } from '../shell/SettingsDialog'
 import { runCheck } from './checkreport'
 import '../styles/index.css'
@@ -207,9 +207,10 @@ async function cacheChecks() {
 async function previewChecks() {
   class CheckDB extends Dexie {
     cache!: EntityTable<BinaryCacheEntry, 'key'>
+    cacheMetadata!: EntityTable<CacheMetadata, 'key'>
     constructor() {
       super(`esque-ai-check-${crypto.randomUUID()}`)
-      this.version(1).stores({ cache: 'key, modifiedAt' })
+      this.version(1).stores({ cache: 'key, modifiedAt', cacheMetadata: 'key, accessedAt, raw.sourceId' })
     }
   }
   const database = new CheckDB()

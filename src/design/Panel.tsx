@@ -44,6 +44,11 @@ function PanelSectionBody({
   open,
   children,
 }: Pick<PanelSectionProps, 'id' | 'fill' | 'children'> & { open: boolean }) {
+  // An empty body is no body. A section whose list has nothing in it yet would
+  // otherwise keep reserving its padding under the header, which reads as a
+  // gap someone forgot rather than as a section with nothing to show.
+  if (children === null || children === undefined || children === false) return null
+
   if (fill) {
     return <div className="flex min-h-0 flex-1 flex-col px-3 pb-3">{children}</div>
   }

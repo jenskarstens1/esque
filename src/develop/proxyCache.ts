@@ -1,14 +1,15 @@
 import { db } from '../catalog/db'
 import {
   cacheDelete,
-  cacheHas,
   cacheRead,
+  cacheTouch,
   cacheWrite,
   proxyKey,
   scheduleEvict,
 } from '../catalog/opfs'
 import type { Photo } from '../core/types'
 import type { Proxy } from './proxy'
+import type { RawDecodeQuality } from '../raw/decoded'
 
 const MAGIC = 0x45535150
 /**
@@ -34,15 +35,31 @@ const QUALITY_CODE = {
  * the setting would look broken until something evicted the entry — and raising
  * it would silently overwrite the smaller one under the same name.
  */
-function keyFor(photo: Photo, edge: number) {
-  return proxyKey(photo.masterId ?? photo.id, photo.modifiedAt, photo.fileSize, edge)
+function keyFor(photo: Photo, edge: number, quality: RawDecodeQuality = 'interactive') {
+  return proxyKey(photo.masterId ?? photo.id, photo.modifiedAt, photo.fileSize, edge, quality)
 }
 
-async function clearStaleKey(photo: Photo, expected: string) {
-  const stale = photo.proxyKey
-  if (!stale || stale === expected) return
-  await cacheDelete(stale)
-  await db.photos.update(photo.id, { proxyKey: null })
+export interface ProxyCacheRequest {
+  quality?: RawDecodeQuality
+  /** A lower Display quality must not silently load a larger working tier. */
+  maxCachedEdge?: number
+}
+
+async function candidateKeys(photo: Photo, edge: number): Promise<string[]> {
+  const rows = await db.cacheMetadata.where('raw.sourceId').equals(photo.masterId ?? photo.id).toArray()
+  const indexed = rows.filter(({ raw }) =>
+    raw && raw.modifiedAt === photo.modifiedAt && raw.fileSize === photo.fileSize,
+  ).sort((a, b) => a.raw!.edge - b.raw!.edge)
+  const keys = [
+    keyFor(photo, edge, 'full'),
+    keyFor(photo, edge),
+    ...indexed.map((row) => row.key),
+  ]
+  // Existing v2 caches have no index until first used. Their payload is still
+  // valid, including the full-quality tier used for small sensors.
+  const prefix = `proxy/v2/${photo.masterId ?? photo.id}-${photo.modifiedAt}-${photo.fileSize}-`
+  if (photo.proxyKey?.startsWith(prefix)) keys.push(photo.proxyKey)
+  return [...new Set(keys)]
 }
 
 interface ProxyHeader {
@@ -102,19 +119,47 @@ function validHeader(
  * find out.
  *
  * Develop opens a RAW by racing the camera's embedded rendering against the
- * real conversion, because the conversion takes seconds. When the conversion is
- * already cached it takes a file read instead, and the race stops being worth
- * running: the stand-in costs a second open of the original, an embedded JPEG
- * decode and a worker slot, to be discarded a few milliseconds later by pixels
- * that were never far away. Asking first is cheap — a stat, not a read.
+ * real conversion. Read just the header here, so a corrupt or lower-quality
+ * entry cannot suppress the camera preview during a necessary re-decode.
  */
-export async function hasProxyCache(photo: Photo, edge: number): Promise<boolean> {
+export async function hasProxyCache(
+  photo: Photo,
+  edge: number,
+  request: ProxyCacheRequest = {},
+): Promise<boolean> {
   if (!photo.isRaw) return false
-  return cacheHas(keyFor(photo, edge))
+  return (await findCachedFile(photo, edge, request)) !== null
+}
+
+async function findCachedFile(
+  photo: Photo,
+  edge: number,
+  request: ProxyCacheRequest,
+  signal?: AbortSignal,
+): Promise<{ key: string; file: File } | null> {
+  for (const key of await candidateKeys(photo, edge)) {
+    signal?.throwIfAborted()
+    const file = await cacheRead(key, false)
+    if (!file) continue
+    const buffer = await file.slice(0, HEADER_BYTES).arrayBuffer()
+    signal?.throwIfAborted()
+    const header = new DataView(buffer)
+    const values = buffer.byteLength === HEADER_BYTES ? readHeader(header) : null
+    if (!values || !validHeader(header, values, photo, file.size)) {
+      console.warn('[esque] Discarding an invalid RAW decode cache entry.', key)
+      await cacheDelete(key)
+      continue
+    }
+    const largeEnough = values.scale >= 1 || Math.max(values.width, values.height) >= edge
+    const detailedEnough = request.quality !== 'full' || values.qualityCode === QUALITY_CODE.full
+    const withinTier = Math.max(values.width, values.height) <= (request.maxCachedEdge ?? Infinity)
+    if (largeEnough && detailedEnough && withinTier) return { key, file }
+  }
+  return null
 }
 
 /**
- * Reads a standard linear proxy and verifies it against the source fingerprint.
+ * Reads a linear proxy and verifies it against the catalog's source fingerprint.
  * A truncated OPFS write or a changed original is a cache miss, never a decoder
  * substitute.
  */
@@ -122,17 +167,12 @@ export async function readProxyCache(
   photo: Photo,
   edge: number,
   signal?: AbortSignal,
+  request: ProxyCacheRequest = {},
 ): Promise<Proxy | null> {
   if (!photo.isRaw) return null
-  const key = keyFor(photo, edge)
-  await clearStaleKey(photo, key)
-  signal?.throwIfAborted()
-
-  const file = await cacheRead(key)
-  if (!file) {
-    if (photo.proxyKey === key) await db.photos.update(photo.id, { proxyKey: null })
-    return null
-  }
+  const cached = await findCachedFile(photo, edge, request, signal)
+  if (!cached) return null
+  const { key, file } = cached
   const buffer = await file.arrayBuffer()
   signal?.throwIfAborted()
   if (buffer.byteLength < HEADER_BYTES) {
@@ -144,7 +184,6 @@ export async function readProxyCache(
   const values = readHeader(header)
   if (!validHeader(header, values, photo, buffer.byteLength)) {
     await cacheDelete(key)
-    if (photo.proxyKey === key) await db.photos.update(photo.id, { proxyKey: null })
     return null
   }
 
@@ -161,6 +200,18 @@ export async function readProxyCache(
     dataBytes,
   } = values
   const quality = qualityCode === QUALITY_CODE.full ? 'full' : 'interactive'
+  await cacheTouch(key, true)
+  if (!(await db.cacheMetadata.get(key))?.raw) {
+    await db.cacheMetadata.update(key, {
+      raw: {
+        sourceId: photo.masterId ?? photo.id,
+        modifiedAt: photo.modifiedAt,
+        fileSize: photo.fileSize,
+        edge: Math.max(width, height),
+        quality,
+      },
+    })
+  }
   return {
     photoId: photo.id,
     width,
@@ -178,14 +229,14 @@ export async function readProxyCache(
   }
 }
 
-/** Persists only the bounded standard tier; native-detail proxies stay in RAM. */
+/** Working and detail tiers share the quota-aware LRU, but never overwrite each other. */
 export async function writeProxyCache(
   photo: Photo,
   proxy: Proxy,
   edge: number,
 ): Promise<void> {
-  if (!photo.isRaw || proxy.preview || proxy.quality === 'preview') return
-  const key = keyFor(photo, edge)
+  if (!photo.isRaw || !proxy.isRaw || proxy.preview || proxy.quality === 'preview') return
+  const key = keyFor(photo, edge, proxy.quality)
   const header = new ArrayBuffer(HEADER_BYTES)
   const view = new DataView(header)
   view.setUint32(0, MAGIC, true)
@@ -202,6 +253,9 @@ export async function writeProxyCache(
   view.setFloat64(48, photo.fileSize, true)
   view.setUint32(56, QUALITY_CODE[proxy.quality], true)
   view.setUint32(60, proxy.data.byteLength, true)
+  if (!validHeader(view, readHeader(view), photo, HEADER_BYTES + proxy.data.byteLength)) {
+    throw new Error('The RAW decode is not a valid RGBA16F cache payload.')
+  }
 
   let pixels: Uint8Array<ArrayBuffer>
   if (proxy.data.buffer instanceof ArrayBuffer) {
@@ -212,8 +266,15 @@ export async function writeProxyCache(
   }
 
   await cacheWrite(key, new Blob([header, pixels]))
-  const stale = photo.proxyKey
+  await db.cacheMetadata.update(key, {
+    raw: {
+      sourceId: photo.masterId ?? photo.id,
+      modifiedAt: photo.modifiedAt,
+      fileSize: photo.fileSize,
+      edge,
+      quality: proxy.quality,
+    },
+  })
   await db.photos.update(photo.id, { proxyKey: key })
-  if (stale && stale !== key) await cacheDelete(stale)
   scheduleEvict()
 }

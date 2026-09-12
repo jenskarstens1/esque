@@ -182,7 +182,7 @@ async function run() {
     Renderer.prototype.render = render
     GPUCanvasContext.prototype.configure = configure
     dropProxy(id)
-    await cacheDelete(proxyKey(id, 0, 1, edge))
+    await cacheDelete(proxyKey(id, 0, 1, edge, 'full'))
     await db.photos.delete(id)
     useDevelop.setState(savedDevelop)
     useCatalog.setState(savedCatalog)

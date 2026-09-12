@@ -84,11 +84,22 @@ New photos use the Standard profile with sharpening off (Amount **0**) for RAW
 and rendered files at every ISO. Reset All, Reset Detail and double-clicking the
 Sharpen Amount control return to zero. RAW noise reduction retains its
 ISO-calibrated defaults; rendered files still start with noise reduction off.
-Saved edits and explicit sharpening in presets or sidecars are preserved, not
-migrated to zero. A chosen import preset can still enable sharpening.
+A chosen import preset can still enable sharpening.
+
+On upgrade, pre-v5 photo edits, snapshots and presets with integer amounts
+30–70 (including interpolated ISO defaults), radius 1 and detail 25 are migrated
+to Amount 0. Other settings are retained and cached thumbnails/previews are
+invalidated. Legacy esque sidecars and catalog backups receive the same
+migration when imported.
+
+Foreign sidecars with Adobe's factory amount 40 are treated as unspecified
+sharpening if all supplied sharpening controls match 40/1/25/0. Foreign presets
+and other sharpening values are preserved. These are value-based heuristics:
+deliberate settings identical to the old defaults also get reset. Unversioned
+XMP is treated as legacy esque only when it contains esque-specific fields.
 
 With the dev server running, `/checks/sharpeningcheck.html` covers defaults,
-resets, imports, saved edits and Auto without needing WebGPU.
+resets, imports, saved edits, migration, sidecars and Auto without needing WebGPU.
 
 ### HDR preview
 
@@ -120,6 +131,37 @@ source replacement, then measures cached versus uncached slider updates. Add
 `?edge=6000` for a 24 MP workload (default: 2560-pixel long edge). The check needs
 WebGPU. `/checks/presetpanelcheck.html` also guards against re-rendering the preset
 library during slider updates and checks that hover/apply use the latest edits.
+
+### Persistent RAW cache
+
+Develop saves both its working RAW decodes and the higher-detail decodes requested
+when zooming in. Reopening a cached tier after a reload or browser restart reads
+the scene-linear pixels from local storage instead of demosaicing again, even
+when the original is temporarily unavailable. Virtual copies share these pixels;
+edits remain independent. Changing preview quality keeps the other cached tiers,
+and interactive pixels never substitute for a full-quality detail request.
+
+**Settings → Cache** controls the size and retention period. Automatic storage
+is capped at 3 GB or 25% of the browser's quota, whichever is smaller. Cleanup
+removes the least recently used previews and decodes; usage history also survives
+reloads. OPFS stores the pixels, with IndexedDB as the fallback. Existing
+scene-linear caches remain usable; invalid payloads and mismatched catalog source
+fingerprints are rejected.
+
+esque requests persistent browser storage and shows whether protection was
+granted. Without it, caches still survive ordinary reloads, but the browser can
+evict local data under storage pressure. Cache limits, clearing site data,
+private browsing and switching browser profiles or site addresses still matter.
+This is not a backup or an offline app installation: keep originals and catalog
+backups separately. Uncached tiers and exports still need the original.
+
+With the dev server running, `node tools/headless.mjs /checks/cachecheck.html`
+checks an actual page reload, exact cached pixels, working/detail isolation,
+virtual copies, invalidation, OPFS/IndexedDB eviction and storage-protection
+outcomes. It uses a deterministic decoder double and removes the original before
+reloading, so a second decode cannot masquerade as a cache hit.
+`tools/rawcachedrive.mjs` additionally exercises the real LibRaw path; set
+`ESQUE_FIXTURE` to a RAW URL served by the dev server or a CORS-enabled source.
 
 ## Badges
 

@@ -1,8 +1,8 @@
 import { db } from './db'
 
-type CacheDatabase = Pick<typeof db, 'cache'>
+type CacheDatabase = Pick<typeof db, 'cache' | 'cacheMetadata'>
 type Entry = { key: string; size: number; mtime: number; backend: 'opfs' | 'idb' }
-type CacheData = Blob | ArrayBuffer | Uint8Array
+export type CacheData = Blob | ArrayBuffer | Uint8Array
 
 export const opfsSupported = () =>
   typeof navigator !== 'undefined' && typeof navigator.storage?.getDirectory === 'function'
@@ -26,35 +26,26 @@ export function createBinaryCache(
   let rootPromise: Promise<FileSystemDirectoryHandle | null> | null = null
   let writableAvailable = true
 
-  /**
-   * When an entry was last *used*, as opposed to last written.
-   *
-   * Eviction is meant to be an LRU, but the only timestamp the platform keeps is
-   * the file's mtime, and reading an OPFS file does not move it. Ordered by mtime
-   * alone the pass evicts by age of decode: the RAW you open every morning goes
-   * before one you converted once, last week, and never looked at again — and the
-   * proxy cache exists precisely so that morning costs a read rather than a
-   * conversion. Rewriting 35 MB to touch a timestamp would cost more than the
-   * eviction saves, so the read is recorded here instead.
-   *
-   * In memory, because it only has to outlive the session it is used in: the
-   * eviction pass runs while the app is open, and a fresh session starts from the
-   * mtimes again, which are a floor rather than a lie.
-   */
+  // Throttle repeated reads, but commit the first touch before returning pixels
+  // so a reload cannot erase the recency of a just-opened photograph.
   const lastUsed = new Map<string, number>()
   const USED_ENTRIES = 4096
 
-  function markUsed(key: string) {
+  async function markUsed(key: string, force = false) {
+    const now = Date.now()
+    if (!force && now - (lastUsed.get(key) ?? 0) < 60_000) return
+    await database.cacheMetadata.db.transaction('rw', database.cacheMetadata, async () => {
+      const row = await database.cacheMetadata.get(key)
+      await database.cacheMetadata.put({ ...row, key, accessedAt: Math.max(now, row?.accessedAt ?? 0) })
+    })
     lastUsed.delete(key)
-    lastUsed.set(key, Date.now())
+    lastUsed.set(key, now)
     if (lastUsed.size > USED_ENTRIES) {
       // Map keeps insertion order, so the first key is the least recent.
       const oldest = lastUsed.keys().next().value
       if (oldest !== undefined) lastUsed.delete(oldest)
     }
   }
-
-  const usedAt = (key: string, mtime: number) => Math.max(mtime, lastUsed.get(key) ?? 0)
 
   const root = () => {
     rootPromise ??= getRoot().catch((error: unknown) => {
@@ -95,6 +86,7 @@ export function createBinaryCache(
     }
     if (!writable) {
       await database.cache.put({ key, blob: asBlob(data), modifiedAt: Date.now() })
+      await markUsed(key, true)
       return
     }
     try {
@@ -106,14 +98,15 @@ export function createBinaryCache(
     }
     // A cache written in a browser without OPFS may survive a browser upgrade.
     await database.cache.delete(key)
+    await markUsed(key, true)
   }
 
-  async function cacheRead(key: string): Promise<File | null> {
+  async function cacheRead(key: string, touch = true): Promise<File | null> {
     try {
       const stored = await database.cache.get(key)
       if (stored) {
         if (!stored.blob.size) return null
-        markUsed(key)
+        if (touch) await markUsed(key)
         return new File([stored.blob], key.split('/').at(-1)!, {
           type: stored.blob.type, lastModified: stored.modifiedAt,
         })
@@ -124,9 +117,12 @@ export function createBinaryCache(
       const file = await handle.getFile()
       // A concurrent OPFS writer can temporarily expose an empty entry.
       if (!file.size) return null
-      markUsed(key)
+      if (touch) await markUsed(key)
       return file
-    } catch {
+    } catch (error) {
+      if (!missing(error) && !unavailable(error)) {
+        console.warn('[esque] Could not read the local cache.', error)
+      }
       return null
     }
   }
@@ -148,6 +144,7 @@ export function createBinaryCache(
     lastUsed.delete(key)
     await remove({ key, backend: 'idb' })
     await remove({ key, backend: 'opfs' })
+    await database.cacheMetadata.delete(key)
   }
 
   async function entries(): Promise<Entry[]> {
@@ -189,16 +186,20 @@ export function createBinaryCache(
 
   async function cacheEvict(maxBytes: number, maxAgeMs = 0): Promise<number> {
     const all = await entries()
+    const metadata = new Map((await database.cacheMetadata.toArray()).map((row) => [row.key, row.accessedAt]))
+    const usedAt = (entry: Entry) =>
+      Math.max(entry.mtime, metadata.get(entry.key) ?? 0, lastUsed.get(entry.key) ?? 0)
     let total = all.reduce((sum, entry) => sum + entry.size, 0)
     let freed = 0
     const cutoff = maxAgeMs > 0 ? Date.now() - maxAgeMs : -Infinity
     const candidates = all
       .filter((entry) => !pinned(entry.key))
-      .sort((a, b) => usedAt(a.key, a.mtime) - usedAt(b.key, b.mtime))
+      .sort((a, b) => usedAt(a) - usedAt(b))
     for (const entry of candidates) {
-      if (total <= maxBytes && usedAt(entry.key, entry.mtime) >= cutoff) break
+      if (total <= maxBytes && usedAt(entry) >= cutoff) break
       await remove(entry)
       lastUsed.delete(entry.key)
+      await database.cacheMetadata.delete(entry.key)
       total -= entry.size
       freed += entry.size
     }
@@ -210,10 +211,11 @@ export function createBinaryCache(
       if (options.previewsOnly && pinned(entry.key)) continue
       lastUsed.delete(entry.key)
       await remove(entry)
+      await database.cacheMetadata.delete(entry.key)
     }
   }
 
-  return { cacheWrite, cacheRead, cacheDelete, cacheStats, cacheEvict, cacheClear }
+  return { cacheWrite, cacheRead, cacheTouch: markUsed, cacheDelete, cacheStats, cacheEvict, cacheClear }
 }
 
 export async function storageEstimate(): Promise<StorageEstimate> {

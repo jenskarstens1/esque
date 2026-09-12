@@ -1,15 +1,17 @@
 import { createRoot } from 'react-dom/client'
-import { db } from '../catalog/db'
+import Dexie from 'dexie'
+import { db, EsqueDB } from '../catalog/db'
 import { applyImportDefaults } from '../catalog/importDefaults'
-import { defaultEdits, rawDetailDefaults, resetSection, type FileKind } from '../core/defaults'
+import { ALL_SECTIONS, defaultEdits, defaultMaskAdjustments, rawDetailDefaults, resetSection, type FileKind } from '../core/defaults'
 import { floatToHalf, HALF_ONE } from '../core/half'
 import { EDITS_VERSION, type Photo, type Preset } from '../core/types'
 import type { SourceImage } from '../core/workingImage'
 import { applyAuto, autoDevelop, autoTone } from '../develop/auto'
-import { migrateEdits } from '../develop/migrate'
+import { migrateEdits, migratePartialEdits } from '../develop/migrate'
+import { withLayerDefaults } from '../develop/layers'
 import { isSectionModified } from '../develop/modified'
 import { useDevelop } from '../develop/session'
-import { parseXmp } from '../develop/xmp'
+import { editsToSidecar, parsePresetFile, parseXmp } from '../develop/xmp'
 import { EditSlider } from '../modules/develop/EditSlider'
 import { useUI } from '../state/ui'
 import { runCheck } from './checkreport'
@@ -74,7 +76,7 @@ function checkDefaults() {
 }
 
 function checkSavedAndImportedValues() {
-  for (const amount of [0, 30, 40, 60, 62.5, 70, 150]) {
+  for (const amount of [0, 29, 62.5, 71, 150]) {
     const edits = defaultEdits('raw')
     edits.detail.sharpenAmount = amount
     edits.detail.luminanceNR = 24
@@ -83,6 +85,7 @@ function checkSavedAndImportedValues() {
         `migration v${version}: preserves saved sharpening ${amount} and NR`)
     }
   }
+  checkLegacyCaptureSharpening()
   const xmp = (sharpness: string) => `<x:xmpmeta xmlns:x="adobe:ns:meta/">
     <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
       <rdf:Description xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
@@ -91,10 +94,214 @@ function checkSavedAndImportedValues() {
   const omitted = parseXmp(xmp(''))
   ok(omitted?.edits.detail.sharpenAmount === 0, 'XMP: omitted sharpening defaults off')
   ok(!omitted?.paths.includes('detail.sharpenAmount'), 'XMP: omitted sharpening remains unscoped')
-  for (const value of ['0', '40', '62.5', '150', 'invalid', '1/0']) {
+  for (const value of ['0', '30', '45', '60', '65', '70', '62.5', '150', 'invalid', '1/0']) {
     const parsed = parseXmp(xmp(`crs:Sharpness="${value}"`))
     const expected = Number.isFinite(Number(value)) ? Number(value) : 0
     ok(parsed?.edits.detail.sharpenAmount === expected, `XMP ${value}: valid amounts kept, invalid defaults off`)
+  }
+  checkInheritedSharpening()
+}
+
+function checkLegacyCaptureSharpening() {
+  const legacy = () => {
+    const edits = defaultEdits('raw')
+    edits.detail.luminanceNR = 24
+    return edits
+  }
+  for (let amount = 30; amount <= 70; amount++) {
+    const edits = legacy()
+    edits.detail.sharpenAmount = amount
+    for (let version = 1; version < 5; version++) {
+      const out = migrateEdits({ ...edits, version })
+      ok(out.detail.sharpenAmount === 0, `migration v${version}: drops the old ${amount} baseline`)
+      equal({ ...out.detail, sharpenAmount: amount }, edits.detail,
+        `migration v${version}: dropping ${amount} leaves the rest of Detail alone`)
+      equal(migrateEdits(out).detail, out.detail,
+        `migration v${version}: dropping ${amount} is idempotent`)
+      ok(edits.detail.sharpenAmount === amount, 'migration: input is not mutated')
+    }
+    equal(migrateEdits({ ...edits, version: EDITS_VERSION }).detail, edits.detail,
+      `migration: a current stack keeps its ${amount}`)
+  }
+  for (const [label, moved] of [
+    ['radius', { sharpenRadius: 1.4 }],
+    ['detail', { sharpenDetail: 60 }],
+  ] as const) {
+    const edits = legacy()
+    edits.detail = { ...edits.detail, sharpenAmount: 70, ...moved }
+    equal(migrateEdits({ ...edits, version: 1 }).detail, edits.detail,
+      `migration: 70 next to a chosen ${label} is kept`)
+  }
+  const masked = legacy()
+  masked.detail = { ...masked.detail, sharpenAmount: 70, sharpenMasking: 50 }
+  ok(migrateEdits({ ...masked, version: 1 }).detail.sharpenAmount === 0,
+    'migration: masking of its own does not rescue the old baseline')
+
+  const scopedDetail = { ...legacy().detail, sharpenAmount: 70 }
+  const scoped = migratePartialEdits({ version: 1, detail: scopedDetail })
+  ok(scoped.detail?.sharpenAmount === 0, 'preset migration: drops the old baseline it scoped')
+  ok(scopedDetail.sharpenAmount === 70, 'preset migration: input is not mutated')
+  ok(!('detail' in migratePartialEdits({ version: 1, basic: defaultEdits('raw').basic })),
+    'preset migration: leaves an unscoped Detail section unscoped')
+}
+
+const sidecar = (body: string) => `<x:xmpmeta xmlns:x="adobe:ns:meta/">
+    <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+      <rdf:Description xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
+        xmlns:esq="https://esque.photo/ns/1.0/"
+        crs:RawFileName="DSC_0042.NEF" crs:Contrast2012="12" ${body}/>
+    </rdf:RDF></x:xmpmeta>`
+const ACR = 'crs:Sharpness="40" crs:SharpenRadius="+1.0" crs:SharpenDetail="25" crs:SharpenEdgeMasking="0"'
+
+function checkInheritedSharpening() {
+  const factory = parseXmp(sidecar(ACR))
+  ok(factory?.edits.detail.sharpenAmount === 0, 'sidecar: Camera Raw factory sharpening is not inherited')
+  ok(!factory?.paths.includes('detail.sharpenAmount'), 'sidecar: inherited sharpening leaves the section unscoped')
+  ok(!factory?.sections.includes('detail'), 'sidecar: inherited sharpening does not scope Detail')
+  ok(factory?.paths.includes('basic.contrast'), 'sidecar: the rest of the file still applies')
+
+  const amountOnly = parseXmp(sidecar('crs:Sharpness="40"'))
+  ok(amountOnly?.edits.detail.sharpenAmount === 0, 'sidecar: a bare factory amount is not inherited either')
+
+  for (const [label, body] of [
+    ['a different amount', ACR.replace('"40"', '"65"')],
+    ['a different radius', ACR.replace('"+1.0"', '"+1.6"')],
+    ['a different detail', ACR.replace('crs:SharpenDetail="25"', 'crs:SharpenDetail="60"')],
+    ['masking of its own', ACR.replace('crs:SharpenEdgeMasking="0"', 'crs:SharpenEdgeMasking="35"')],
+  ] as const) {
+    const parsed = parseXmp(sidecar(body))
+    ok(parsed?.paths.includes('detail.sharpenAmount'),
+      `sidecar: ${label} reads as a decision and is kept`)
+    ok(parsed?.edits.detail.sharpenAmount === (label === 'a different amount' ? 65 : 40),
+      `sidecar: ${label} retains its numeric amount`)
+  }
+
+  const radiusOnly = parseXmp(sidecar('crs:SharpenRadius="1"'))
+  ok(radiusOnly?.paths.includes('detail.sharpenRadius'),
+    'sidecar: a subcontrol without Amount remains explicit')
+
+  checkForeignSharpeningPresets()
+  checkEsqueSidecars()
+}
+
+function checkForeignSharpeningPresets() {
+  for (const amount of [40, 70]) {
+    const xml = sidecar(ACR.replace('"40"', `"${amount}"`))
+    const named = parseXmp(xml.replace('crs:RawFileName="DSC_0042.NEF"', 'crs:Name="Sharpen"'))
+    ok(named?.isPreset && named.edits.detail.sharpenAmount === amount,
+      `preset: named foreign XMP preserves ${amount}`)
+    const imported = parsePresetFile('sharpen.xmp', xml)
+    ok(imported?.edits.detail?.sharpenAmount === amount,
+      `preset: explicitly imported XMP preserves ${amount}`)
+    ok(imported?.edits.version === EDITS_VERSION, 'preset: imported patch has a current version')
+    if (imported) {
+      ok(migratePartialEdits(imported.edits).detail?.sharpenAmount === amount,
+        'preset: subsequent migration preserves imported sharpening')
+    }
+    const lua = parsePresetFile('sharpen.lrtemplate', `s = {
+      settings = {
+        Sharpness = ${amount},
+        SharpenRadius = 1,
+        SharpenDetail = 25,
+        SharpenEdgeMasking = 0,
+\t},
+}`)
+    ok(lua?.edits.detail?.sharpenAmount === amount,
+      `preset: lrtemplate preserves ${amount}`)
+  }
+}
+
+function checkEsqueSidecars() {
+  const own = parseXmp(sidecar(`esq:EditVersion="${EDITS_VERSION}" ${ACR}`))
+  ok(own?.edits.detail.sharpenAmount === 40, "sidecar: esque's own sharpening round-trips")
+  ok(own?.paths.includes('detail.sharpenAmount'), "sidecar: esque's own sharpening stays scoped")
+
+  const legacy = parseXmp(sidecar('esq:EditVersion="4" crs:Sharpness="70" crs:SharpenRadius="+1.0" crs:SharpenDetail="25"'))
+  ok(legacy?.edits.detail.sharpenAmount === 0, 'sidecar: an old esque baseline is migrated away')
+  const chosen = parseXmp(sidecar('esq:EditVersion="4" crs:Sharpness="70" crs:SharpenRadius="+1.6" crs:SharpenDetail="25"'))
+  ok(chosen?.edits.detail.sharpenAmount === 70, 'sidecar: an old esque stack keeps a sharpening it was given')
+
+  const unversioned = parseXmp(sidecar('crs:Sharpness="70" crs:SharpenRadius="+1.0" crs:SharpenDetail="25"'))
+  ok(unversioned?.edits.detail.sharpenAmount === 70, 'sidecar: foreign 70 is not an esque baseline')
+
+  const oldEdits = defaultEdits('raw')
+  oldEdits.detail.sharpenAmount = 70
+  oldEdits.layers = [withLayerDefaults({
+    id: 'legacy', adjustments: { ...defaultMaskAdjustments(), tint: 20 },
+  })]
+  const oldXml = editsToSidecar(oldEdits, ALL_SECTIONS, { filename: 'legacy.nef' })
+    .replace(/ esq:EditVersion="\d+"/, '')
+  const old = parseXmp(oldXml)
+  ok(old?.edits.detail.sharpenAmount === 0, 'sidecar: unversioned esque sharpening is migrated')
+  ok(old?.edits.layers[0]?.adjustments.tint === -20, 'sidecar: unversioned esque tint still migrates')
+}
+
+async function checkCatalogUpgrade() {
+  for (const version of [2, 3, 4]) {
+    const name = `sharpening-upgrade-${crypto.randomUUID()}`
+    const upgraded = new EsqueDB(name)
+    const previous = new Dexie(name)
+    const schema = Object.fromEntries(upgraded.tables
+      .filter((table) => version >= 4 || table.name !== 'cacheMetadata')
+      .map((table) => [
+        table.name,
+        [table.schema.primKey.src, ...table.schema.indexes.map((index) => index.src)].join(', '),
+      ]))
+    previous.version(version).stores(schema)
+    try {
+      const legacy = photo('raw', 100)
+      legacy.edits = defaultEdits('raw')
+      legacy.edits.version = 4
+      legacy.edits.detail.sharpenAmount = 70
+      legacy.thumbRev = 7
+      legacy.thumbKey = `thumb/${legacy.id}.7.jpg`
+      legacy.previewRev = 9
+      const current = photo('raw', 100)
+      current.edits = defaultEdits('raw')
+      current.edits.detail.sharpenAmount = 70
+      const fresh = photo('raw', 100)
+      const preset: Preset = {
+        id: 'legacy', name: 'Legacy', group: '', builtin: false, sections: ['detail'],
+        paths: ['detail.sharpenAmount'], edits: { version: 4, detail: legacy.edits.detail },
+        createdAt: 0,
+      }
+      await previous.table('photos').bulkPut([legacy, current, fresh])
+      await previous.table('snapshots').put({
+        id: 'legacy', photoId: legacy.id, name: 'Legacy', edits: legacy.edits, createdAt: 0,
+      })
+      await previous.table('presets').put(preset)
+      await previous.table('cache').put({ key: 'proxy/keep', blob: new Blob(['pixels']), modifiedAt: 0 })
+      if (version === 4) {
+        await previous.table('cacheMetadata').put({ key: 'proxy/keep', accessedAt: 123 })
+      }
+      previous.close()
+      await upgraded.open()
+
+      const saved = await upgraded.photos.get(legacy.id)
+      equal(saved?.edits, migrateEdits(legacy.edits), `catalog v${version}: photo edits migrated`)
+      equal([saved?.thumbRev, saved?.thumbKey, saved?.previewRev],
+        [8, `thumb/${legacy.id}.8.jpg`, 10], `catalog v${version}: renders invalidated`)
+      equal(await upgraded.photos.get(current.id), current, `catalog v${version}: current edits unchanged`)
+      equal(await upgraded.photos.get(fresh.id), fresh, `catalog v${version}: unedited photo unchanged`)
+      equal((await upgraded.snapshots.get('legacy'))?.edits, saved?.edits,
+        `catalog v${version}: snapshot migrated`)
+      const migratedPreset = await upgraded.presets.get('legacy')
+      equal(migratedPreset?.edits, migratePartialEdits(preset.edits),
+        `catalog v${version}: preset migrated`)
+      equal(migratedPreset?.paths, preset.paths, `catalog v${version}: preset scope retained`)
+      ok(await (await upgraded.cache.get('proxy/keep'))?.blob.text() === 'pixels',
+        `catalog v${version}: RAW cache retained`)
+      if (version === 4) {
+        ok((await upgraded.cacheMetadata.get('proxy/keep'))?.accessedAt === 123,
+          'catalog v4: cache metadata retained')
+      }
+      upgraded.close()
+      await upgraded.open()
+      equal(await upgraded.photos.get(legacy.id), saved, `catalog v${version}: reopen is idempotent`)
+    } finally {
+      previous.close()
+      await upgraded.delete()
+    }
   }
 }
 
@@ -239,6 +446,7 @@ runCheck(async () => {
     root.render(<EditSlider path="detail.sharpenAmount" label="Sharpen Amount" min={0} max={150} origin={0} />)
     checkDefaults()
     checkSavedAndImportedValues()
+    await checkCatalogUpgrade()
     checkAuto()
     await checkSessionAndSliders(host)
     await checkImportDefaults()

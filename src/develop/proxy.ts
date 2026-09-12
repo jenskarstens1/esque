@@ -5,8 +5,8 @@
  * is what Develop paints first; the real RAW conversion replaces it as soon as
  * the worker finishes. Both are half-float RGBA in the same working space, so
  * the whole edit pipeline runs on either. Only a handful fit in a sane heap (a
- * 2560 px proxy is ~35 MB), so memory is a small LRU while the standard tier is
- * persisted in OPFS. Non-RAW files take the ImageBitmap path and get linearised
+ * 2560 px proxy is ~35 MB), so memory is a small LRU while RAW working and detail
+ * tiers persist in OPFS. Non-RAW files take the ImageBitmap path and get linearised
  * on a scratch canvas.
  */
 import { rawPool, rawFailure } from '../raw/pool'
@@ -43,10 +43,9 @@ export class ProxyError extends Error {}
 /**
  * Long edge of the standard proxy, by quality tier.
  *
- * Every tier gets the same full-quality demosaic — this selects how much of the
- * result is kept, not how it was interpolated. 2560 covers a retina viewport
- * with room to zoom; 1600 halves the memory a large catalogue holds; 4096
- * reaches 1:1 on most sensors so a close inspection never waits for a decode.
+ * 2560 covers a retina viewport with room to zoom; 1600 halves the memory a
+ * large catalogue holds; 4096 keeps more detail in the working tier. Zooming
+ * beyond it requests the final native-detail demosaic.
  */
 export const PREVIEW_EDGES: Record<PreviewQuality, number> = {
   standard: 1600,
@@ -124,8 +123,11 @@ async function cachedRawProxy(
   quality: WorkingProxyQuality,
   signal: AbortSignal,
 ): Promise<Proxy | null> {
-  if (!(photo.isRaw && maxEdge <= standard)) return null
-  const cached = await readProxyCache(photo, standard, signal)
+  if (!photo.isRaw) return null
+  const cached = await readProxyCache(photo, maxEdge, signal, {
+    quality,
+    maxCachedEdge: maxEdge <= standard ? standard : Infinity,
+  })
   if (!cached || !cachedProxySatisfies(cached, maxEdge, quality)) return null
   return cached
 }
@@ -267,21 +269,17 @@ function proxyFrom(
   }
 }
 
-function persistStandardProxy(
+async function persistProxy(
   photo: Photo,
   proxy: Proxy,
   maxEdge: number,
-  standard: number,
-): void {
-  if (
-    photo.isRaw &&
-    proxy.quality !== 'preview' &&
-    maxEdge >= standard &&
-    Math.max(proxy.width, proxy.height) <= standard
-  ) {
-    void writeProxyCache(photo, proxy, standard).catch((error: unknown) => {
-      console.warn('[esque] Could not persist the RAW working proxy.', error)
-    })
+): Promise<void> {
+  if (!photo.isRaw || proxy.quality === 'preview') return
+  try {
+    await writeProxyCache(photo, proxy, maxEdge)
+  } catch (error) {
+    // A cache failure must not discard a successful decode or block editing.
+    console.warn('[esque] Could not persist the RAW decode; it remains available in memory.', error)
   }
 }
 
@@ -324,7 +322,9 @@ async function decode(
   await repairCatalogDimensions(photo, photoId, linear)
 
   const proxy = proxyFrom(photo, photoId, linear, quality)
-  persistStandardProxy(photo, proxy, maxEdge, standard)
+  // Commit before publishing completion; reloading just after "ready" must not
+  // cancel the only disk write of an expensive demosaic.
+  await persistProxy(photo, proxy, maxEdge)
   return proxy
 }
 
@@ -358,11 +358,15 @@ export async function proxyIsReady(
   maxEdge = proxyEdge(),
 ): Promise<boolean> {
   const cached = peekProxy(photoId)
-  if (cached && !cached.preview && Math.max(cached.width, cached.height) >= maxEdge) return true
   const photo = await db.photos.get(photoId)
   if (!photo) return false
   const standard = proxyEdge()
-  return maxEdge <= standard && hasProxyCache(photo, standard)
+  const quality = decodeQuality(photo, maxEdge, standard)
+  if (cached && !cached.preview && cachedProxySatisfies(cached, maxEdge, quality)) return true
+  return hasProxyCache(photo, maxEdge, {
+    quality,
+    maxCachedEdge: maxEdge <= standard ? standard : Infinity,
+  })
 }
 
 /**

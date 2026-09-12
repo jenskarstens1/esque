@@ -110,8 +110,10 @@ export interface DevelopSession extends EditSaveState {
   swapBeforeAfter(): void
   /** Compare: puts the before reference back to the settings on entry. */
   resetBefore(): void
-  createSnapshot(name: string): Promise<void>
+  /** Captures the current settings. Without a name, numbers it for you. */
+  createSnapshot(name?: string): Promise<string | undefined>
   applySnapshot(id: string): void
+  renameSnapshot(id: string, name: string): Promise<void>
   deleteSnapshot(id: string): Promise<void>
 }
 
@@ -122,6 +124,15 @@ export interface DevelopSession extends EditSaveState {
 setAutoFreeze(false)
 
 const clone = (e: Edits): Edits => structuredClone(e)
+
+/** Names a new snapshot "Snapshot #n", picking up after the highest one taken. */
+function nextSnapshotName(snapshots: Snapshot[]): string {
+  const highest = snapshots.reduce((max, s) => {
+    const n = Number(/^Snapshot #(\d+)$/.exec(s.name)?.[1])
+    return Number.isFinite(n) && n > max ? n : max
+  }, 0)
+  return `Snapshot #${Math.max(highest, snapshots.length) + 1}`
+}
 
 /** `edits` must already be a private, immutable graph — `produce` guarantees it. */
 function makeStep(label: string, detail: string, edits: Edits): HistoryStep {
@@ -581,17 +592,27 @@ export const useDevelop = create<DevelopSession>()((set, get) => ({
     const snap: Snapshot = {
       id: nextId(),
       photoId: s.photoId,
-      name,
+      name: name?.trim() || nextSnapshotName(s.snapshots),
       edits: clone(s.edits),
       createdAt: Date.now(),
     }
     await db.snapshots.put(snap)
-    set({ snapshots: [snap, ...s.snapshots] })
+    set({ snapshots: [snap, ...get().snapshots] })
+    return snap.id
   },
 
   applySnapshot(id) {
     const snap = get().snapshots.find((x) => x.id === id)
     if (snap) get().replace(`Snapshot: ${snap.name}`, snap.edits)
+  },
+
+  async renameSnapshot(id, name) {
+    const trimmed = name.trim()
+    const snap = get().snapshots.find((x) => x.id === id)
+    if (!snap || !trimmed || trimmed === snap.name) return
+    const next = { ...snap, name: trimmed }
+    await db.snapshots.put(next)
+    set({ snapshots: get().snapshots.map((s) => (s.id === id ? next : s)) })
   },
 
   async deleteSnapshot(id) {

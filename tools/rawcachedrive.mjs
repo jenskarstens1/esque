@@ -152,9 +152,24 @@ const first = await openDevelop()
 ok('a RAW opens in Develop', !first.failed && !first.timedOut, JSON.stringify(first))
 console.log(`    first open: ${first.ms} ms`)
 
-await settle(2500) // the cache write is fire-and-forget behind the paint
-let entries = await proxyEntries()
-ok('the decode is written to the proxy cache', entries.length > 0, JSON.stringify(entries))
+const loadDetail = () => page.evaluate(async () => {
+  const { loadProxy } = await import('/src/develop/proxy.ts')
+  const start = performance.now()
+  const proxy = await loadProxy('pc', 4096)
+  return proxy ? {
+    ms: performance.now() - start,
+    width: proxy.width,
+    height: proxy.height,
+    quality: proxy.quality,
+    whiteLevel: proxy.whiteLevel,
+    sample: Array.from(proxy.data.subarray(0, 256)),
+  } : null
+})
+const firstDetail = await loadDetail()
+ok('zoom detail uses the full-quality demosaic', firstDetail?.quality === 'full')
+
+const entries = await proxyEntries()
+ok('working and detail decodes coexist on disk', entries.length >= 2, JSON.stringify(entries))
 console.log(`    cached: ${entries.map((e) => `${e.key} (${(e.size / 1e6).toFixed(1)} MB)`).join(', ')}`)
 
 // --- Reload cold, and take the original away --------------------------------
@@ -203,6 +218,13 @@ ok(
   !!second.tier && second.tier.preview === false && second.tier.quality !== 'preview',
   JSON.stringify(second.tier),
 )
+const secondDetail = await loadDetail()
+ok('zoom detail also survives reload without the original',
+  secondDetail?.quality === 'full' &&
+  secondDetail.width === firstDetail?.width &&
+  secondDetail.height === firstDetail?.height &&
+  Math.abs(secondDetail.whiteLevel - firstDetail.whiteLevel) < 1e-6 &&
+  JSON.stringify(secondDetail.sample) === JSON.stringify(firstDetail.sample))
 
 // --- Cleanup ---------------------------------------------------------------
 await page.evaluate(async () => {
@@ -223,6 +245,8 @@ console.log(
       of: results.length,
       firstOpenMs: first.ms,
       secondOpenMs: second.ms,
+      firstDetailMs: firstDetail?.ms,
+      secondDetailMs: secondDetail?.ms,
       failed,
       errors: errors.slice(0, 6),
     },

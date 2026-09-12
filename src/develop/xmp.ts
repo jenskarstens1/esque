@@ -471,7 +471,31 @@ function parseLocalAdjustments(r: Reader, e: Edits): void {
   parseJsonList(r, 'redEye', 'esq:RedEye', normaliseEye, (items) => (e.redEye = items))
 }
 
-export function parseXmp(xml: string): ParsedXmp | null {
+const ACR_SHARPENING_FIELDS = [
+  ['sharpenAmount', 40],
+  ['sharpenRadius', 1],
+  ['sharpenDetail', 25],
+  ['sharpenMasking', 0],
+] as const
+
+/**
+ * Treat Adobe's factory amount as unspecified on foreign sidecar import.
+ * This is a value-based heuristic, not evidence that the slider was untouched.
+ */
+function dropInheritedSharpening(r: Reader, e: Edits): void {
+  if (!r.touched.has('detail.sharpenAmount')) return
+  const matches = ACR_SHARPENING_FIELDS.every(
+    ([key, value]) => !r.touched.has(`detail.${key}`) || e.detail[key] === value,
+  )
+  if (!matches) return
+  const fresh = defaultEdits().detail
+  for (const [key] of ACR_SHARPENING_FIELDS) {
+    e.detail[key] = fresh[key]
+    r.touched.delete(`detail.${key}`)
+  }
+}
+
+export function parseXmp(xml: string, options: { preset?: boolean } = {}): ParsedXmp | null {
   const doc = new DOMParser().parseFromString(xml, 'application/xml')
   if (doc.getElementsByTagName('parsererror').length) return null
 
@@ -495,15 +519,23 @@ export function parseXmp(xml: string): ParsedXmp | null {
     r.str('Group') ||
     r.str('Cluster') ||
     ''
+  const isPreset = options.preset === true ||
+    (!bag.has('RawFileName') && (r.str('PresetType') !== '' || r.bool('HasSettings') || !!name))
+  // Older esque files have custom fields but no version. Foreign files must
+  // not inherit esque's legacy tint or sharpening migrations.
+  const isEsque = [...bag.keys()].some((key) => key.startsWith('esq:'))
+  if (!isEsque && !isPreset) dropInheritedSharpening(r, edits)
   const paths = [...r.touched]
-  const editVersion = Math.max(1, Math.round(r.num('esq:EditVersion'))) || 1
+  const editVersion = isEsque
+    ? Math.max(1, Math.round(r.num('esq:EditVersion', 1)))
+    : EDITS_VERSION
   return {
     name,
     group,
-    edits: migratePartialEdits(edits, editVersion) as Edits,
+    edits: migratePartialEdits(edits, editVersion),
     sections: [...new Set(paths.map(sectionOfPath))],
     paths,
-    isPreset: !bag.has('RawFileName') && (r.str('PresetType') !== '' || r.bool('HasSettings') || !!name),
+    isPreset,
     supportsAmount: r.bool('SupportsAmount'),
   }
 }
@@ -558,7 +590,7 @@ export function parseLrTemplate(text: string): ParsedXmp | null {
  </rdf:RDF>
 </x:xmpmeta>`
 
-  const parsed = parseXmp(xml)
+  const parsed = parseXmp(xml, { preset: true })
   if (!parsed) return null
   return {
     ...parsed,
@@ -572,13 +604,13 @@ export function parseLrTemplate(text: string): ParsedXmp | null {
 export function parsePresetFile(filename: string, text: string): Preset | null {
   const parsed = filename.toLowerCase().endsWith('.lrtemplate')
     ? parseLrTemplate(text)
-    : parseXmp(text)
+    : parseXmp(text, { preset: true })
   if (!parsed || !parsed.paths.length) return null
 
   // The patch carries whole sections so the shape stays inspectable, but
   // `paths` is what gets applied — a Lightroom pack that only sets Contrast has
   // no business resetting the photo's white balance.
-  const patch: Partial<Edits> = {}
+  const patch: Partial<Edits> = { version: EDITS_VERSION }
   for (const section of parsed.sections) {
     ;(patch as unknown as Record<string, unknown>)[section] = (
       parsed.edits as unknown as Record<string, unknown>
