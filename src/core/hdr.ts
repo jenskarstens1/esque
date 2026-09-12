@@ -17,6 +17,8 @@
  * the app has to write down, not the absence of one.
  */
 
+import type { CSSProperties } from 'react'
+
 export interface HdrCapability {
   /** `dynamic-range-limit` is understood, so image surfaces can be held to SDR. */
   css: boolean
@@ -128,8 +130,9 @@ export const headroomFromStops = (stops: number) =>
  *
  * `dynamic-range-limit` inherits, so one declaration at the root reaches every
  * thumbnail, the filmstrip, the loupe, the Develop canvas and anything a portal
- * puts outside the React tree. Setting it per-surface would mean finding every
- * one of them again the next time somebody adds a view.
+ * puts outside the React tree. This carries the *default*; a surface showing a
+ * photo the viewer has decided about individually overrides it with
+ * {@link dynamicRangeStyle}.
  */
 export function applyDynamicRangeLimit(on: boolean) {
   if (typeof document === 'undefined' || !hdrCapability().css) return
@@ -137,4 +140,16 @@ export function applyDynamicRangeLimit(on: boolean) {
     'dynamic-range-limit',
     on ? 'no-limit' : 'standard',
   )
+}
+
+/**
+ * The same declaration, for one photo's surface.
+ *
+ * Cast because the property is newer than the DOM typings; it inherits, so
+ * putting it on a wrapper reaches the `img` elements inside without the
+ * component having to know how many there are.
+ */
+export function dynamicRangeStyle(on: boolean): CSSProperties {
+  if (!hdrCapability().css) return {}
+  return { dynamicRangeLimit: on ? 'no-limit' : 'standard' } as CSSProperties
 }

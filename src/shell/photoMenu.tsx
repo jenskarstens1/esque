@@ -371,7 +371,7 @@ async function pasteToAll(targets: string[]) {
     const pasted = new Map<string, Edits>()
     for (const p of rows) {
       // An unedited target starts from its own baseline: a JPEG must not
-      // inherit a RAW's capture sharpening just because Detail wasn't copied.
+      // inherit a RAW's noise reduction just because Detail wasn't copied.
       const next = cloneEdits(
         p.edits ?? defaultEdits(editsKind(p.isRaw), undefined, p.meta.iso),
       )

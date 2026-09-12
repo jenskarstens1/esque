@@ -169,7 +169,7 @@ function itemClassName(item: MenuItem, active: boolean) {
   else if (item.danger) state = 'text-red'
 
   let highlight: string | false = false
-  if (active) highlight = item.danger ? 'bg-red text-white' : 'bg-accent text-(--accent-ink)'
+  if (active) highlight = item.danger ? 'bg-red text-white' : 'bg-accent text-accent-ink'
 
   /*
    * The highlight is inset and rounded rather than full-bleed, the way macOS

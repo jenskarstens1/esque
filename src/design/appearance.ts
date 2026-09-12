@@ -84,6 +84,21 @@ export interface AppearanceSettings {
 }
 
 /**
+ * The colour the browser paints its own chrome with — the iOS status bar, the
+ * Android toolbar, the band above a standalone window. It is `--color-base`,
+ * so the app does not open with a dark bar over a light interface. Read off
+ * the document rather than restated, since the values live in CSS.
+ */
+function syncThemeColor() {
+  const meta = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]');
+  if (!meta) return;
+  const base = getComputedStyle(document.documentElement)
+    .getPropertyValue("--color-base")
+    .trim();
+  if (base) meta.content = base;
+}
+
+/**
  * Writes the appearance to the document.
  *
  * Called once as the store is created rather than from an effect: an effect
@@ -94,7 +109,7 @@ export function applyAppearance(s: AppearanceSettings) {
   if (typeof document === "undefined") return;
   const el = document.documentElement;
   el.dataset.appearance = s.appearance;
-  delete el.dataset.accent;
   el.dataset.surround = s.surround;
   el.style.setProperty("--ui-scale", String(TEXT_SCALE[s.textSize] ?? 1));
+  syncThemeColor();
 }

@@ -103,10 +103,10 @@ fn toUv(p: vec2f) -> vec2f {
 }
 
 /** Samples with the chosen out-of-frame behaviour. */
-fn sampleAt(uv: vec2f) -> vec3f {
+fn sampleAt(uv: vec2f) -> vec4f {
   let clamped = clamp(uv, vec2f(0.0), vec2f(1.0));
-  if (any(uv != clamped) && u.uEdgeFill < 0.5) { return vec3f(0.0); }
-  return textureSampleLevel(uImage, sampLin, clamped, 0.0).rgb;
+  if (any(uv != clamped) && u.uEdgeFill < 0.5) { return vec4f(0.0); }
+  return textureSampleLevel(uImage, sampLin, clamped, 0.0);
 }
 
 @fragment
@@ -122,17 +122,21 @@ fn fs(@location(0) uv: vec2f) -> @location(0) vec4f {
   else if (u.uQuarter > 0.5) { p = vec2f(p.y, -p.x); }
 
   let pg = undistort(p, 1.0);
+  // Green rides the undistorted radius, so its sample is the one that carries
+  // the pass-through channels: the scene peak the render stage recorded in
+  // alpha, which HDR viewing needs intact this far down the graph.
+  let green = sampleAt(toUv(pg));
   var rgb: vec3f;
   if (u.uCa.x != 0.0 || u.uCa.y != 0.0) {
     // Lateral CA is a per-channel magnification, so each channel is fetched
     // from its own radius rather than the green one's.
     rgb = vec3f(
       sampleAt(toUv(undistort(p, 1.0 + u.uCa.x))).r,
-      sampleAt(toUv(pg)).g,
+      green.g,
       sampleAt(toUv(undistort(p, 1.0 + u.uCa.y))).b
     );
   } else {
-    rgb = sampleAt(toUv(pg));
+    rgb = green.rgb;
   }
 
   if (u.uLensVignette != 0.0) {
@@ -143,6 +147,6 @@ fn fs(@location(0) uv: vec2f) -> @location(0) vec4f {
     rgb *= 1.0 + u.uLensVignette * r2 * r2;
   }
 
-  return vec4f(max(rgb, vec3f(0.0)), 1.0);
+  return vec4f(max(rgb, vec3f(0.0)), green.a);
 }
 `

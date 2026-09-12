@@ -282,15 +282,12 @@ function DisplayPane() {
             className="flex-1"
           />
         </Field>
-        <Field
-          label="Dynamic range"
-          hint={reach === "none" ? "Not available in this browser." : undefined}
-        >
+        <Field label="Dynamic range">
           <Checkbox
             checked={hdr}
             onChange={setHdr}
             disabled={reach === "none"}
-            label="Enable HDR preview"
+            label="Show HDR photos in full range"
           />
         </Field>
       </FieldGroup>

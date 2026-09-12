@@ -1,4 +1,5 @@
 import { EDITS_VERSION, type Edits, type Layer } from '../core/types'
+import { profileEdits } from '../core/profiles'
 import { withLayerDefaults } from './layers'
 
 /**
@@ -21,6 +22,7 @@ export function migrateEdits<T extends Edits>(edits: T, from?: number): T {
 
   let out = adoptMasks(edits)
   if (version < 2) out = { ...out, layers: out.layers.map(flipLocalTint) }
+  out = expandProfile(out)
 
   return { ...out, version: EDITS_VERSION }
 }
@@ -38,6 +40,7 @@ export function migratePartialEdits<T extends Partial<Edits>>(edits: T, from?: n
 
   let out = adoptMasks(edits)
   if (version < 2 && out.layers) out = { ...out, layers: out.layers.map(flipLocalTint) }
+  out = expandProfile(out)
 
   return { ...out, version: EDITS_VERSION }
 }
@@ -88,4 +91,21 @@ function flipLocalTint(mask: Layer): Layer {
 export function needsMigration(edits: { version?: number } | null | undefined): boolean {
   if (!edits) return false
   return (typeof edits.version === 'number' ? edits.version : 1) < EDITS_VERSION
+}
+
+/**
+ * v3 to v4: the camera profile became the three values it always stood for.
+ *
+ * The named bases are unchanged, so an id expands to exactly the rendering it
+ * already produced and no stored picture moves. A stack with no profile key
+ * says nothing about the base rendering and must keep saying nothing, which is
+ * what a preset that never scoped Profile needs.
+ *
+ * Idempotent by shape rather than by version, for sidecars that travel between
+ * a new machine and an old one.
+ */
+function expandProfile<T extends { profile?: unknown }>(edits: T): T {
+  if (edits.profile === undefined) return edits
+  if (typeof edits.profile !== 'string') return edits
+  return { ...edits, profile: profileEdits(edits.profile) }
 }

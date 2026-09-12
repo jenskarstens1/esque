@@ -84,6 +84,22 @@
     border-radius: var(--sl-track-r);
     background: var(--color-slider-fill);
     background-clip: padding-box;
+    /* Moves with the knob, for the same reason and over the same beat. */
+    transition:
+      background-color var(--duration-fast) var(--ease-out),
+      left var(--duration-fast) var(--ease-out),
+      right var(--duration-fast) var(--ease-out);
+  }
+
+  .esq-slider[data-active='true'] .esq-slider__fill {
+    transition: background-color var(--duration-fast) var(--ease-out);
+  }
+
+  /* Same again for a scrub on the row's numeric readout — see SliderRow. */
+  [data-scrub='true'] .esq-slider__thumb {
+    transition: transform var(--duration-fast) var(--ease-out);
+  }
+  [data-scrub='true'] .esq-slider__fill {
     transition: background-color var(--duration-fast) var(--ease-out);
   }
 
@@ -97,8 +113,8 @@
     width: 1px;
     height: 100%;
     translate: -50% 0;
-    background: rgb(0 0 0 / 0.55);
-    box-shadow: 0 0 0 0.5px rgb(255 255 255 / 0.3);
+    background: var(--color-slider-detent);
+    box-shadow: 0 0 0 0.5px var(--color-slider-detent-ring);
     pointer-events: none;
   }
 
@@ -115,7 +131,12 @@
     align-items: center;
     justify-content: center;
     transform: translate(-50%, -50%);
-    transition: transform var(--duration-fast) var(--ease-out);
+    /* A click on the track or an arrow key moves the knob somewhere it wasn't;
+       gliding there shows which way it went. A drag is already following the
+       pointer, so it animates nothing — see [data-active]. */
+    transition:
+      left var(--duration-fast) var(--ease-out),
+      transform var(--duration-fast) var(--ease-out);
     will-change: transform;
   }
 
@@ -123,6 +144,7 @@
      push-back rather than a scale, so the ring weight stays put. */
   .esq-slider[data-active='true'] .esq-slider__thumb {
     transform: translate(-50%, -50%) perspective(24px) translate3d(0, 0, -2px);
+    transition: transform var(--duration-fast) var(--ease-out);
   }
 
   .esq-slider__knob {
@@ -132,12 +154,33 @@
     border-radius: 999px;
     border: 2px solid var(--color-slider-thumb-ring);
     background: var(--color-slider-thumb);
-    transition: border-color var(--duration-fast) var(--ease-out);
+    box-shadow: var(--shadow-slider-thumb);
+    transition:
+      border-color var(--duration-fast) var(--ease-out),
+      box-shadow var(--duration-fast) var(--ease-out);
   }
 
-  .esq-slider:hover .esq-slider__knob,
+  /*
+   * Hover is scoped to the knob rather than the whole row. A slider is as wide
+   * as the panel, so lighting the ring whenever the pointer is anywhere over it
+   * says "grabbable" about a strip of track that is not the knob. `data-hover`
+   * is set only while the pointer is inside the knob's own hit box, and the
+   * halo is the knob answering: this is the thing under your cursor. Kept to a
+   * soft 3px so it never outgrows the 32px row it lives in.
+   */
+  .esq-slider[data-hover='true'] .esq-slider__knob,
   .esq-slider[data-active='true'] .esq-slider__knob {
     border-color: var(--color-slider-thumb-ring-hover);
+    box-shadow:
+      var(--shadow-slider-thumb),
+      0 0 0 3px var(--color-slider-thumb-halo);
+  }
+
+  /* The knob is the one part of the row that responds to a horizontal drag, so
+     it is the one part that says so. */
+  .esq-slider[data-hover='true'],
+  .esq-slider[data-active='true'] {
+    cursor: ew-resize;
   }
 
   .esq-slider:focus-visible .esq-slider__knob {
@@ -204,9 +247,7 @@
     background: var(--color-control);
     color: var(--color-label);
     font-size: var(--text-ui);
-    box-shadow:
-      0 1px 2px rgb(0 0 0 / 0.25),
-      inset 0 0.5px 0 rgb(255 255 255 / 0.07);
+    box-shadow: var(--shadow-field);
     outline: none;
     transition:
       background-color var(--duration-fast) var(--ease-out),
@@ -304,7 +345,7 @@
     border-radius: 999px;
     /* A transparent border widens the grab target without fattening the ink. */
     border: 2px solid transparent;
-    background-color: rgb(255 255 255 / 0.22);
+    background-color: var(--color-scroll-thumb);
     background-clip: content-box;
     opacity: 0;
     pointer-events: none;
@@ -340,7 +381,7 @@
 
   .esq-scroll-thumb:hover,
   .esq-scroll-thumb[data-dragging] {
-    background-color: rgb(255 255 255 / 0.38);
+    background-color: var(--color-scroll-thumb-hover);
   }
 
   /* ---- Scroll edge fade -------------------------------------------------- */

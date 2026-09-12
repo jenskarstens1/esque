@@ -17,6 +17,7 @@ import { useExport } from '../state/exportStore'
 import { useImporter } from '../state/importer'
 import { useDropZone } from '../state/dropImport'
 import { useDevelop } from '../develop/session'
+import { dropProxy, peekProxy, proxyEdge, proxyStats } from '../develop/proxy'
 import { useMasking } from '../develop/masking'
 import { useRetouch } from '../develop/retouch'
 import * as wbPicker from '../develop/wbPicker'
@@ -37,6 +38,20 @@ export interface DevBridge {
   useImporter: typeof useImporter
   useDropZone: typeof useDropZone
   useDevelop: typeof useDevelop
+  /**
+   * The working-proxy tier a photo is currently on.
+   *
+   * Which tier is on screen is invisible from the outside — the camera's
+   * embedded rendering and a full RAW conversion both paint a canvas, and a
+   * harness that waits for "a canvas" declares a decode finished before it has
+   * started. This is the only honest answer to "has the real thing landed".
+   */
+  proxy: {
+    peek: (photoId: string) => { preview: boolean; quality: string; width: number; height: number } | null
+    drop: typeof dropProxy
+    stats: typeof proxyStats
+    edge: typeof proxyEdge
+  }
   useMasking: typeof useMasking
   useRetouch: typeof useRetouch
   wbPicker: typeof wbPicker
@@ -66,6 +81,15 @@ export function installDevBridge() {
     useImporter,
     useDropZone,
     useDevelop,
+    proxy: {
+      peek: (photoId: string) => {
+        const p = peekProxy(photoId)
+        return p && { preview: p.preview, quality: p.quality, width: p.width, height: p.height }
+      },
+      drop: dropProxy,
+      stats: proxyStats,
+      edge: proxyEdge,
+    },
     useMasking,
     useRetouch,
     wbPicker,

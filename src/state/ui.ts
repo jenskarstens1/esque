@@ -11,7 +11,7 @@ import {
 } from "../design/appearance";
 
 export type Module = "library" | "develop";
-export type ViewMode = "grid" | "loupe" | "compare" | "survey";
+export type ViewMode = "grid" | "loupe";
 
 /**
  * How large the working proxy is decoded, and therefore how far into a photo
@@ -254,11 +254,24 @@ export interface UIState {
   expandedPresetGroups: string[];
 
   /**
-   * Extended dynamic range viewing. Off holds every image to SDR, which is the
-   * reference the edit is judged against; on lets highlights climb into
-   * whatever headroom the display has.
+   * Extended dynamic range viewing, for photos that haven't been told
+   * otherwise. Off holds every image to SDR, which is the reference the edit is
+   * judged against; on lets highlights climb into whatever headroom the display
+   * has.
    */
   hdr: boolean;
+  /**
+   * Photos the viewer has decided about individually, against
+   * {@link UIState.hdr} as the default.
+   *
+   * Dynamic range is a property of the photograph, not of the session. One
+   * frame's blown highlights are the point and want the room; the next one's
+   * are a mistake, and opening them up only makes the mistake brighter. A
+   * single app-wide switch forces the same answer on both, so the decision is
+   * recorded per photo — and only for photos actually decided about, so
+   * changing the default still moves everything nobody has ruled on.
+   */
+  hdrByPhoto: Record<string, boolean>;
   /**
    * How far above display white HDR viewing reaches, in stops. Fixed at
    * HEADROOM_STOPS_DEFAULT — nothing reports what a panel actually holds, so
@@ -324,7 +337,8 @@ export interface UIState {
   expandPresetGroup: (group: string | string[]) => void;
   setPresetGroupsExpanded: (groups: string[]) => void;
   setHdr: (on: boolean) => void;
-  toggleHdr: () => void;
+  setPhotoHdr: (ids: string[], on: boolean) => void;
+  togglePhotoHdr: (ids: string[]) => void;
   setSeenVersion: (v: string) => void;
 }
 
@@ -398,6 +412,7 @@ export const useUI = create<UIState>()(
       previewQuality: "high",
       expandedPresetGroups: [],
       hdr: false,
+      hdrByPhoto: {},
       hdrHeadroom: HEADROOM_STOPS_DEFAULT,
       seenVersion: null,
 
@@ -537,7 +552,31 @@ export const useUI = create<UIState>()(
         // left persisted.
         set(hdr ? { hdr, hdrHeadroom: HEADROOM_STOPS_DEFAULT } : { hdr });
       },
-      toggleHdr: () => get().setHdr(!get().hdr),
+
+      setPhotoHdr: (ids, on) =>
+        set((s) => {
+          const hdrByPhoto = { ...s.hdrByPhoto };
+          for (const id of ids) {
+            // Agreeing with the default is recorded as having no opinion, so a
+            // later change of default still carries the photo with it.
+            if (on === s.hdr) delete hdrByPhoto[id];
+            else hdrByPhoto[id] = on;
+          }
+          // The per-photo button must restore usable headroom just like setHdr.
+          return on
+            ? { hdrByPhoto, hdrHeadroom: HEADROOM_STOPS_DEFAULT }
+            : { hdrByPhoto };
+        }),
+
+      // A selection is one thing to the viewer, so it gets one answer: the key
+      // opens the range unless everything in it is already open. Toggling each
+      // photo against its own state would scatter a mixed selection further
+      // with every press.
+      togglePhotoHdr: (ids) => {
+        if (!ids.length) return;
+        const s = get();
+        s.setPhotoHdr(ids, !ids.every((id) => s.hdrByPhoto[id] ?? s.hdr));
+      },
 
       setSeenVersion: (seenVersion) => set({ seenVersion }),
 
@@ -565,6 +604,10 @@ export const useUI = create<UIState>()(
       // View state is per-session; layout preferences persist.
       partialize: (s) => ({
         module: s.module,
+        // Restored alongside `module` so a reload comes back to the same view
+        // rather than dropping a loupe session into the grid.
+        viewMode: s.viewMode,
+        libraryView: s.libraryView,
         leftPanelOpen: s.leftPanelOpen,
         rightPanelOpen: s.rightPanelOpen,
         filmstripOpen: s.filmstripOpen,
@@ -596,6 +639,7 @@ export const useUI = create<UIState>()(
         compareSplit: s.compareSplit,
         expandedPresetGroups: s.expandedPresetGroups,
         hdr: s.hdr,
+        hdrByPhoto: s.hdrByPhoto,
         hdrHeadroom: s.hdrHeadroom,
         seenVersion: s.seenVersion,
       }),
@@ -607,6 +651,24 @@ export const useUI = create<UIState>()(
 // full range until something says otherwise. Claim it as soon as the store
 // exists — an effect would let the first frame paint under the wrong limit.
 applyDynamicRangeLimit(useUI.getState().hdr);
+
+/**
+ * Whether a given photo shows its extended range.
+ *
+ * A selector rather than a stored flag because the answer is two facts — what
+ * the viewer said about this photo, and what they said about photos in general
+ * — and only the first is worth writing down.
+ */
+export const photoHdr =
+  (id: string | null | undefined) =>
+  (s: UIState): boolean =>
+    !!id && (s.hdrByPhoto[id] ?? s.hdr);
+
+/** The same question of a selection, which is open only when all of it is. */
+export const photosHdr =
+  (ids: string[]) =>
+  (s: UIState): boolean =>
+    ids.length > 0 && ids.every((id) => s.hdrByPhoto[id] ?? s.hdr);
 
 // Same reasoning, and the same moment. `persist` rehydrates from localStorage
 // synchronously, so by the time this runs the store already holds the

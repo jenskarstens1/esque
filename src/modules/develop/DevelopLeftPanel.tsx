@@ -199,7 +199,7 @@ function Navigator() {
         <span className="esq-panel-title min-w-0 flex-1 truncate">Navigator</span>
         <ZoomMenu frame={frame} />
       </div>
-      <div ref={hostRef} className="relative h-[120px] overflow-hidden bg-black">
+      <div ref={hostRef} className="relative h-[120px] overflow-hidden bg-canvas">
         {hasBox && (
           <div
             ref={boxRef}
@@ -411,7 +411,6 @@ function pointAt(el: HTMLElement | null, clientX: number, clientY: number) {
 
 function PresetsSection() {
   const replace = useDevelop((s) => s.replace)
-  const edits = useDevelop((s) => s.edits)
   const photoId = useDevelop((s) => s.photoId)
   const preview = useDevelop((s) => s.preview)
   const userPresets = useLiveQuery(() => db.presets.toArray(), []) ?? NO_PRESETS
@@ -444,7 +443,7 @@ function PresetsSection() {
   const enter = (preset: Preset) => {
     if (!photoId) return
     hovering.current = preset.id
-    preview(applyPreset(edits, preset))
+    preview(applyPreset(useDevelop.getState().edits, preset))
   }
   const leave = (preset: Preset) => {
     if (hovering.current !== preset.id) return
@@ -454,7 +453,7 @@ function PresetsSection() {
   const apply = (preset: Preset) => {
     hovering.current = null
     preview(null)
-    replace(preset.name, applyPreset(edits, preset))
+    replace(preset.name, applyPreset(useDevelop.getState().edits, preset))
   }
 
   const allOpen = expanded.length >= groups.length && groups.length > 0
@@ -677,7 +676,7 @@ function PresetGroup({
         onClick={onToggle}
         aria-expanded={open}
         onContextMenu={(e) => onGroupContextMenu(e, group, presets)}
-        className={cn(ROW, 'group/head flex w-full items-center gap-1.5 hover:bg-white/[0.028]')}
+        className={cn(ROW, 'group/head flex w-full items-center gap-1.5 hover:bg-wash-subtle')}
       >
         <Chevron open={open} />
         {/* The app's eyebrow, not a brighter one of its own: a group header that
@@ -725,8 +724,6 @@ function PresetGroup({
 }
 
 function SavePresetDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const edits = useDevelop((s) => s.edits)
-  const kind = useDevelop((s) => s.kind)
   const expandGroup = useUI((s) => s.expandPresetGroup)
   const userPresets = useLiveQuery(() => db.presets.toArray(), []) ?? NO_PRESETS
   const userGroups = useMemo(
@@ -745,6 +742,7 @@ function SavePresetDialog({ open, onClose }: { open: boolean; onClose: () => voi
     setScopes((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]))
 
   const save = () => {
+    const { edits, kind } = useDevelop.getState()
     void createPreset(name, group, edits, scopes, kind).then((preset) => {
       // Open the group it landed in, so a save you just made is a save you can see.
       expandGroup(preset.group)

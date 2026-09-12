@@ -5,6 +5,7 @@ import type { CurvePoint, ParametricCurve } from '../../core/types'
 import { cn } from '../../lib/cn'
 import { clamp } from '../../lib/math'
 import { Badge } from '../../design/Badge'
+import { token } from '../../design/tokens'
 
 export type CurveChannel = 'rgb' | 'red' | 'green' | 'blue'
 
@@ -16,11 +17,11 @@ export type CurveChannel = 'rgb' | 'red' | 'green' | 'blue'
  */
 const PAD = 6
 
-const CHANNEL_STROKE: Record<CurveChannel, string> = {
-  rgb: 'rgba(255,255,255,.92)',
-  red: 'rgba(255,86,86,.95)',
-  green: 'rgba(86,224,120,.95)',
-  blue: 'rgba(96,148,255,.95)',
+const CHANNEL_TOKEN: Record<CurveChannel, string> = {
+  rgb: '--color-curve-rgb',
+  red: '--color-curve-red',
+  green: '--color-curve-green',
+  blue: '--color-curve-blue',
 }
 
 interface Props {
@@ -104,7 +105,7 @@ export function CurveEditor({
       for (let i = 0; i < n; i++) ctx.lineTo(px(i / (n - 1)), bottom - norm(i) * ph * 0.92)
       ctx.lineTo(PAD + pw, bottom)
       ctx.closePath()
-      ctx.fillStyle = 'rgba(255,255,255,.05)'
+      ctx.fillStyle = token('--color-graph-underlay')
       ctx.fill()
       // Only the profile is stroked — closing the path would draw a box around
       // the plot that reads as a frame rather than as data.
@@ -115,13 +116,13 @@ export function CurveEditor({
         if (i === 0) ctx.moveTo(x, y)
         else ctx.lineTo(x, y)
       }
-      ctx.strokeStyle = 'rgba(255,255,255,.09)'
+      ctx.strokeStyle = token('--color-graph-trace')
       ctx.lineWidth = 1
       ctx.stroke()
     }
 
     // Grid — quarters, matching Lightroom's reading of the tonal ranges.
-    ctx.strokeStyle = 'rgba(255,255,255,.07)'
+    ctx.strokeStyle = token('--color-graph-grid')
     ctx.lineWidth = 0.5
     for (let i = 1; i < 4; i++) {
       const gx = Math.round(px(i / 4)) + 0.25
@@ -137,7 +138,7 @@ export function CurveEditor({
     }
 
     // Identity reference
-    ctx.strokeStyle = 'rgba(255,255,255,.16)'
+    ctx.strokeStyle = token('--color-graph-fill')
     ctx.setLineDash([2, 3])
     ctx.beginPath()
     ctx.moveTo(px(0), py(0))
@@ -156,10 +157,10 @@ export function CurveEditor({
     }
     ctx.lineJoin = 'round'
     ctx.lineCap = 'round'
-    ctx.strokeStyle = 'rgba(0,0,0,.5)'
+    ctx.strokeStyle = token('--color-graph-backing')
     ctx.lineWidth = 3.5
     ctx.stroke()
-    ctx.strokeStyle = CHANNEL_STROKE[channel]
+    ctx.strokeStyle = token(CHANNEL_TOKEN[channel])
     ctx.lineWidth = 1.5
     ctx.stroke()
 
@@ -172,14 +173,14 @@ export function CurveEditor({
         if (live) {
           ctx.beginPath()
           ctx.arc(x, y, 8, 0, Math.PI * 2)
-          ctx.fillStyle = 'rgba(255,255,255,.14)'
+          ctx.fillStyle = token('--color-graph-halo')
           ctx.fill()
         }
         ctx.beginPath()
         ctx.arc(x, y, live ? 4 : 3, 0, Math.PI * 2)
-        ctx.fillStyle = live ? '#fff' : 'rgba(255,255,255,.8)'
+        ctx.fillStyle = token(live ? '--color-graph-point-live' : '--color-graph-point')
         ctx.fill()
-        ctx.strokeStyle = 'rgba(0,0,0,.6)'
+        ctx.strokeStyle = token('--color-graph-backing')
         ctx.lineWidth = 1
         ctx.stroke()
       })
@@ -188,7 +189,7 @@ export function CurveEditor({
     // Live probe from the image
     if (probe != null) {
       const x = px(clamp(probe, 0, 1))
-      ctx.strokeStyle = 'rgba(255,255,255,.35)'
+      ctx.strokeStyle = token('--color-graph-probe')
       ctx.lineWidth = 1
       ctx.beginPath()
       ctx.moveTo(x, PAD)
@@ -272,7 +273,7 @@ export function CurveEditor({
 
   return (
     <div className="select-none">
-      <div className="overflow-hidden rounded-md bg-black/45 shadow-[inset_0_0_0_0.5px_var(--color-hairline)]">
+      <div className="overflow-hidden rounded-md bg-graph-well shadow-[inset_0_0_0_0.5px_var(--color-hairline)]">
         <div
           ref={hostRef}
           onPointerDown={onPointerDown}
@@ -444,7 +445,9 @@ function ToneAxis({
                   'absolute inset-y-[2px] left-1/2 w-[3px] -translate-x-1/2 rounded-full',
                   'shadow-[0_0_0_0.5px_rgb(0_0_0/0.7)]',
                   'transition-colors duration-[--duration-fast]',
-                  dragging === key ? 'bg-white' : 'bg-label-secondary group-hover/split:bg-white',
+                  dragging === key
+                    ? 'bg-graph-point-live'
+                    : 'bg-graph-point group-hover/split:bg-graph-point-live',
                 )}
               />
             </button>

@@ -728,7 +728,7 @@ const basicPaths = (...fields: string[]) => fields.map((f) => `basic.${f}`)
 const detailPaths = (...fields: string[]) => fields.map((f) => `detail.${f}`)
 
 export const PRESET_SCOPES: PresetScope[] = [
-  { id: 'profile', label: 'Profile', section: 'profile', paths: ['profile'] },
+  { id: 'profile', label: 'RAW Profile', section: 'profile', paths: null },
   {
     id: 'whiteBalance',
     label: 'White Balance',

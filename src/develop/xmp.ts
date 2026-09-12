@@ -17,7 +17,7 @@ import {
   defaultMaskAdjustments,
   sectionOfPath,
 } from '../core/defaults'
-import { CAMERA_PROFILES, cameraProfile } from '../core/profiles'
+import { CAMERA_PROFILES, profileEdits, profileLabel, profileName } from '../core/profiles'
 import { COLOR_BANDS, EDITS_VERSION } from '../core/types'
 import { BLEND_MODE_LABELS, withLayerDefaults } from './layers'
 import { migratePartialEdits } from './migrate'
@@ -246,11 +246,29 @@ function parseBasic(r: Reader, e: Edits): void {
 }
 
 function parseProfile(r: Reader, e: Edits): void {
-  if (!r.mark('profile', ['esq:Profile', 'CameraProfile'])) return
+  if (!r.mark('profile', ['esq:Profile', 'CameraProfile', 'esq:ProfileContrast'])) return
   const named = r.str(['esq:Profile', 'CameraProfile']).trim().toLowerCase()
   const match = CAMERA_PROFILES.find((p) => p.id === named || p.name.toLowerCase() === named)
-  if (match) e.profile = match.id
-  else r.touched.delete('profile')
+
+  // A named base is only a shorthand for the three values, so it seeds them and
+  // whatever the file also states overrides it. That order is what lets a
+  // sidecar written by an older esque, which had the name and nothing else,
+  // still land on the rendering it meant.
+  const base = match ? profileEdits(match.id) : e.profile
+  const values = {
+    rolloff: r.mark('profile', 'esq:ProfileRolloff') ? r.num('esq:ProfileRolloff', base.rolloff) : base.rolloff,
+    contrast: r.mark('profile', 'esq:ProfileContrast') ? r.num('esq:ProfileContrast', base.contrast) : base.contrast,
+    saturation: r.mark('profile', 'esq:ProfileSaturation')
+      ? r.num('esq:ProfileSaturation', base.saturation)
+      : base.saturation,
+  }
+
+  if (!match && values.rolloff === base.rolloff && values.contrast === base.contrast
+    && values.saturation === base.saturation) {
+    r.touched.delete('profile')
+    return
+  }
+  e.profile = { ...values, name: profileName(values) }
 }
 
 function parseTone(r: Reader, e: Edits): void {
@@ -353,7 +371,7 @@ function parseColor(r: Reader, e: Edits): void {
 
 function parseDetailEffects(r: Reader, e: Edits): void {
   readNumbers(r, [
-    ['detail.sharpenAmount', 'Sharpness', 40, (v) => (e.detail.sharpenAmount = v)],
+    ['detail.sharpenAmount', 'Sharpness', 0, (v) => (e.detail.sharpenAmount = v)],
     ['detail.sharpenRadius', 'SharpenRadius', 1, (v) => (e.detail.sharpenRadius = v)],
     ['detail.sharpenDetail', 'SharpenDetail', 25, (v) => (e.detail.sharpenDetail = v)],
     ['detail.sharpenMasking', 'SharpenEdgeMasking', undefined, (v) => (e.detail.sharpenMasking = v)],
@@ -650,7 +668,14 @@ function attributeWriter(sections: EditSection[], only?: string[] | null): Attri
 
 function writeBasicAttributes(e: Edits, put: PutAttribute): void {
   const b = e.basic
-  put('profile', `crs:CameraProfile="${xmlAttr(cameraProfile(e.profile).name)}"`, `esq:Profile="${xmlAttr(e.profile)}"`)
+  put(
+    'profile',
+    `crs:CameraProfile="${xmlAttr(profileLabel(e.profile))}"`,
+    `esq:Profile="${xmlAttr(e.profile.name)}"`,
+    `esq:ProfileRolloff="${int(e.profile.rolloff)}"`,
+    `esq:ProfileContrast="${int(e.profile.contrast)}"`,
+    `esq:ProfileSaturation="${int(e.profile.saturation)}"`,
+  )
   put('basic.wbMode', `crs:WhiteBalance="${WB_OUT[b.wbMode]}"`)
   for (const [path, attribute] of [
     ['basic.temp', `crs:Temperature="${int(b.temp)}"`], ['basic.tint', `crs:Tint="${int(b.tint)}"`],

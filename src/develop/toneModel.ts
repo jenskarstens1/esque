@@ -24,7 +24,7 @@ import {
   type Mat3,
   type WhitePoint,
 } from '../core/color'
-import { cameraProfile } from '../core/profiles'
+import { profileRender } from '../core/profiles'
 import { clamp01 } from '../lib/math'
 import type { Edits } from '../core/types'
 
@@ -168,8 +168,8 @@ export function basicParams(edits: Edits, source: SourceInfo): BasicParams {
       ? [1, 1, 1]
       : whiteBalanceGain(source.asShot, { temp: b.temp, tint: b.tint })
 
-  const profile = cameraProfile(edits.profile)
   const isRaw = source.isRaw
+  const profile = profileRender(edits.profile, isRaw)
 
   return {
     wbGain,
@@ -185,9 +185,9 @@ export function basicParams(edits: Edits, source: SourceInfo): BasicParams {
     saturation: b.saturation / 100,
     protectSkin: b.protectSkin,
     avoidColorShift: b.avoidColorShift,
-    profileCurve: isRaw ? profile.curve : 0,
-    profileSat: isRaw ? profile.saturation : 0,
-    shoulder: isRaw ? profile.shoulder : 1,
+    profileCurve: profile.curve,
+    profileSat: profile.saturation,
+    shoulder: profile.shoulder,
   }
 }
 

@@ -1,5 +1,5 @@
 import { createRoot } from 'react-dom/client'
-import { useEffect } from 'react'
+import { Profiler, useEffect } from 'react'
 
 import { DevelopLeftPanel } from '../modules/develop/DevelopLeftPanel'
 import { ToastHost } from '../design/ToastHost'
@@ -8,6 +8,9 @@ import { db } from '../catalog/db'
 import { defaultEdits } from '../core/defaults'
 import type { Preset } from '../core/types'
 import { useUI } from '../state/ui'
+import { useDevelop } from '../develop/session'
+import { applyPreset } from '../develop/presets'
+import { sameEdits } from '../develop/equal'
 import '../styles/index.css'
 
 /*
@@ -30,6 +33,7 @@ declare global {
 }
 
 const failures: string[] = []
+let panelCommits = 0
 const fail = (m: string) => failures.push(m)
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
@@ -95,7 +99,41 @@ async function drive() {
   await checkPresetMenus()
   await checkBuiltInAndGroupMenus()
   await checkTreeOverflow(context)
+  await checkAdjustmentSubscriptions()
   await leaveScreenshotState(context.presetScroll)
+}
+
+async function checkAdjustmentSubscriptions() {
+  const saved = useDevelop.getState()
+  try {
+    useDevelop.setState({ photoId: 'presetpanelcheck', edits: defaultEdits() })
+    await sleep(100)
+    const commits = panelCommits
+    for (let i = 1; i <= 10; i++) {
+      const edits = { ...useDevelop.getState().edits,
+        basic: { ...useDevelop.getState().edits.basic, exposure: i / 10 } }
+      useDevelop.setState({ edits })
+      await sleep(20)
+    }
+    if (panelCommits !== commits) fail('slider changes re-render the preset tree or its closed dialog')
+    const preset = await db.presets.get('u1')
+    const row = presetRow('My Warm Look')
+    if (!preset || !row) throw new Error('Missing preset fixture')
+    const expected = applyPreset(useDevelop.getState().edits, preset)
+    row.dispatchEvent(new PointerEvent('pointerover', { bubbles: true, pointerType: 'mouse' }))
+    await sleep(50)
+    if (!sameEdits(useDevelop.getState().previewEdits, expected))
+      fail('preset hover does not use the latest slider settings')
+    // No catalog writes: only observe the arguments of the apply action.
+    let applied = false
+    useDevelop.setState({ replace: (_label, edits) => { applied = sameEdits(edits, expected) } })
+    await sleep(50)
+    row.click()
+    await sleep(50)
+    if (!applied) fail('preset apply does not use the latest slider settings')
+  } finally {
+    useDevelop.setState(saved)
+  }
 }
 
 async function seedPresets() {
@@ -298,7 +336,9 @@ export function Harness() {
   return (
     <div className="h-full bg-base">
       <div className="h-[560px] w-[240px] border-r border-hairline">
-        <DevelopLeftPanel />
+        <Profiler id="left-panel" onRender={() => { panelCommits++ }}>
+          <DevelopLeftPanel />
+        </Profiler>
       </div>
       <ToastHost />
       <PromptHost />

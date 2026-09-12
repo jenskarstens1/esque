@@ -15,7 +15,7 @@ import { db } from '../catalog/db'
 import { decodedAsShotTempTint } from '../core/color'
 import { RENDERED_WHITE_POINT, type SourceImage } from '../core/workingImage'
 import { createDemandQueue } from '../lib/demandQueue'
-import { readProxyCache, writeProxyCache } from './proxyCache'
+import { hasProxyCache, readProxyCache, writeProxyCache } from './proxyCache'
 import { useUI, type PreviewQuality } from '../state/ui'
 import type { Photo } from '../core/types'
 import type { DecodedMeta, LinearImage, RawCrop } from '../raw/decoded'
@@ -342,6 +342,27 @@ export function loadProxy(
   signal?: AbortSignal,
 ): Promise<Proxy | null> {
   return requestProxy(photoId, maxEdge, signal)
+}
+
+/**
+ * Whether this photo's conversion can be served without decoding it again —
+ * either from the tier already in memory or from the one on disk.
+ *
+ * Develop asks before it orders the camera's embedded rendering as a stand-in.
+ * The stand-in exists to cover seconds of demosaic; covering a file read with
+ * it just means opening the original a second time and decoding a JPEG whose
+ * only destiny is to be replaced before anyone sees it.
+ */
+export async function proxyIsReady(
+  photoId: string,
+  maxEdge = proxyEdge(),
+): Promise<boolean> {
+  const cached = peekProxy(photoId)
+  if (cached && !cached.preview && Math.max(cached.width, cached.height) >= maxEdge) return true
+  const photo = await db.photos.get(photoId)
+  if (!photo) return false
+  const standard = proxyEdge()
+  return maxEdge <= standard && hasProxyCache(photo, standard)
 }
 
 /**

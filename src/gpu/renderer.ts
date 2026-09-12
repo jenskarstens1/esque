@@ -63,7 +63,7 @@ import {
   type Layer,
   type LayerTransform,
 } from '../core/types'
-import { cameraProfile } from '../core/profiles'
+import { profileRender } from '../core/profiles'
 import type { SourceImage } from '../core/workingImage'
 import { floatToHalf, halfToFloat } from '../core/half'
 import { getAlpha } from '../ai/alpha'
@@ -156,12 +156,13 @@ export interface HistogramBins {
 const HIST_W = 320
 
 /**
- * Where HDR expansion begins, as a display value.
+ * Where HDR expansion fades in, as a display value.
  *
  * The render shoulder starts folding highlights at about three quarters of the
  * way up, so that is where re-opening them belongs: below it the picture a
  * photographer graded on an SDR display is left exactly alone, and only the
- * part that was compressed to fit gets its range back.
+ * part that was compressed to fit gets its range back. How *far* it gets back
+ * is the scene peak's business, not this constant's.
  */
 const HDR_KNEE = 0.75
 
@@ -288,6 +289,8 @@ export class Renderer {
    * Created with mips so a zoomed-out presentation can minify without aliasing.
    */
   private chain: PingPong | null = null
+  /** One live pane's scene-linear input, before exposure and creative edits. */
+  private captureCache: { inputs: (number | string)[]; target: Tex } | null = null
   /**
    * Scratch blur chains, keyed by downscale factor *and* size.
    *
@@ -531,6 +534,7 @@ export class Renderer {
     edits: Edits,
     bypass: boolean,
     overlay: MaskOverlay | null = null,
+    cacheCapture = false,
   ): Tex {
     const src = this.source!
     const chain = this.chain!
@@ -564,7 +568,7 @@ export class Renderer {
       state.active.swap()
     }
 
-    this.runUngradedStages(edits, state)
+    this.runUngradedStages(edits, state, cacheCapture)
     this.runCreativeStages(edits, state)
     this.runRetouchStages(edits, state)
     this.runGeometryStage(edits, state)
@@ -580,11 +584,46 @@ export class Renderer {
     return state.input
   }
 
-  private runUngradedStages(edits: Edits, state: GraphState) {
+  private runUngradedStages(edits: Edits, state: GraphState, cacheCapture: boolean) {
     if (this.graded) return
-    this.runHighlightRecovery(edits, state)
-    this.runSceneInput(edits, state)
-    this.runCaptureCleanup(edits, state)
+    const { basic, tone, detail, lens, calibration: cal } = edits
+    // Snapshot values, not edit-object identities: offscreen callers and checks
+    // can mutate an Edits object in place. Only inputs consumed before rendering
+    // belong here; exposure, profiles, geometry and local edits are downstream.
+    const inputs = cacheCapture && (
+      detail.impulseNR > 0 || detail.luminanceNR > 0 || detail.colorNR > 0 ||
+      detail.sharpenAmount > 0 || lens.defringePurpleAmount > 0 || lens.defringeGreenAmount > 0 ||
+      (this.sourceInfo?.isRaw && tone.recovery !== 'off')
+    ) ? [
+        tone.recovery, tone.recoveryThreshold,
+        basic.wbMode, basic.temp, basic.tint,
+        cal.shadowTint, cal.redHue, cal.redSaturation, cal.greenHue,
+        cal.greenSaturation, cal.blueHue, cal.blueSaturation,
+        detail.impulseNR, detail.luminanceNR, detail.luminanceNRDetail,
+        detail.luminanceNRContrast, detail.colorNR, detail.colorNRDetail,
+        detail.colorNRSmoothness, detail.sharpenAmount, detail.sharpenRadius,
+        detail.sharpenDetail, detail.sharpenMasking,
+        lens.defringePurpleAmount, lens.defringePurpleHueLo, lens.defringePurpleHueHi,
+        lens.defringeGreenAmount, lens.defringeGreenHueLo, lens.defringeGreenHueHi,
+      ] : null
+    const cached = this.captureCache
+    if (inputs && cached && inputs.length === cached.inputs.length &&
+      inputs.every((value, index) => value === cached.inputs[index])) {
+      state.input = cached.target
+    } else {
+      this.runHighlightRecovery(edits, state)
+      this.runSceneInput(edits, state)
+      this.runCaptureCleanup(edits, state)
+      if (inputs) {
+        const target = cached?.target ?? createTarget(this.ctx, state.width, state.height)
+        this.enc!.encoder.copyTextureToTexture(
+          { texture: state.input.texture },
+          { texture: target.texture },
+          [state.width, state.height],
+        )
+        this.captureCache = { inputs, target }
+      }
+    }
     this.runSceneRendering(edits, state)
   }
 
@@ -681,8 +720,9 @@ export class Renderer {
 
   private runSceneRendering(edits: Edits, state: GraphState) {
     const basic = edits.basic
-    const profile = cameraProfile(edits.profile)
     const isRaw = !!this.sourceInfo?.isRaw
+    const profile = profileRender(edits.profile, isRaw)
+    const shoulder = profile.shoulder
     state.pass(this.cache.get('render', RENDER_FS), (program) => {
       program.set('uExposure', basic.exposure)
         .set('uContrast', basic.contrast / 100)
@@ -694,9 +734,9 @@ export class Renderer {
         .set('uSaturation', basic.saturation / 100)
         .set('uProtectSkin', basic.protectSkin ? 1 : 0)
         .set('uAvoidShift', basic.avoidColorShift ? 1 : 0)
-        .set('uProfileCurve', isRaw ? profile.curve : 0)
-        .set('uProfileSat', isRaw ? profile.saturation : 0)
-        .set('uShoulder', isRaw ? profile.shoulder : 1)
+        .set('uProfileCurve', profile.curve)
+        .set('uProfileSat', profile.saturation)
+        .set('uShoulder', shoulder)
     })
   }
 
@@ -1865,7 +1905,7 @@ export class Renderer {
     if (key !== null && key === this.lastGraphKey && this.lastResult) {
       return { texture: this.lastResult, ran: false }
     }
-    const texture = this.runGraph(edits, !!opts.bypass, opts.maskOverlay ?? null)
+    const texture = this.runGraph(edits, !!opts.bypass, opts.maskOverlay ?? null, key !== null)
     this.lastGraphKey = key
     return { texture, ran: true }
   }
@@ -2253,6 +2293,8 @@ export class Renderer {
     this.source = null
     this.chain?.dispose()
     this.chain = null
+    this.captureCache?.target.destroy()
+    this.captureCache = null
     for (const entry of this.aux.values()) entry.chain.dispose()
     this.aux.clear()
     // Teardown happens between frames, so anything held for the encoder can go.

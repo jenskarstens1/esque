@@ -18,6 +18,11 @@ import { ResetIcon } from './icons'
  * the muscle memory the people using esque already have. Centre detent with alt
  * to bypass it, shift to slow the drag, double-click to reset, drag-scrub on the
  * numeric readout.
+ *
+ * What the knob adds on top of S2 is affordance: it carries a shadow so it stays
+ * readable crossing a bright fill or a colour ramp, and it lights up with an
+ * `ew-resize` cursor only while the pointer is actually inside its grab box —
+ * which is sized to the pointer, so a fingertip gets the target it can hit.
  */
 export interface SliderProps {
   value: number
@@ -95,9 +100,38 @@ function keyedValue(
 /** Width of the thumb's hit box per S2 size, used to detect a knob grab. */
 const THUMB_BOX: Record<SliderSize, number> = { S: 18, M: 20, L: 22, XL: 24 }
 
+/**
+ * The same box under a finger. A fingertip cannot aim at a 20px target, so the
+ * stylesheet grows the thumb on `(pointer: coarse)` — and the grab test has to
+ * grow with it, or the knob you can see is four times the knob you can catch.
+ */
+const COARSE_THUMB_BOX: Record<SliderSize, number> = { S: 26, M: 28, L: 28, XL: 28 }
+
 /** Visual width of the knob. The thumb's travel is inset by half of it at each
  *  end so the knob never hangs off the trough at min or max. */
 const PRECISE_THUMB_W = 6
+/** The precise pill is widened under a finger; the inset has to follow it. */
+const COARSE_PRECISE_THUMB_W = 10
+
+/**
+ * Whether the primary pointer is a finger, watched live rather than read once:
+ * a tablet with a keyboard folded back switches between the two without a
+ * reload, and the knob's geometry has to switch with it.
+ */
+function useCoarsePointer(): boolean {
+  const [coarse, setCoarse] = useState(
+    () => typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches,
+  )
+  useEffect(() => {
+    if (typeof matchMedia !== 'function') return
+    const mq = matchMedia('(pointer: coarse)')
+    const sync = () => setCoarse(mq.matches)
+    sync()
+    mq.addEventListener('change', sync)
+    return () => mq.removeEventListener('change', sync)
+  }, [])
+  return coarse
+}
 
 export function Slider({
   value,
@@ -120,7 +154,9 @@ export function Slider({
 }: SliderProps) {
   const trackRef = useRef<HTMLDivElement>(null)
   const [dragging, setDragging] = useState(false)
+  const [hovered, setHovered] = useState(false)
   const drag = useRef({ startX: 0, startValue: 0, moved: false })
+  const coarse = useCoarsePointer()
 
   const zero = origin ?? (min <= 0 && max >= 0 ? 0 : min)
   const resetTo = defaultValue ?? zero
@@ -129,7 +165,9 @@ export function Slider({
   // half a knob in from each end. Pointer maths and paint both work off that
   // inset range, otherwise a value of `min` puts half the knob outside the
   // trough and every reading is off by a few pixels.
-  const thumbW = thumbStyle === 'precise' ? PRECISE_THUMB_W : THUMB_BOX[size]
+  const thumbBox = (coarse ? COARSE_THUMB_BOX : THUMB_BOX)[size]
+  const preciseW = coarse ? COARSE_PRECISE_THUMB_W : PRECISE_THUMB_W
+  const thumbW = thumbStyle === 'precise' ? preciseW : thumbBox
   const travel = (frac: number) => `calc(${thumbW / 2}px + (100% - ${thumbW}px) * ${frac})`
 
   const frac = (v: number) => clamp(scale.toPosition(clamp(v, min, max), min, max), 0, 1)
@@ -160,6 +198,12 @@ export function Slider({
     [max, min, onChange, scale, step, zero],
   )
 
+  /** True when a client X falls inside the knob's grab box. */
+  const overKnob = (clientX: number, rect: DOMRect) => {
+    const knobX = rect.left + thumbW / 2 + knobFrac * (rect.width - thumbW)
+    return Math.abs(clientX - knobX) <= thumbBox / 2
+  }
+
   const onPointerDown = (e: React.PointerEvent) => {
     if (disabled || e.button !== 0) return
     const el = trackRef.current
@@ -168,8 +212,7 @@ export function Slider({
     el.setPointerCapture(e.pointerId)
 
     const rect = el.getBoundingClientRect()
-    const knobX = rect.left + thumbW / 2 + knobFrac * (rect.width - thumbW)
-    const onKnob = Math.abs(e.clientX - knobX) <= THUMB_BOX[size] / 2
+    const onKnob = overKnob(e.clientX, rect)
 
     let startValue = value
     if (!onKnob) {
@@ -182,9 +225,16 @@ export function Slider({
   }
 
   const onPointerMove = (e: React.PointerEvent) => {
-    if (!dragging) return
     const el = trackRef.current
     if (!el) return
+    if (!dragging) {
+      // A finger has no hover, and a pen hovering is close enough to a mouse.
+      if (e.pointerType !== 'touch') {
+        const near = !disabled && overKnob(e.clientX, el.getBoundingClientRect())
+        if (near !== hovered) setHovered(near)
+      }
+      return
+    }
     const rect = el.getBoundingClientRect()
     const dx = e.clientX - drag.current.startX
     if (Math.abs(dx) > 1) drag.current.moved = true
@@ -203,6 +253,13 @@ export function Slider({
     const el = trackRef.current
     if (el?.hasPointerCapture(e.pointerId)) el.releasePointerCapture(e.pointerId)
     setDragging(false)
+    // Releasing hands the knob back: it is under the pointer more often than
+    // not, and it should look grabbable again the instant it is.
+    if (el && e.pointerType !== 'touch') {
+      setHovered(overKnob(e.clientX, el.getBoundingClientRect()))
+    } else {
+      setHovered(false)
+    }
     onCommit?.(value)
   }
 
@@ -230,6 +287,7 @@ export function Slider({
       data-track={trackStyle}
       data-thumb={thumbStyle}
       data-active={dragging}
+      data-hover={hovered && !dragging ? 'true' : undefined}
       data-disabled={disabled}
       data-emphasized={isEmphasized ? 'true' : undefined}
       data-gradient={gradient ? 'true' : undefined}
@@ -237,6 +295,7 @@ export function Slider({
       onPointerMove={onPointerMove}
       onPointerUp={endDrag}
       onPointerCancel={endDrag}
+      onPointerLeave={() => setHovered(false)}
       onKeyDown={onKeyDown}
       onDoubleClick={() => {
         if (disabled || drag.current.moved) return
@@ -318,6 +377,8 @@ export interface NumberFieldProps {
   scale?: SliderScale
   onChange: (value: number) => void
   onCommit?: (value: number) => void
+  /** Raised while a scrub is in flight, so the knob can track it without lag. */
+  onScrubbing?: (active: boolean) => void
 }
 
 /**
@@ -335,6 +396,7 @@ export function NumberField({
   scale = LINEAR,
   onChange,
   onCommit,
+  onScrubbing,
 }: NumberFieldProps) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
@@ -374,6 +436,7 @@ export function NumberField({
     const dx = e.clientX - drag.current.x
     if (Math.abs(dx) < 2) return
     drag.current.moved = true
+    onScrubbing?.(true)
     // A fraction of the track per pixel, so the scrub covers the same ground
     // the knob would and stays usable on a non-linear scale.
     const rate = (e.shiftKey ? 0.05 : 0.4) * 0.01
@@ -387,6 +450,7 @@ export function NumberField({
     ;(e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId)
     const { moved } = drag.current
     drag.current.active = false
+    onScrubbing?.(false)
     if (moved) onCommit?.(value)
     else setEditing(true)
   }
@@ -448,6 +512,7 @@ export function SliderRow({
 }: SliderRowProps) {
   const reset = slider.defaultValue ?? slider.origin ?? 0
   const { menu, open } = useMenu()
+  const [scrubbing, setScrubbing] = useState(false)
   const doReset = () => {
     slider.onChange(reset)
     slider.onCommit?.(reset)
@@ -471,7 +536,13 @@ export function SliderRow({
     return extra?.length ? [...own, { kind: 'separator' }, ...extra] : own
   }
   return (
-    <div className="group/row select-none" onContextMenu={(e) => open(e, rowMenu())}>
+    <div
+      className="group/row select-none"
+      /* Scrubbing the readout is a live gesture like a drag, so the knob has to
+         follow it frame for frame rather than easing after it. */
+      data-scrub={scrubbing ? 'true' : undefined}
+      onContextMenu={(e) => open(e, rowMenu())}
+    >
       {/* S2's field layout: label start, output end, track full-width below. */}
       <div className="grid grid-cols-[1fr_auto] items-baseline gap-2">
         <button
@@ -498,6 +569,7 @@ export function SliderRow({
           scale={slider.scale}
           onChange={slider.onChange}
           onCommit={slider.onCommit}
+          onScrubbing={setScrubbing}
         />
       </div>
       <Slider {...slider} aria-label={label} />

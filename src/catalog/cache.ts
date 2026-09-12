@@ -25,6 +25,37 @@ export function createBinaryCache(
 ) {
   let rootPromise: Promise<FileSystemDirectoryHandle | null> | null = null
   let writableAvailable = true
+
+  /**
+   * When an entry was last *used*, as opposed to last written.
+   *
+   * Eviction is meant to be an LRU, but the only timestamp the platform keeps is
+   * the file's mtime, and reading an OPFS file does not move it. Ordered by mtime
+   * alone the pass evicts by age of decode: the RAW you open every morning goes
+   * before one you converted once, last week, and never looked at again — and the
+   * proxy cache exists precisely so that morning costs a read rather than a
+   * conversion. Rewriting 35 MB to touch a timestamp would cost more than the
+   * eviction saves, so the read is recorded here instead.
+   *
+   * In memory, because it only has to outlive the session it is used in: the
+   * eviction pass runs while the app is open, and a fresh session starts from the
+   * mtimes again, which are a floor rather than a lie.
+   */
+  const lastUsed = new Map<string, number>()
+  const USED_ENTRIES = 4096
+
+  function markUsed(key: string) {
+    lastUsed.delete(key)
+    lastUsed.set(key, Date.now())
+    if (lastUsed.size > USED_ENTRIES) {
+      // Map keeps insertion order, so the first key is the least recent.
+      const oldest = lastUsed.keys().next().value
+      if (oldest !== undefined) lastUsed.delete(oldest)
+    }
+  }
+
+  const usedAt = (key: string, mtime: number) => Math.max(mtime, lastUsed.get(key) ?? 0)
+
   const root = () => {
     rootPromise ??= getRoot().catch((error: unknown) => {
       if (unavailable(error)) return null
@@ -80,15 +111,21 @@ export function createBinaryCache(
   async function cacheRead(key: string): Promise<File | null> {
     try {
       const stored = await database.cache.get(key)
-      if (stored) return stored.blob.size ? new File([stored.blob], key.split('/').at(-1)!, {
-        type: stored.blob.type, lastModified: stored.modifiedAt,
-      }) : null
+      if (stored) {
+        if (!stored.blob.size) return null
+        markUsed(key)
+        return new File([stored.blob], key.split('/').at(-1)!, {
+          type: stored.blob.type, lastModified: stored.modifiedAt,
+        })
+      }
       const path = await dirFor(key, false)
       if (!path) return null
       const handle = await path.dir.getFileHandle(path.file)
       const file = await handle.getFile()
       // A concurrent OPFS writer can temporarily expose an empty entry.
-      return file.size ? file : null
+      if (!file.size) return null
+      markUsed(key)
+      return file
     } catch {
       return null
     }
@@ -108,6 +145,7 @@ export function createBinaryCache(
   }
 
   async function cacheDelete(key: string) {
+    lastUsed.delete(key)
     await remove({ key, backend: 'idb' })
     await remove({ key, backend: 'opfs' })
   }
@@ -154,10 +192,13 @@ export function createBinaryCache(
     let total = all.reduce((sum, entry) => sum + entry.size, 0)
     let freed = 0
     const cutoff = maxAgeMs > 0 ? Date.now() - maxAgeMs : -Infinity
-    const candidates = all.filter((entry) => !pinned(entry.key)).sort((a, b) => a.mtime - b.mtime)
+    const candidates = all
+      .filter((entry) => !pinned(entry.key))
+      .sort((a, b) => usedAt(a.key, a.mtime) - usedAt(b.key, b.mtime))
     for (const entry of candidates) {
-      if (total <= maxBytes && entry.mtime >= cutoff) break
+      if (total <= maxBytes && usedAt(entry.key, entry.mtime) >= cutoff) break
       await remove(entry)
+      lastUsed.delete(entry.key)
       total -= entry.size
       freed += entry.size
     }
@@ -167,6 +208,7 @@ export function createBinaryCache(
   async function cacheClear(options: { previewsOnly?: boolean } = {}) {
     for (const entry of await entries()) {
       if (options.previewsOnly && pinned(entry.key)) continue
+      lastUsed.delete(entry.key)
       await remove(entry)
     }
   }

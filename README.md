@@ -78,6 +78,49 @@ self-hosted deployment.
 - **Catalog backup.** Download a portable local catalog and merge it back without
   replacing existing photos or edits, then explicitly reconnect the originals.
 
+### Sharpening defaults
+
+New photos use the Standard profile with sharpening off (Amount **0**) for RAW
+and rendered files at every ISO. Reset All, Reset Detail and double-clicking the
+Sharpen Amount control return to zero. RAW noise reduction retains its
+ISO-calibrated defaults; rendered files still start with noise reduction off.
+Saved edits and explicit sharpening in presets or sidecars are preserved, not
+migrated to zero. A chosen import preset can still enable sharpening.
+
+With the dev server running, `/checks/sharpeningcheck.html` covers defaults,
+resets, imports, saved edits and Auto without needing WebGPU.
+
+### HDR preview
+
+The **HDR** toolbar button and **H** shortcut toggle HDR for the selected photos,
+without changing the global default. Develop applies the photo's dynamic-range
+limit to its live canvas as well as its loading preview. Enabling HDR restores
+the fixed two-stop headroom, including when an older version saved zero headroom.
+Visible HDR requires highlight information above SDR white and a compatible
+browser and HDR display; it does not simply brighten every SDR image.
+
+With the dev server running, `/checks/hdrcheck.html` exercises the real toolbar,
+shortcut and viewport, including per-photo overrides, legacy headroom and GPU
+readback of above-white pixels. It needs WebGPU; it checks the output pipeline,
+not a physical display's brightness.
+
+### Adjustment performance
+
+Live previews reuse the full-quality, scene-linear result of highlight recovery,
+white balance, calibration, noise reduction, sharpening and defringing when those
+inputs are unchanged. Exposure, tone, colour, crop and layer adjustments do not
+repeat that capture work. Changing an upstream setting or loading another source
+invalidates the cache. It holds at most one additional RGBA16F image for the live
+pane; static compare panes and offscreen exports do not allocate another capture
+cache. Noise reduction also skips the sampling kernel for any disabled channel.
+
+With the dev server running, `/checks/adjustmentcheck.html` checks cache
+invalidation, exact 16-bit agreement with uncached rendering, compare views and
+source replacement, then measures cached versus uncached slider updates. Add
+`?edge=6000` for a 24 MP workload (default: 2560-pixel long edge). The check needs
+WebGPU. `/checks/presetpanelcheck.html` also guards against re-rendering the preset
+library during slider updates and checks that hover/apply use the latest edits.
+
 ## Badges
 
 Status badges, comparison captions, tool readouts, thumbnail markers and library

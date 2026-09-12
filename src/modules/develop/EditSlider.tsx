@@ -33,10 +33,9 @@ function write(obj: Record<string, unknown>, path: Path, value: number) {
 }
 
 /**
- * Slider defaults are per-file: capture sharpening and colour noise reduction
- * start at their ISO-calibrated baseline on a RAW, and at 0 on a file
- * that was already rendered. Reading the wrong one makes double-click-to-reset
- * push a JPEG's sharpening up to a RAW's default.
+ * Sharpening resets to zero for every file. Noise reduction still needs the
+ * per-file, ISO-calibrated baseline so double-click does not add RAW denoising
+ * to an already-rendered file.
  */
 const FALLBACKS: Record<FileKind, Edits> = {
   raw: defaultEdits('raw'),
@@ -82,8 +81,7 @@ export function EditSlider({
     return read(FALLBACKS[kind], path) ?? 0
   }, [iso, kind, path])
   // Double-click restores the field's *default*, not the slider's visual zero.
-  // The two differ exactly where a RAW needs a non-zero starting point —
-  // capture sharpening, colour NR, and the NR detail sliders that sit at 50.
+  // The two differ for controls such as RAW noise reduction and its subcontrols.
   const initial = rest.defaultValue ?? fallback
 
   const menuItems = useCallback(

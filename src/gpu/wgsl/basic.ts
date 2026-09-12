@@ -60,6 +60,20 @@ fn fs(@location(0) uv: vec2f) -> @location(0) vec4f {
  * instead of clipping each channel independently. The remaining controls work
  * in Melissa-style tone space and return bounded display-linear ProPhoto for the
  * creative and local stages.
+ *
+ * The headroom this pass folds away is written to alpha, and every later pass
+ * carries it through untouched. Alpha holds one number with one meaning: how
+ * much brighter than the value in RGB this pixel would be on a display with
+ * unlimited range. It arrives as 1 for an ordinary file, as a gain map's own
+ * ratio for a phone's HDR JPEG, and this pass multiplies in whatever the
+ * shoulder just compressed away.
+ *
+ * That is the whole reason HDR viewing can reach a display's real headroom:
+ * the shoulder is an asymptote, so once the highlights are inside [0,1] the
+ * light that produced them cannot be recovered by inverting it — a half float
+ * cannot tell white from one step below it, and that step is already several
+ * stops of scene light. Recording the number before it is lost costs a channel
+ * nothing else uses.
  */
 export const RENDER_FS = /* wgsl */ `
 ${COMMON}
@@ -92,9 +106,15 @@ fn fs(@location(0) uv: vec2f) -> @location(0) vec4f {
   // A single scale preserves RGB ratios through the display shoulder. Applying
   // the curve per channel is what turns clipped skies magenta or cyan.
   let peak = max(max(c.r, c.g), c.b);
+  // Whatever range the decode already found — a gain map's, or nothing.
+  var headroom = max(src.a, 1.0);
   if (peak > u.uShoulder) {
     let mapped = shoulder(peak, u.uShoulder);
     c = c * (mapped / max(peak, EPS));
+    // The shoulder's own compression, composed with the decode's. Exposure is
+    // already in the peak, so pushing a rendered file past white lands here
+    // too rather than being silently clipped.
+    headroom = headroom * (peak / max(mapped, EPS));
   }
 
   var t = encode(c);
@@ -147,6 +167,6 @@ fn fs(@location(0) uv: vec2f) -> @location(0) vec4f {
     }
   }
 
-  return vec4f(decode(clamp(t, vec3f(0.0), vec3f(1.0))), src.a);
+  return vec4f(decode(clamp(t, vec3f(0.0), vec3f(1.0))), headroom);
 }
 `

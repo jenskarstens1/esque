@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { cn } from '../../lib/cn'
 import { useCatalog } from '../../state/catalog'
+import { photoHdr, useUI } from '../../state/ui'
+import { dynamicRangeStyle } from '../../core/hdr'
 import { usePreviewUrl, useThumbUrl } from '../../catalog/hooks'
 import { THUMB_EDGE } from '../../catalog/previews'
 import { framedSize, healOrientation, type PixelSize } from '../../catalog/aspect'
@@ -46,7 +48,7 @@ function PhotoCanvas({ photo }: { photo: Photo }) {
   const source = useCatalog((s) => s.source)
   const collections = useCollections()
   const { menu, open } = useMenu()
-
+  const hdr = useUI(photoHdr(photo.id))
   const thumb = useThumbUrl(photo)
   const preview = usePreviewUrl(photo)
 
@@ -158,6 +160,7 @@ function PhotoCanvas({ photo }: { photo: Photo }) {
           style={{
             width: frame.width * base || undefined,
             height: frame.height * base || undefined,
+            ...dynamicRangeStyle(hdr),
           }}
           // Interpolation follows the direction of scaling: crisp only once the
           // view is well past every pixel the loaded render actually has,

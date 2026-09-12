@@ -25,7 +25,6 @@
  */
 :root {
   --ui-scale: 1;
-  --accent-ink: #ffffff;
 
   --text-micro: calc(0.625rem * var(--ui-scale));
   --text-mini: calc(0.6875rem * var(--ui-scale));
@@ -101,12 +100,40 @@ html[data-appearance='light'] {
   --color-hairline: rgb(0 0 0 / 0.11);
   --color-hairline-strong: rgb(0 0 0 / 0.18);
 
+  /*
+   * The washes invert outright. A tint that lifts a near-black header is the
+   * one thing that cannot be carried across — laid over a light panel it either
+   * does nothing or, worse, blows the row out brighter than the surface it is
+   * meant to sit in. Slightly heavier than the mirror of the dark values,
+   * because a dark film over white is less visible than a light one over black.
+   */
+  --color-wash-subtle: rgb(0 0 0 / 0.04);
+  --color-wash: rgb(0 0 0 / 0.07);
+  --color-wash-strong: rgb(0 0 0 / 0.12);
+
+  --color-scroll-thumb: rgb(0 0 0 / 0.26);
+  --color-scroll-thumb-hover: rgb(0 0 0 / 0.42);
+
   /* Spectrum's light greys, the mirror of the dark set theme.css lifts. */
   --color-slider-track: #d4d4d9;
   --color-slider-fill: #6b6b73;
   --color-slider-thumb: #ffffff;
   --color-slider-thumb-ring: #48484f;
   --color-slider-thumb-ring-hover: #2a2a2f;
+  --color-slider-thumb-halo: rgb(0 0 0 / 0.1);
+  --color-slider-detent: rgb(0 0 0 / 0.4);
+  --color-slider-detent-ring: rgb(255 255 255 / 0.55);
+
+  /*
+   * The unlit track has to be darker than the control greys around it or the
+   * white knob disappears into it — which is exactly how macOS draws the off
+   * state of a switch on a light window.
+   */
+  --color-switch-track: #c4c4cc;
+  --shadow-switch-track: inset 0 0.5px 1px rgb(0 0 0 / 0.14);
+  --shadow-switch-knob: 0 1px 2px rgb(0 0 0 / 0.25), 0 0 0 0.5px rgb(0 0 0 / 0.08);
+  --shadow-slider-thumb: 0 1px 3px rgb(0 0 0 / 0.28), 0 0 0 0.5px rgb(0 0 0 / 0.16);
+  --color-slider-thumb-halo: rgb(0 0 0 / 0.12);
 
   /* One step lighter, so the ramps read as colour against a light panel
      instead of as four dark bars. */
@@ -128,14 +155,27 @@ html[data-appearance='light'] {
     0 12px 32px rgb(0 0 0 / 0.18), 0 2px 6px rgb(0 0 0 / 0.1), 0 0 0 0.5px rgb(0 0 0 / 0.14);
   --shadow-hud: 0 1px 3px rgb(0 0 0 / 0.22), 0 0 0 0.5px rgb(0 0 0 / 0.12);
 
+  /* No lit top edge to have on a white field; definition comes from a border. */
+  --shadow-field: 0 1px 1px rgb(0 0 0 / 0.05), inset 0 0 0 0.5px rgb(0 0 0 / 0.13);
+
   /*
-   * The histogram's flat fills were picked to read against near-black. On a
-   * light panel the same tones wash out, so they come down in lightness and up
-   * in chroma — the graph, not the theme, is what has to stay legible.
+   * The histogram and the curve keep their dark well — see the note in
+   * theme.css — so the channel colours, the graph ink and the blend they are
+   * stacked in are all appearance-independent and stated only there.
    */
-  --color-hist-r: #d93a2f;
-  --color-hist-g: #1f9e42;
-  --color-hist-b: #2f6fd0;
+}
+
+/*
+ * Grayscale smoothing is a correction for light type on a dark ground: a pale
+ * glyph blooms against black, and `antialiased` thins it back to its drawn
+ * weight. Dark type on a light ground has the opposite problem — it is already
+ * losing weight to the background — so the same setting renders it spindly and
+ * washed, which is what "light mode text looks wrong" nearly always is. The
+ * light set therefore hands rendering back to the platform.
+ */
+html[data-appearance='light'] body {
+  -webkit-font-smoothing: auto;
+  -moz-osx-font-smoothing: auto;
 }
 
 /* ---- Surround ----------------------------------------------------------- */

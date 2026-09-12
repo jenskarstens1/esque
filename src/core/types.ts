@@ -579,12 +579,31 @@ export interface RedEyeEdit {
 // The whole edit stack
 // ---------------------------------------------------------------------------
 
-export const EDITS_VERSION = 3
+export const EDITS_VERSION = 4
+
+/**
+ * The base rendering a RAW is mapped through — see `core/profiles.ts`.
+ *
+ * `name` is a starting point rather than a mode: it picks the three values, and
+ * moving any of them by hand flips it to `custom`, exactly as a nudged Temp
+ * turns a white balance preset into Custom. The values are what actually
+ * renders, so the dropdown can never mean something the sliders do not show.
+ */
+export interface ProfileEdits {
+  /** Id of the named base these values came from, or `custom` once edited. */
+  name: string
+  /** How far below scene white the highlight roll-off starts, 0..40. */
+  rolloff: number
+  /** Strength of the filmic S applied in tone space, 0..100. */
+  contrast: number
+  /** Saturation trim baked into the base rendering, -100..100. */
+  saturation: number
+}
 
 export interface Edits {
   version: number
   /** Camera profile / rendering intent — see `core/profiles.ts`. */
-  profile: string
+  profile: ProfileEdits
   basic: BasicEdits
   tone: ToneEdits
   curve: ToneCurveEdits

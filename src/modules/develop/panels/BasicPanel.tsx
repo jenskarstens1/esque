@@ -7,7 +7,7 @@ import { EditSlider } from '../EditSlider'
 import { isSectionModified } from '../../../develop/modified'
 import { useDevelop } from '../../../develop/session'
 import { autoDevelopCurrent } from '../../../develop/autoApply'
-import { CAMERA_PROFILES } from '../../../core/profiles'
+import { CAMERA_PROFILES, CUSTOM_PROFILE, PROFILE_LIMITS, profileEdits, profileName } from '../../../core/profiles'
 import { WB_PRESETS, MIRED_SCALE, TEMP_MIN, TEMP_MAX, TINT_MIN, TINT_MAX } from '../../../core/wb'
 import type { BasicEdits, Edits, Treatment, WhiteBalanceMode } from '../../../core/types'
 import { useUI } from '../../../state/ui'
@@ -44,7 +44,20 @@ const toCustom = (e: Edits) => {
   e.basic.wbMode = 'custom'
 }
 
-const PROFILE_OPTIONS = CAMERA_PROFILES.map((p) => ({ value: p.id, label: p.name }))
+const NAMED_PROFILES = CAMERA_PROFILES.map((p) => ({ value: p.id, label: p.name }))
+
+/**
+ * Custom is listed only once it applies. It is not a base anybody can pick —
+ * there is nothing for it to mean until the sliders have been moved — but the
+ * dropdown has to be able to show where the photo actually is.
+ */
+const profileOptions = (name: string) =>
+  name === CUSTOM_PROFILE ? [...NAMED_PROFILES, { value: CUSTOM_PROFILE, label: 'Custom' }] : NAMED_PROFILES
+
+/** Editing any of the three by hand is what turns a named base into Custom. */
+const toCustomProfile = (e: Edits) => {
+  e.profile.name = profileName(e.profile)
+}
 
 export function BasicPanel() {
   const modified = useDevelop(
@@ -60,7 +73,7 @@ export function BasicPanel() {
   const reset = useDevelop((s) => s.resetSection)
   const original = useDevelop((s) => s.original)
 
-  const profile = useDevelop((s) => s.edits.profile)
+  const profileBase = useDevelop((s) => s.edits.profile.name)
   const treatment = useDevelop((s) => s.edits.basic.treatment)
   const protectSkin = useDevelop((s) => s.edits.basic.protectSkin)
   const avoidColorShift = useDevelop((s) => s.edits.basic.avoidColorShift)
@@ -86,8 +99,8 @@ export function BasicPanel() {
     )
 
   const setProfile = (id: string) =>
-    update('profile', 'Profile', (e) => {
-      e.profile = id
+    update('profile', 'RAW profile', (e) => {
+      if (id !== CUSTOM_PROFILE) e.profile = profileEdits(id)
     }, false)
 
   const setMode = async (mode: WhiteBalanceMode) => {
@@ -164,16 +177,43 @@ export function BasicPanel() {
           onChange={setTreatment}
           className="mb-2"
         />
+        {/* The dropdown names the base rendering and the three sliders describe
+            it, on the same terms as White balance below: picking a name fills
+            the sliders in, and moving one says Custom. A profile that changed
+            the picture while nothing on screen moved read as a hidden look. */}
         {isRaw && (
-          <SelectField label="Profile">
-            <Select
-              size="sm"
-              value={profile}
-              options={PROFILE_OPTIONS}
-              onChange={setProfile}
-              className="w-full"
+          <div className="mb-2">
+            <SelectField label="RAW profile">
+              <Select
+                size="sm"
+                value={profileBase}
+                options={profileOptions(profileBase)}
+                onChange={setProfile}
+                className="w-full"
+              />
+            </SelectField>
+            <EditSlider
+              path="profile.rolloff"
+              label="Highlight roll-off"
+              min={PROFILE_LIMITS.rolloff.min}
+              max={PROFILE_LIMITS.rolloff.max}
+              side={toCustomProfile}
             />
-          </SelectField>
+            <EditSlider
+              path="profile.contrast"
+              label="Base contrast"
+              min={PROFILE_LIMITS.contrast.min}
+              max={PROFILE_LIMITS.contrast.max}
+              side={toCustomProfile}
+            />
+            <EditSlider
+              path="profile.saturation"
+              label="Base saturation"
+              min={PROFILE_LIMITS.saturation.min}
+              max={PROFILE_LIMITS.saturation.max}
+              side={toCustomProfile}
+            />
+          </div>
         )}
         {/* The dropdown names the light and the two sliders describe it, so the
             three are spaced as one group rather than as three unrelated rows. */}

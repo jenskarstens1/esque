@@ -109,7 +109,7 @@ export async function copyEditsTo(sourceId: string, targets: string[], sections?
         next = cloneEdits(from)
       } else {
         // An unedited target starts from *its own* baseline, so syncing a look
-        // onto a JPEG doesn't hand it a RAW's capture sharpening as a side
+        // onto a JPEG doesn't hand it a RAW's noise reduction as a side
         // effect of the fields nobody selected.
         next = cloneEdits(
           p.edits ?? defaultEdits(editsKind(p.isRaw), undefined, p.meta.iso),

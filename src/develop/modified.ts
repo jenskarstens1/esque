@@ -5,11 +5,9 @@
  * Comparison is structural (see `sameEdits`): this runs once per section on
  * every store notification, including every frame of a slider drag.
  *
- * The baseline depends on the file: a RAW's Detail panel starts with calibrated
- * capture sharpening and colour NR, while those controls start at zero on a
- * JPEG. Those RAW values are *not* modified, while the same values on a JPEG
- * mean somebody moved the sliders. One shared baseline made the dot lie on one
- * kind or the other.
+ * Sharpening starts off on every file. Noise reduction still depends on the
+ * file: a RAW's calibrated NR values are not modified, while the same values
+ * on a JPEG mean somebody moved the sliders.
  */
 import { defaultEdits, rawDetailDefaults, type FileKind } from '../core/defaults'
 import type { Edits } from '../core/types'

@@ -2,7 +2,6 @@ import { cn } from '../lib/cn'
 import { Slider } from '../design/Slider'
 import { SegmentedControl, Select } from '../design/Controls'
 import {
-  CompareIcon,
   FlagIcon,
   GridIcon,
   LoupeIcon,
@@ -10,11 +9,10 @@ import {
   SortAscIcon,
   SortDescIcon,
   StarIcon,
-  SurveyIcon,
   TileFillIcon,
   WaterfallIcon,
 } from '../design/icons'
-import { useUI, type GridLayout, type ViewMode } from '../state/ui'
+import { photosHdr, useUI, type GridLayout, type ViewMode } from '../state/ui'
 import { useCatalog, type SortKey } from '../state/catalog'
 import { setFlag, setRating } from '../catalog/actions'
 import { usePhoto, usePhotoSelection } from '../catalog/hooks'
@@ -68,8 +66,6 @@ export function Toolbar() {
   const viewOptions: { value: ViewMode; label: React.ReactNode; title: string }[] = [
     { value: 'grid', label: <GridIcon size={13} />, title: 'Grid  (G)' },
     { value: 'loupe', label: <LoupeIcon size={13} />, title: 'Loupe  (E)' },
-    { value: 'compare', label: <CompareIcon size={13} />, title: 'Compare  (C)' },
-    { value: 'survey', label: <SurveyIcon size={13} />, title: 'Survey  (N)' },
   ]
 
   const layoutOptions: { value: GridLayout; label: React.ReactNode; title: string }[] = [
@@ -121,7 +117,7 @@ export function Toolbar() {
       <div className="flex shrink-0 items-center gap-2">
         {hdrContent && (
           <>
-            <HdrToggle />
+            <HdrToggle ids={selection.ids} />
             {roomy && <span className="h-3.5 w-px bg-hairline" />}
           </>
         )}
@@ -283,27 +279,30 @@ function ToolbarToggle({
 
 /**
  * Extended-range viewing, on or off.
+/**
+ * Extended range for the photo on screen.
  *
- * Set in letters rather than a glyph because HDR is a mode the whole app enters,
- * not a tool: the label is the only honest way to say which of the two states
- * the pictures on screen are currently in. It lights up only when the display
- * really has headroom, so the button never claims an effect it isn't having.
+ * Set in letters rather than a glyph because there is no icon for a range: the
+ * label is the only honest way to say which of the two states this picture is
+ * currently in. It lights up only when the display really has headroom, so the
+ * button never claims an effect it isn't having.
  */
-function HdrToggle() {
-  const hdr = useUI((s) => s.hdr)
-  const toggleHdr = useUI((s) => s.toggleHdr)
+function HdrToggle({ ids }: { ids: string[] }) {
+  const hdr = useUI(photosHdr(ids))
+  const togglePhotoHdr = useUI((s) => s.togglePhotoHdr)
   const module = useUI((s) => s.module)
   const displayHdr = useDisplayHdr()
   const reach = hdrReach()
 
+  const scope = ids.length > 1 ? ` (${ids.length} photos)` : ''
   const title =
     reach === 'none'
       ? 'HDR viewing is not available in this browser'
       : !displayHdr
-        ? 'HDR Preview: this display reports no range above white  (H)'
+        ? `HDR Preview: this display reports no range above white  (H)${scope}`
         : reach === 'images'
-          ? 'HDR Preview: photos only; this browser shows the editor viewport in SDR  (H)'
-          : 'HDR Preview  (H)'
+          ? `HDR Preview: photos only; this browser shows the editor viewport in SDR  (H)${scope}`
+          : `HDR Preview  (H)${scope}`
 
   // Half a toggle is still worth having in the Library, where the photos are
   // the whole view. In Develop it would light nothing up, so it says so.
@@ -315,7 +314,7 @@ function HdrToggle() {
       title={title}
       disabled={reach === 'none'}
       aria-pressed={hdr}
-      onClick={toggleHdr}
+      onClick={() => togglePhotoHdr(ids)}
       className={cn(
         'esq-tap h-[22px] rounded-[5px] px-1.5 text-micro font-medium tracking-[0.06em]',
         'transition-[background-color,color] duration-[--duration-fast] ease-[--ease-out]',

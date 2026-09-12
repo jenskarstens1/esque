@@ -853,7 +853,7 @@ const api = {
    */
   async ingest(buffer: ArrayBuffer, isRaw: boolean, maxEdge = 512): Promise<IngestResult> {
     if (!isRaw) {
-      const thumb = await renderedThumb(buffer, maxEdge, THUMB_QUALITY).catch(() => null)
+      const thumb = await renderedThumb(buffer, maxEdge, THUMB_QUALITY, true).catch(() => null)
       return { meta: null, thumb, failure: thumb ? null : 'unknown' }
     }
 
@@ -901,7 +901,7 @@ const api = {
    */
   async makeThumb(buffer: ArrayBuffer, isRaw: boolean, maxEdge = 512): Promise<Blob | null> {
     try {
-      if (!isRaw) return await renderedThumb(buffer, maxEdge, THUMB_QUALITY)
+      if (!isRaw) return await renderedThumb(buffer, maxEdge, THUMB_QUALITY, true)
       const raw = await openRaw(new Uint8Array(buffer), { ...PREVIEW_SETTINGS, halfSize: true })
       try {
         const meta = await metaFrom(raw)

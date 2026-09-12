@@ -80,13 +80,19 @@ function ramped(width: number, height: number): SourceImage {
 }
 
 /** A flat colour, for reading a mask's shape straight off the frame. */
-function solid(width: number, height: number, rgb: [number, number, number]): SourceImage {
+function solid(
+  width: number,
+  height: number,
+  rgb: [number, number, number],
+  /** Range the decode found above what the RGB can show, carried in alpha. */
+  headroom = 1,
+): SourceImage {
   const data = new Uint16Array(width * height * 4)
   for (let i = 0; i < width * height; i++) {
     data[i * 4] = toHalf(rgb[0])
     data[i * 4 + 1] = toHalf(rgb[1])
     data[i * 4 + 2] = toHalf(rgb[2])
-    data[i * 4 + 3] = toHalf(1)
+    data[i * 4 + 3] = toHalf(headroom)
   }
   return { width, height, data, ...RENDERED_SOURCE }
 }
@@ -1028,6 +1034,62 @@ async function run() {
     out.hdr = hdr
   }
   checkHdrPresentation()
+
+  // The other half of the promise. A toggle that presents an extended surface
+  // and then puts the same picture on it is the bug this replaced: the old
+  // expansion inverted the shoulder, which is an asymptote, so every highlight
+  // came back within a half-float step of white however much headroom it was
+  // given. Here the range is recorded rather than inferred, so a pixel that
+  // says it has more must visibly get more — and must land back exactly where
+  // it started when the toggle goes off.
+  function checkHdrExpansion() {
+    const flat = defaultEdits()
+    const sdr = { rect: full, hdrHeadroom: 1 }
+    const opened = { rect: full, hdrHeadroom: 4 }
+
+    // The surface is switched once, up front. Sampling either side of a
+    // reconfigure would compare pixels drawn on two different swap chains, and
+    // hdrTogglesBack above already covers the switch itself.
+    renderer.setHdr(true)
+
+    // Once the canvas goes half-float some browsers keep handing drawImage the
+    // last frame from before the reconfigure, which would make every sample
+    // below the same stale pixel and every comparison below vacuous. A sentinel
+    // colour no earlier check drew says whether readback is still following the
+    // current frame; if it is not, there is nothing to measure here.
+    renderer.setImage(solid(80, 60, [0.8, 0.05, 0.05]))
+    renderer.render(flat, sdr)
+    const live = pixelAt(canvas, CW / 2, CH / 2)[0] > 200
+    out.hdrReadbackLive = live
+    if (!live) {
+      out.hdrExpansion = 'canvas readback is stale on an extended surface'
+      renderer.setHdr(false)
+      return
+    }
+
+    renderer.setImage(solid(80, 60, [0.2, 0.2, 0.2], 2))
+    renderer.render(flat, sdr)
+    const sdrPx = pixelAt(canvas, CW / 2, CH / 2)
+
+    renderer.render(flat, opened)
+    const openedPx = pixelAt(canvas, CW / 2, CH / 2)
+
+    // Same pixel and same headroom, but nothing recorded to expand into.
+    renderer.setImage(solid(80, 60, [0.2, 0.2, 0.2]))
+    renderer.render(flat, opened)
+    const plainPx = pixelAt(canvas, CW / 2, CH / 2)
+
+    renderer.setImage(solid(80, 60, [0.2, 0.2, 0.2], 2))
+    renderer.render(flat, sdr)
+    const backPx = pixelAt(canvas, CW / 2, CH / 2)
+    renderer.setHdr(false)
+
+    check('hdrExpandsRecordedRange', openedPx[0] > sdrPx[0] + 8, `${sdrPx[0]}→${openedPx[0]}`)
+    check('hdrLeavesPlainPixels', Math.abs(plainPx[0] - sdrPx[0]) <= 2, `${sdrPx[0]}→${plainPx[0]}`)
+    check('hdrExpansionReverses', Math.abs(backPx[0] - sdrPx[0]) <= 2, `${sdrPx[0]}→${backPx[0]}`)
+    out.hdrExpansion = [sdrPx[0], openedPx[0], plainPx[0], backPx[0]]
+  }
+  checkHdrExpansion()
 
   out.failures = failures
   out.pass = failures.length === 0

@@ -48,7 +48,7 @@ import {
   ZoomIcon,
 } from '../design/icons'
 import { filtersActive, useCatalog, type SortKey } from '../state/catalog'
-import { useUI, BEFORE_AFTER_LABELS, type BeforeAfter } from '../state/ui'
+import { photosHdr, useUI, BEFORE_AFTER_LABELS, type BeforeAfter } from '../state/ui'
 import { useDevelop, ALL_SECTIONS } from '../develop/session'
 import { useImporter } from '../state/importer'
 import { useExport } from '../state/exportStore'
@@ -232,6 +232,31 @@ const COMPARE_MODES: BeforeAfter[] = [
  * Turning and flipping are the two edits people reach for without opening a
  * panel at all, so they belong on the image itself.
  */
+/*
+ * A folder the catalog keeps watching and a handful of loose files are two
+ * different pickers — no browser dialog offers both — but they are one
+ * intention. Hanging both off a single Import button keeps the choice where
+ * the user already is instead of asking them to read two buttons first.
+ */
+export function importMenuItems(): MenuItem[] {
+  const importer = useImporter.getState()
+  return [
+    {
+      label: 'Import Folder…',
+      icon: <ImportIcon size={MENU_ICON} />,
+      commandId: 'file.import',
+      disabled: importer.active,
+      onSelect: () => void importer.run(),
+    },
+    {
+      label: 'Import Photos…',
+      icon: <FilePlusIcon size={MENU_ICON} />,
+      disabled: importer.active,
+      onSelect: () => void importer.runFiles(null, true),
+    },
+  ]
+}
+
 export function cropMenuItems(includeReset = true): MenuItem[] {
   const ui = useUI.getState()
   const dev = useDevelop.getState()
@@ -621,6 +646,9 @@ export function viewportMenuItems(): MenuItem[] {
   const ui = useUI.getState()
   const dev = useDevelop.getState()
   const zoom = zoomCommands()
+  // The viewport shows one photo, and dynamic range is that photo's to answer.
+  const primaryId = useCatalog.getState().primaryId
+  const hdrTargets = primaryId ? [primaryId] : []
 
   return [
     { label: 'Crop & Straighten', icon: <CropIcon size={MENU_ICON} />, submenu: cropMenuItems() },
@@ -683,9 +711,9 @@ export function viewportMenuItems(): MenuItem[] {
       label: 'HDR Preview',
       icon: <ExposureIcon size={MENU_ICON} />,
       commandId: 'view.hdr',
-      checked: ui.hdr,
-      disabled: !hdrSupported(),
-      onSelect: () => ui.toggleHdr(),
+      checked: photosHdr(hdrTargets)(ui),
+      disabled: !hdrSupported() || !hdrTargets.length,
+      onSelect: () => ui.togglePhotoHdr(hdrTargets),
     },
     { kind: 'separator' },
     {

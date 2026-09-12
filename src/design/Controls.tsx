@@ -20,7 +20,7 @@ export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 
 const variants: Record<Variant, string> = {
   primary:
-    'bg-accent text-(--accent-ink) hover:bg-accent-hover active:bg-accent-press shadow-[0_1px_2px_rgb(0_0_0/0.3)]',
+    'bg-accent text-accent-ink hover:bg-accent-hover active:bg-accent-press shadow-[0_1px_2px_rgb(0_0_0/0.3)]',
   secondary:
     'bg-control text-label hover:bg-hover active:bg-active shadow-[0_1px_2px_rgb(0_0_0/0.25),inset_0_0.5px_0_rgb(255_255_255/0.07)]',
   ghost: 'text-icon-secondary hover:bg-raised hover:text-icon active:bg-control',
@@ -311,7 +311,7 @@ export function Switch({
         'esq-tap relative h-[15px] w-[26px] shrink-0 rounded-full transition-colors duration-[--duration-base] ease-[--ease-out]',
         'disabled:pointer-events-none disabled:opacity-35',
         focusRing,
-        checked ? 'bg-accent' : 'bg-control shadow-[inset_0_0.5px_1px_rgb(0_0_0/0.3)]',
+        checked ? 'bg-accent' : 'bg-switch-track shadow-switch-track',
         !showLabel && className,
       )}
     >
@@ -323,7 +323,7 @@ export function Switch({
        */}
       <span
         className={cn(
-          'absolute top-[2px] left-[2px] size-[11px] rounded-full bg-white shadow-[0_1px_2px_rgb(0_0_0/0.4)]',
+          'absolute top-[2px] left-[2px] size-[11px] rounded-full bg-switch-knob shadow-switch-knob',
           'transition-[translate] duration-[--duration-base] ease-[--ease-out]',
           checked && 'translate-x-[11px]',
         )}
@@ -421,9 +421,9 @@ export function Checkbox({
         )}
       >
         {indeterminate ? (
-          <span className="h-[1.5px] w-2 rounded-full bg-(--accent-ink)" />
+          <span className="h-[1.5px] w-2 rounded-full bg-accent-ink" />
         ) : checked ? (
-          <svg viewBox="0 0 12 12" className="size-3 text-(--accent-ink)" aria-hidden>
+          <svg viewBox="0 0 12 12" className="size-3 text-accent-ink" aria-hidden>
             <path
               d="M2.5 6.2 L4.8 8.5 L9.5 3.6"
               fill="none"

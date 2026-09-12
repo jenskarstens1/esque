@@ -1,7 +1,6 @@
 import { useState } from 'react'
 import { cn } from '../../lib/cn'
 import { PanelSection } from '../../design/Panel'
-import { Button } from '../../design/Controls'
 import { Scroller } from '../../design/Scroller'
 import {
   CloseIcon,
@@ -15,7 +14,7 @@ import {
 } from '../../design/icons'
 import { useMenu } from '../../design/useMenu'
 import { MENU_ICON } from '../../design/Menu'
-import { sourceMenuItems } from '../../shell/appMenus'
+import { importMenuItems, sourceMenuItems } from '../../shell/appMenus'
 import { editSmartCollection } from '../../state/smartEditor'
 import { useCatalog, type Source } from '../../state/catalog'
 import { useCollections, useFolders } from '../../catalog/hooks'
@@ -32,8 +31,6 @@ export function LibraryLeftPanel() {
   const collections = useCollections()
   const source = useCatalog((s) => s.source)
   const setSource = useCatalog((s) => s.setSource)
-  const run = useImporter((s) => s.run)
-  const runFiles = useImporter((s) => s.runFiles)
   const total = useLiveQuery(() => db.photos.count(), []) ?? 0
   const folderKey = JSON.stringify(folders.map((folder) => folder.id))
   // Restoring photos can change membership without changing folder metadata.
@@ -46,7 +43,7 @@ export function LibraryLeftPanel() {
     }),
     [folderKey],
   )
-  const { menu, open } = useMenu()
+  const { menu, open, openAt } = useMenu()
 
   const isActive = (s: Source) =>
     s.kind === source.kind && ('id' in s && 'id' in source ? s.id === source.id : true)
@@ -72,74 +69,46 @@ export function LibraryLeftPanel() {
       <PanelSection
         title="Folders"
         collapsible={false}
+        revealActions="always"
         actions={
-          <>
-            <button
-              type="button"
-              title="Import photos…"
-              onClick={(e) => {
-                e.stopPropagation()
-                runFiles(null, true)
-              }}
-              className="text-icon-tertiary transition-colors hover:text-icon"
-            >
-              <FilePlusIcon size={12} />
-            </button>
-            <button
-              type="button"
-              title="Import a folder…"
-              onClick={(e) => {
-                e.stopPropagation()
-                run()
-              }}
-              className="text-icon-tertiary transition-colors hover:text-icon"
-            >
-              <PlusIcon size={12} />
-            </button>
-          </>
+          <button
+            type="button"
+            title="Add folders or photos"
+            aria-label="Add folders or photos"
+            aria-haspopup="menu"
+            onClick={(e) => {
+              e.stopPropagation()
+              const r = e.currentTarget.getBoundingClientRect()
+              openAt(r.right, r.bottom + 4, importMenuItems(), { fromRight: true })
+            }}
+            className="flex size-6 items-center justify-center rounded-md text-icon-tertiary transition-colors hover:bg-raised hover:text-icon"
+          >
+            <PlusIcon size={12} />
+          </button>
         }
       >
-        {folders.length === 0 ? (
-          <Hint>
-            <Button
-              size="sm"
-              variant="ghost"
-              icon={<ImportIcon size={12} />}
-              className="-ml-2"
-              onClick={() => run()}
-            >
-              Import a folder…
-            </Button>
-            <Button
-              size="sm"
-              variant="ghost"
-              icon={<FilePlusIcon size={12} />}
-              onClick={() => runFiles(null, true)}
-            >
-              Import photos…
-            </Button>
-          </Hint>
-        ) : (
-          folders.map((f) => (
-            <FolderRow
-              key={f.id}
-              folder={f}
-              count={folderCounts?.get(f.id)}
-              active={isActive({ kind: 'folder', id: f.id })}
-              onClick={() => setSource({ kind: 'folder', id: f.id })}
-              onContextMenu={(e) => open(e, sourceMenuItems({ kind: 'folder', folder: f }))}
-            />
-          ))
-        )}
+        {folders.map((f) => (
+          <FolderRow
+            key={f.id}
+            folder={f}
+            count={folderCounts?.get(f.id)}
+            active={isActive({ kind: 'folder', id: f.id })}
+            onClick={() => setSource({ kind: 'folder', id: f.id })}
+            onContextMenu={(e) => open(e, sourceMenuItems({ kind: 'folder', folder: f }))}
+          />
+        ))}
       </PanelSection>
 
       <PanelSection
         title="Collections"
         collapsible={false}
+        revealActions="always"
         actions={
           <button
             type="button"
             title="New collection"
+            aria-label="New collection"
+            aria-haspopup="menu"
             onClick={(e) => {
               e.stopPropagation()
               const rect = e.currentTarget.getBoundingClientRect()
@@ -162,38 +131,30 @@ export function LibraryLeftPanel() {
                 ],
               )
             }}
-            className="text-icon-tertiary transition-colors hover:text-icon"
+            className="flex size-6 items-center justify-center rounded-md text-icon-tertiary transition-colors hover:bg-raised hover:text-icon"
           >
             <PlusIcon size={12} />
           </button>
         }
       >
-        {collections.length === 0 ? (
-          <Hint>
-            <span className="text-mini text-label-quaternary">
-              Group photos without moving files.
-            </span>
-          </Hint>
-        ) : (
-          collections.map((c) => (
-            <Row
-              key={c.id}
-              label={c.name}
-              count={c.smart ? undefined : c.photoIds.length}
-              active={isActive({ kind: 'collection', id: c.id })}
-              onClick={() => setSource({ kind: 'collection', id: c.id })}
-              onDoubleClick={c.smart ? () => editSmartCollection(c) : undefined}
-              onContextMenu={(e) => open(e, sourceMenuItems({ kind: 'collection', collection: c }))}
-              icon={
-                c.smart ? (
-                  <SmartCollectionIcon size={13} className="text-accent" />
-                ) : (
-                  <CollectionIcon size={13} />
-                )
-              }
-            />
-          ))
-        )}
+        {collections.map((c) => (
+          <Row
+            key={c.id}
+            label={c.name}
+            count={c.smart ? undefined : c.photoIds.length}
+            active={isActive({ kind: 'collection', id: c.id })}
+            onClick={() => setSource({ kind: 'collection', id: c.id })}
+            onDoubleClick={c.smart ? () => editSmartCollection(c) : undefined}
+            onContextMenu={(e) => open(e, sourceMenuItems({ kind: 'collection', collection: c }))}
+            icon={
+              c.smart ? (
+                <SmartCollectionIcon size={13} className="text-accent" />
+              ) : (
+                <CollectionIcon size={13} />
+              )
+            }
+          />
+        ))}
       </PanelSection>
       {menu}
     </Scroller>
@@ -334,9 +295,3 @@ function Row({
     </div>
   )
 }
-
-/* Rows and hints all pull out by their own padding so their icons and text land
-   on the section titles' left edge, now that no chevron indents those. */
-const Hint = ({ children }: { children: React.ReactNode }) => (
-  <div className="flex min-h-[26px] items-center py-0.5">{children}</div>
-)

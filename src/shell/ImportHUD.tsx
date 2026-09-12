@@ -85,7 +85,7 @@ export function ImportHUD() {
           </span>
         </div>
 
-        <div className="mt-2.5 h-[3px] overflow-hidden rounded-full bg-white/8">
+        <div className="mt-2.5 h-[3px] overflow-hidden rounded-full bg-wash">
           <div
             className={cn(
               'h-full rounded-full bg-accent',

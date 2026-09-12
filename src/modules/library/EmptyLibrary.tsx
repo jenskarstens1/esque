@@ -135,34 +135,30 @@ function NoMatches({ onClear }: { onClear: () => void }) {
 // ---------------------------------------------------------------------------
 
 /*
- * The catalog is empty exactly once, so this screen says the one thing that
- * has to happen next and nothing else — no feature list, no glow, no card.
- * Everything the app promises about your files is better learned by using it
- * than by reading it here.
+ * The catalog is empty exactly once. One heading, two ways in, nothing else.
  */
 function FirstRun() {
+  const active = useImporter((s) => s.active);
   const run = useImporter((s) => s.run);
   const runFiles = useImporter((s) => s.runFiles);
-  const active = useImporter((s) => s.active);
 
   return (
     <Centered>
-      <div className="flex max-w-[32ch] flex-col items-center gap-4 text-center">
+      <div className="flex flex-col items-center gap-4 text-center">
         <Logo size={28} />
 
-        <div className="flex flex-col gap-1">
-          <h1 className="text-headline text-label">No photos yet</h1>
-          <p className="text-ui text-balance text-label-secondary">
-            Import folders or photos to get started.
-          </p>
-        </div>
+        <h1 className="text-headline text-label">No photos yet</h1>
 
-        <div className="mt-0.5 flex items-center gap-2">
-          <Button variant="primary" disabled={active} onClick={() => run()}>
-            {active ? "Importing…" : "Import folder…"}
+        <div className="flex items-center gap-2">
+          <Button variant="primary" disabled={active} onClick={() => void run()}>
+            {active ? "Importing…" : "Choose Folder"}
           </Button>
-          <Button disabled={active} onClick={() => runFiles(null, true)}>
-            Import photos…
+          <Button
+            variant="secondary"
+            disabled={active}
+            onClick={() => void runFiles(null, true)}
+          >
+            Choose Photos
           </Button>
         </div>
       </div>

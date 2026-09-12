@@ -16,6 +16,7 @@ import { SmartCollectionDialog } from './modules/library/SmartCollectionDialog'
 import { Toolbar } from './shell/Toolbar'
 import { MobileBar } from './shell/MobileBar'
 import { ImportHUD } from './shell/ImportHUD'
+import { PageZoomNotice } from './shell/PageZoomNotice'
 import { DropOverlay } from './shell/DropOverlay'
 import { useKeymap } from './shell/useKeymap'
 import { useTouchContextMenu } from './shell/useTouchContextMenu'
@@ -105,6 +106,7 @@ function AppOverlays({
   return (
     <>
       <ImportHUD />
+      <PageZoomNotice />
       <ToastHost />
       <PromptHost />
       <SmartCollectionDialog />

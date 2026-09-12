@@ -44,6 +44,21 @@
   /* ---- Separators ------------------------------------------------------ */  --color-hairline: rgb(255 255 255 / 0.09);
   --color-hairline-strong: rgb(255 255 255 / 0.15);
 
+  /* ---- Washes ----------------------------------------------------------- */
+  /*
+   * Tints laid over whatever happens to be underneath rather than painted onto
+   * a surface with a known tone — a panel header's hover, a progress track, the
+   * tile behind a thumbnail that has not decoded yet.
+   *
+   * They cannot be written as `white/8` at the call site because the direction
+   * is not a constant: on the dark set a wash lifts what it covers, and on the
+   * light one the same wash has to sink it. Three steps, which is every weight
+   * the app has ever needed.
+   */
+  --color-wash-subtle: rgb(255 255 255 / 0.028);
+  --color-wash: rgb(255 255 255 / 0.08);
+  --color-wash-strong: rgb(255 255 255 / 0.14);
+
   /* ---- Slider (React Spectrum S2 greys, dark set) ---------------------- */
   /* Lifted from @adobe/spectrum-tokens so the control reads exactly like S2's
      thick-track / precise-thumb slider, nudged a hair blue to sit in esque's
@@ -53,6 +68,27 @@
   --color-slider-thumb: #131316; /* S2 gray-25  */
   --color-slider-thumb-ring: #dbdbde; /* S2 gray-800 */
   --color-slider-thumb-ring-hover: #f2f2f4; /* S2 gray-900 */
+  /* The knob has to stay legible while it crosses a bright fill or a colour
+     ramp, and the ring alone cannot do that — it is the same value as the
+     things it crosses. A cast shadow separates it from whatever is behind. */
+  --shadow-slider-thumb: 0 1px 3px rgb(0 0 0 / 0.55), 0 0 0 0.5px rgb(0 0 0 / 0.4);
+  /* The halo that appears under the pointer, marking the knob as grabbable. */
+  --color-slider-thumb-halo: rgb(255 255 255 / 0.16);
+  /* The tick marking a track's origin, drawn over whatever the fill or ramp
+     put there — so it carries its own contrast from both sides. */
+  --color-slider-detent: rgb(0 0 0 / 0.55);
+  --color-slider-detent-ring: rgb(255 255 255 / 0.3);
+
+  /* ---- Switch ----------------------------------------------------------- */
+  /* The knob is the one part that has to read against both the accent and the
+     unlit track, so the track is stated rather than borrowed from `--color-
+     control`: in the light set a near-white control would swallow it. */
+  --color-switch-track: #2f2f34;
+  --color-switch-knob: #ffffff;
+
+  /* ---- Overlay scrollbar ------------------------------------------------ */
+  --color-scroll-thumb: rgb(255 255 255 / 0.22);
+  --color-scroll-thumb-hover: rgb(255 255 255 / 0.38);
 
   /* ---- White-balance ramps --------------------------------------------- */
   /*
@@ -75,6 +111,10 @@
   --color-accent-hover: #3d9dff;
   --color-accent-press: #0060df;
   --color-accent-soft: rgb(10 132 255 / 0.18);
+  /* What sits *on* the accent. The accent is one blue in every appearance, so
+     this is one value too — it is a token rather than `text-white` because the
+     thing it names is "legible on the accent", not "white". */
+  --color-accent-ink: #ffffff;
 
   --color-red: #ff453a;
   --color-orange: #ff9f0a;
@@ -106,6 +146,42 @@
   --color-hist-mix-r: #8d0c0c;
   --color-hist-mix-g: #12832a;
   --color-hist-mix-b: #123f8d;
+
+  /* ---- Graph wells ------------------------------------------------------ */
+  /*
+   * The histogram and the tone curve are instruments, not chrome, and they are
+   * the one part of the app that does not change tone with the appearance. A
+   * histogram is light on a dark field because that is what the data is —
+   * counts screened together, where an overlap has to read brighter than either
+   * channel alone. Screen blend only resolves over something near black, so the
+   * well stays dark in the light set too, the way every editor keeps its scopes
+   * dark. It is opaque rather than `black/45` for the same reason: the graph
+   * cannot take its contrast from the panel behind it.
+   *
+   * Everything drawn on it is named here, once, because three files paint into
+   * the same well and two of them do it on a canvas, where there is no cascade
+   * to read the value from.
+   */
+  --color-graph-well: #131316;
+  --color-graph-grid: rgb(255 255 255 / 0.06); /* quarter-tone guides */
+  --color-graph-underlay: rgb(255 255 255 / 0.05); /* histogram behind a curve */
+  --color-graph-trace: rgb(255 255 255 / 0.09); /* its top edge */
+  --color-graph-floor: rgb(255 255 255 / 0.1); /* the line the fills stand on */
+  --color-graph-halo: rgb(255 255 255 / 0.14); /* under a grabbed point */
+  --color-graph-fill: rgb(255 255 255 / 0.16); /* luminance area, identity line */
+  --color-graph-edge: rgb(255 255 255 / 0.2); /* rim along a silhouette */
+  --color-graph-probe: rgb(255 255 255 / 0.35); /* where the pointer is on the image */
+  --color-graph-point: rgb(255 255 255 / 0.8);
+  --color-graph-point-live: #ffffff;
+  --color-graph-shade: rgb(0 0 0 / 0.46); /* a region dimmed out of reach */
+  --color-graph-backing: rgb(0 0 0 / 0.55); /* dark laid under a bright line */
+
+  /* The curve itself, per channel. Near-opaque: it is the subject of the graph,
+     and it has to stay readable where it crosses its own histogram. */
+  --color-curve-rgb: rgb(255 255 255 / 0.92);
+  --color-curve-red: rgb(255 86 86 / 0.95);
+  --color-curve-green: rgb(86 224 120 / 0.95);
+  --color-curve-blue: rgb(96 148 255 / 0.95);
 
   /* ---- Brand ------------------------------------------------------------ */
   /*
@@ -172,20 +248,6 @@
   --radius-xl: 14px;
   --radius-2xl: 20px;
 
-  /* ---- Elevation ------------------------------------------------------- */
-  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.4);
-  --shadow-md: 0 4px 12px rgb(0 0 0 / 0.35), 0 1px 3px rgb(0 0 0 / 0.3);
-  --shadow-lg: 0 16px 48px rgb(0 0 0 / 0.55), 0 2px 8px rgb(0 0 0 / 0.35);
-  --shadow-popover:
-    0 12px 32px rgb(0 0 0 / 0.6), 0 2px 6px rgb(0 0 0 / 0.4), 0 0 0 0.5px rgb(255 255 255 / 0.12);
-  /*
-   * Pills that float directly over the photo — zoom readout, mask names, the
-   * crop angle, the before/after captions. A hairline plus a shallow drop
-   * shadow is what separates them from the image underneath, and it has to work
-   * over a white sky and a black shadow alike, so it never goes opaque.
-   */
-  --shadow-hud: 0 1px 3px rgb(0 0 0 / 0.35), 0 0 0 0.5px rgb(255 255 255 / 0.08);
-
   /* ---- Motion ---------------------------------------------------------- */
   /* Apple's signature deceleration curve. */
   --ease-out: cubic-bezier(0.32, 0.72, 0, 1);
@@ -201,6 +263,45 @@
   --spacing-panel: 15rem; /* 240px default side panel */
   --spacing-filmstrip: 5.75rem;
   --spacing-toolbar: 2.25rem;
+}
+
+/* ---- Elevation ------------------------------------------------------------
+ *
+ * Outside `@theme` on purpose.
+ *
+ * Tailwind resolves a `--shadow-*` theme key when it generates the utility and
+ * bakes the literal colours into the rule, which makes the value a constant —
+ * and a shadow is the one token in the app that cannot be one. Ink that reads
+ * as height over near-black reads as dirt over white, so the light set has to
+ * restate it, and a baked utility would ignore every one of those overrides.
+ *
+ * Declared here as ordinary custom properties and spent through the `@utility`
+ * rules below, which resolve `var()` at use and therefore follow the switch.
+ */
+:root {
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.4);
+  --shadow-md: 0 4px 12px rgb(0 0 0 / 0.35), 0 1px 3px rgb(0 0 0 / 0.3);
+  --shadow-lg: 0 16px 48px rgb(0 0 0 / 0.55), 0 2px 8px rgb(0 0 0 / 0.35);
+  --shadow-popover:
+    0 12px 32px rgb(0 0 0 / 0.6), 0 2px 6px rgb(0 0 0 / 0.4), 0 0 0 0.5px rgb(255 255 255 / 0.12);
+
+  /*
+   * Pills that float directly over the photo — zoom readout, mask names, the
+   * crop angle, the before/after captions. A hairline plus a shallow drop
+   * shadow is what separates them from the image underneath, and it has to work
+   * over a white sky and a black shadow alike, so it never goes opaque.
+   */
+  --shadow-hud: 0 1px 3px rgb(0 0 0 / 0.35), 0 0 0 0.5px rgb(255 255 255 / 0.08);
+
+  /*
+   * Text fields and selects. A drop shadow plus a lit top edge is how a dark
+   * well reads as recessed; on a light set there is no lit edge to have, so the
+   * whole thing swaps for a hairline border in `appearance.css`.
+   */
+  --shadow-field: 0 1px 2px rgb(0 0 0 / 0.25), inset 0 0.5px 0 rgb(255 255 255 / 0.07);
+
+  --shadow-switch-track: inset 0 0.5px 1px rgb(0 0 0 / 0.3);
+  --shadow-switch-knob: 0 1px 2px rgb(0 0 0 / 0.4);
 }
 
 /* ---- Input-capability variants ------------------------------------------ */
@@ -264,6 +365,39 @@
 }
 @utility hairline-t {
   box-shadow: inset 0 0.5px 0 var(--color-hairline);
+}
+
+/* ---- Elevation utilities -------------------------------------------------
+ *
+ * Stated as utilities rather than left to Tailwind's `shadow-*` namespace,
+ * which resolves a `--shadow-*` theme value at build time and bakes it into
+ * the rule. That is fine for a constant, and wrong for these: a shadow is the
+ * one token that has to be *re-read* per appearance, because ink that reads as
+ * height over near-black reads as dirt over white. Baked in, every light-mode
+ * override in `appearance.css` was silently doing nothing.
+ *
+ * `var()` is resolved at use, so these follow the switch.
+ */
+@utility shadow-sm {
+  box-shadow: var(--shadow-sm);
+}
+@utility shadow-md {
+  box-shadow: var(--shadow-md);
+}
+@utility shadow-lg {
+  box-shadow: var(--shadow-lg);
+}
+@utility shadow-popover {
+  box-shadow: var(--shadow-popover);
+}
+@utility shadow-hud {
+  box-shadow: var(--shadow-hud);
+}
+@utility shadow-switch-track {
+  box-shadow: var(--shadow-switch-track);
+}
+@utility shadow-switch-knob {
+  box-shadow: var(--shadow-switch-knob);
 }
 @utility hairline-r {
   box-shadow: inset -0.5px 0 0 var(--color-hairline);

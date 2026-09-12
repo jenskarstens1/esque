@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { cn } from '../../lib/cn'
 import { clamp, formatAltitude, formatDMS } from '../../lib/math'
 import { CopyIcon, MinusIcon, PlusIcon } from '../../design/icons'
@@ -12,15 +12,24 @@ import { toast } from '../../design/toast'
  * Mercator is two lines of arithmetic, and the panel only ever needs the tiles
  * that fall inside a 112px-tall strip.
  *
- * Tiles come from CARTO's dark rendering of OSM data rather than the standard
- * osm.org layer, for two reasons that both matter here: osm.org's tiles are a
- * light basemap that would have to be inverted to sit in this chrome, and its
- * tile policy asks apps to stay off it. CARTO also serves the headers this app
- * needs — the document is cross-origin isolated for LibRaw's SharedArrayBuffer,
- * so every cross-origin image has to be fetched in CORS mode (`crossOrigin`)
+ * Tiles come from Esri's Dark Gray Canvas rather than the standard osm.org
+ * layer, for two reasons that both matter here: osm.org's tiles are a light
+ * basemap that would have to be inverted to sit in this chrome, and its tile
+ * policy asks apps to stay off it. Esri also serves the headers this app needs
+ * — the document is cross-origin isolated for LibRaw's SharedArrayBuffer, so
+ * every cross-origin image has to be fetched in CORS mode (`crossOrigin`)
  * against an `Access-Control-Allow-Origin` that permits it. An image element
  * pointed at a host without that header is blocked outright under COEP:
  * require-corp.
+ *
+ * This layer replaced CARTO's `dark_all`, which now burns an "API KEY REQUIRED"
+ * watermark into the tile bitmap itself — the request still returns 200, so
+ * nothing here could detect it. Esri's canvas needs no key, and unlike the
+ * keyed services it has no quota to exhaust or token to leak in a client build.
+ *
+ * Its quirks, all of which this file works around below: tiles are addressed
+ * row-before-column (`/{z}/{y}/{x}`, not the usual `/{z}/{x}/{y}`), the service
+ * publishes nothing past zoom 16, and it offers no `@2x` variant.
  */
 
 const TILE = 256
@@ -29,9 +38,12 @@ const HALF_W = 480
 const HALF_H = 96
 const HEIGHT = 112
 const MIN_ZOOM = 3
-const MAX_ZOOM = 18
+/** Esri's canvas stops here; deeper requests 404 rather than render. */
+const MAX_ZOOM = 16
 const DEFAULT_ZOOM = 13
-const SUBDOMAINS = ['a', 'b', 'c', 'd']
+/** Two aliases for the same tile service, to widen the HTTP/1.1 socket pool. */
+const HOSTS = ['services', 'server']
+const LAYER = 'ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile'
 
 interface Gps {
   lat: number
@@ -56,14 +68,23 @@ interface Tile {
   top: number
 }
 
-function tilesAround(gps: Gps, zoom: number, retina: boolean): Tile[] {
-  const centre = project(gps.lat, gps.lon, zoom)
-  const count = 2 ** zoom
+function tilesAround(gps: Gps, zoom: number, retina: boolean) {
+  // A 2× display needs twice the pixels per CSS px, and this service has no
+  // `@2x` variant to ask for. The detail comes from one zoom level deeper drawn
+  // at half size instead: same ground, four tiles, double the resolution. The
+  // deepest level has nothing below it to borrow from, so it renders 1:1.
+  const tileZoom = Math.min(retina ? zoom + 1 : zoom, MAX_ZOOM)
+  const scale = 2 ** (zoom - tileZoom)
+  const size = TILE * scale
 
-  const first = Math.floor((centre.x - HALF_W) / TILE)
-  const last = Math.floor((centre.x + HALF_W) / TILE)
-  const top = Math.floor((centre.y - HALF_H) / TILE)
-  const bottom = Math.floor((centre.y + HALF_H) / TILE)
+  const centre = project(gps.lat, gps.lon, tileZoom)
+  const count = 2 ** tileZoom
+
+  // The strip is measured in CSS px, so it spans more tiles as they shrink.
+  const first = Math.floor((centre.x - HALF_W / scale) / TILE)
+  const last = Math.floor((centre.x + HALF_W / scale) / TILE)
+  const top = Math.floor((centre.y - HALF_H / scale) / TILE)
+  const bottom = Math.floor((centre.y + HALF_H / scale) / TILE)
 
   const out: Tile[] = []
   for (let ty = top; ty <= bottom; ty++) {
@@ -72,18 +93,19 @@ function tilesAround(gps: Gps, zoom: number, retina: boolean): Tile[] {
       // Longitude wraps, so a viewport straddling the antimeridian borrows
       // tiles from the far side of the world while keeping its own position.
       const wrapped = ((tx % count) + count) % count
-      const host = SUBDOMAINS[(wrapped + ty) % SUBDOMAINS.length]
+      const host = HOSTS[(wrapped + ty) % HOSTS.length]
       out.push({
-        key: `${zoom}/${tx}/${ty}`,
-        // `@2x` is the same frame at twice the pixels — the only way raster
-        // cartography stays sharp on a 2× display.
-        url: `https://${host}.basemaps.cartocdn.com/dark_all/${zoom}/${wrapped}/${ty}${retina ? '@2x' : ''}.png`,
-        left: tx * TILE - centre.x,
-        top: ty * TILE - centre.y,
+        key: `${tileZoom}/${tx}/${ty}`,
+        // Row before column, and `blankTile=false` so a gap 404s into the
+        // offline tally rather than returning a pale "map data not yet
+        // available" placeholder that would glare out of this dark panel.
+        url: `https://${host}.arcgisonline.com/${LAYER}/${tileZoom}/${ty}/${wrapped}?blankTile=false`,
+        left: (tx * TILE - centre.x) * scale,
+        top: (ty * TILE - centre.y) * scale,
       })
     }
   }
-  return out
+  return { tiles: out, size }
 }
 
 export function LocationMap({ gps, className }: { gps: Gps; className?: string }) {
@@ -93,10 +115,26 @@ export function LocationMap({ gps, className }: { gps: Gps; className?: string }
   const [failed, setFailed] = useState({ view: '', count: 0 })
 
   const retina = typeof window !== 'undefined' && window.devicePixelRatio > 1.5
-  const tiles = useMemo(() => tilesAround(gps, zoom, retina), [gps, zoom, retina])
+  const { tiles, size } = useMemo(() => tilesAround(gps, zoom, retina), [gps, zoom, retina])
   const view = `${gps.lat},${gps.lon},${zoom}`
 
-  const offline = failed.view === view && tiles.length > 0 && failed.count >= tiles.length
+  const [online, setOnline] = useState(() => typeof navigator === 'undefined' || navigator.onLine)
+  useEffect(() => {
+    const update = () => setOnline(navigator.onLine)
+    window.addEventListener('online', update)
+    window.addEventListener('offline', update)
+    return () => {
+      window.removeEventListener('online', update)
+      window.removeEventListener('offline', update)
+    }
+  }, [])
+
+  // Every tile in the view failed. Two very different causes share that symptom:
+  // no network, or open water — Esri publishes nothing where there is nothing to
+  // draw, and those tiles 404 by design. Empty sea should just render as empty
+  // sea, so only a browser that reports itself offline gets the message.
+  const blank = failed.view === view && tiles.length > 0 && failed.count >= tiles.length
+  const offline = blank && !online
   const decimal = `${gps.lat.toFixed(5)}, ${gps.lon.toFixed(5)}`
   const href = `https://www.openstreetmap.org/?mlat=${gps.lat}&mlon=${gps.lon}#map=${zoom}/${gps.lat}/${gps.lon}`
 
@@ -109,7 +147,7 @@ export function LocationMap({ gps, className }: { gps: Gps; className?: string }
         className="group/map relative overflow-hidden rounded-md bg-raised shadow-[inset_0_0_0_0.5px_var(--color-hairline)]"
         style={{ height: HEIGHT }}
       >
-        {!offline && (
+        {!blank && (
           <div className="absolute top-1/2 left-1/2 size-0" aria-hidden>
             {tiles.map((t) => (
               <img
@@ -120,8 +158,8 @@ export function LocationMap({ gps, className }: { gps: Gps; className?: string }
                 decoding="async"
                 crossOrigin="anonymous"
                 onError={noteFailure}
-                className="absolute max-w-none select-none [filter:saturate(0.7)_brightness(1.18)_contrast(1.04)]"
-                style={{ left: t.left, top: t.top, width: TILE, height: TILE }}
+                className="absolute max-w-none select-none [filter:saturate(0.75)_brightness(0.68)_contrast(1.02)]"
+                style={{ left: t.left, top: t.top, width: size, height: size }}
               />
             ))}
           </div>
@@ -166,9 +204,12 @@ export function LocationMap({ gps, className }: { gps: Gps; className?: string }
           </ZoomButton>
         </div>
 
-        {!offline && (
-          <span className="pointer-events-none absolute right-1.5 bottom-1 text-[9px] leading-none text-white/32">
-            © OpenStreetMap · CARTO
+        {!blank && (
+          <span
+            title="Esri, HERE, Garmin, © OpenStreetMap contributors, and the GIS user community"
+            className="pointer-events-none absolute right-1.5 bottom-1 text-[9px] leading-none text-white/32"
+          >
+            © OpenStreetMap · Esri
           </span>
         )}
       </div>

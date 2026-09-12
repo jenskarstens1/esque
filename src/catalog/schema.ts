@@ -24,6 +24,7 @@ import {
   type LayerTransform,
 } from '../core/types'
 import { BLEND_MODE_LABELS } from '../develop/layers'
+import { PROFILE_LIMITS, profileEdits } from '../core/profiles'
 
 export const CATALOG_ARCHIVE_VERSION = 1
 export const MAX_ARCHIVE_BYTES = 64 * 1024 * 1024
@@ -323,11 +324,28 @@ const layers: Parser<PortableMask[]> = (value, path) => {
   return parsed
 }
 
+/**
+ * A v3 catalogue stored the profile as a bare id and a v4 one stores the three
+ * values, so both have to parse: an archive is a file someone made months ago.
+ * The string is widened here rather than in `migrateEdits` because validation
+ * runs first, and a v3 archive would otherwise be rejected before the migration
+ * that knows how to read it ever gets a look.
+ */
+const profileParser: Parser<Edits['profile']> = (value, path) => {
+  if (typeof value === 'string') return profileEdits(text(200, 1)(value, path))
+  return object<Edits['profile']>({
+    name: text(200, 1),
+    rolloff: number(PROFILE_LIMITS.rolloff.min, PROFILE_LIMITS.rolloff.max),
+    contrast: number(PROFILE_LIMITS.contrast.min, PROFILE_LIMITS.contrast.max),
+    saturation: signedPercent,
+  })(value, path)
+}
+
 const editShape: Shape<PortableEdits> = {
   // Every version the migrations can bring forward, not just the current one:
   // an archive is a file someone made months ago and it has to still open.
   version: number(1, EDITS_VERSION),
-  profile: text(200, 1),
+  profile: profileParser,
   basic: object<Edits['basic']>({
     wbMode: oneOf('asShot', 'auto', 'daylight', 'cloudy', 'shade', 'tungsten', 'fluorescent', 'flash', 'custom'),
     temp: number(100, 100_000), tint: number(-1000, 1000), exposure: number(-20, 20),

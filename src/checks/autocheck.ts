@@ -28,6 +28,7 @@ import { asShotTempTint, whiteBalanceGain } from '../gpu/colorspace'
 import type { Edits } from '../core/types'
 import { RENDERED_WHITE_POINT } from '../core/workingImage'
 import { runCheck } from './checkreport'
+import { profileEdits } from '../core/profiles'
 
 declare global {
   interface Window {
@@ -278,7 +279,7 @@ async function checkModel() {
       isRaw: true,
       edits: () => {
         const e = defaultEdits('rendered')
-        e.profile = 'standard'
+        e.profile = profileEdits('standard')
         return e
       },
     },
@@ -287,7 +288,7 @@ async function checkModel() {
       isRaw: true,
       edits: () => {
         const e = defaultEdits('rendered')
-        e.profile = 'vivid'
+        e.profile = profileEdits('vivid')
         e.basic.exposure = 0.8
         e.basic.contrast = 25
         e.basic.highlights = -60
@@ -304,7 +305,7 @@ async function checkModel() {
       isRaw: true,
       edits: () => {
         const e = defaultEdits('rendered')
-        e.profile = 'portrait'
+        e.profile = profileEdits('portrait')
         e.basic.wbMode = 'custom'
         e.basic.temp = 3200
         e.basic.tint = -18
@@ -389,7 +390,7 @@ async function checkRecoveryCeiling() {
   }
 
   const edits = defaultEdits('rendered', CAM_AS_SHOT)
-  edits.profile = 'neutral'
+  edits.profile = profileEdits('neutral')
   const render = async (
     image: SourceImage,
     recovery: Edits['tone']['recovery'],
@@ -474,7 +475,7 @@ function baseEdits(image: SourceImage): Edits {
   e.detail.sharpenAmount = 0
   e.detail.luminanceNR = 0
   e.detail.colorNR = 0
-  e.profile = 'standard'
+  e.profile = profileEdits('standard')
   return e
 }
 

@@ -61,11 +61,6 @@ export const RELEASES: Release[] = [
         term: 'Importing photos',
         text: 'Importing files now selects as many as you like by default, in the menu, the left panel and the empty catalog.',
       },
-      {
-        kind: 'improved',
-        term: 'Settings',
-        text: 'One row of sections at every width, which gives the pane the dialog\u2019s full measure instead of spending it on a column of seven words.',
-      },
     ],
   },
   {

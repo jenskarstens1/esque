@@ -164,7 +164,7 @@ function Loupe({
       style={{ left, top, width: LOUPE_W }}
     >
       <span
-        className="size-7 shrink-0 rounded-md ring-1 ring-white/15"
+        className="size-7 shrink-0 rounded-md ring-1 ring-hairline-strong"
         style={{ background: swatch ?? 'transparent' }}
       />
       <span className="flex min-w-0 flex-col">

@@ -10,10 +10,10 @@ import {
 } from 'react'
 import { Renderer, type Rect, type MaskOverlay as RendererMaskOverlay } from '../../gpu/renderer'
 import { geometryOutputSize, uncrop, ungeometry } from '../../gpu/geometry'
-import { loadPreview, loadProxy, peekProxy, type Proxy } from '../../develop/proxy'
+import { loadPreview, loadProxy, peekProxy, proxyIsReady, type Proxy } from '../../develop/proxy'
 import { useDevelop } from '../../develop/session'
-import { isPairedCompare, isSplitCompare, useUI, type BeforeAfter } from '../../state/ui'
-import { headroomFromStops } from '../../core/hdr'
+import { isPairedCompare, isSplitCompare, photoHdr, useUI, type BeforeAfter } from '../../state/ui'
+import { dynamicRangeStyle, headroomFromStops } from '../../core/hdr'
 import { useElementSize } from '../../lib/useElementSize'
 import { mergeRefs } from '../../lib/mergeRefs'
 import { useZoomPan, type ViewState } from '../../lib/useZoomPan'
@@ -271,6 +271,7 @@ function ViewportContents({
   loading,
   detailBusy,
   photo,
+  hdr,
   error,
   overlays,
 }: {
@@ -283,6 +284,7 @@ function ViewportContents({
   loading: boolean
   detailBusy: boolean
   photo: Photo | null
+  hdr: boolean
   error: string | null
   overlays: ReactNode
 }) {
@@ -301,13 +303,17 @@ function ViewportContents({
             top: photoBox.y,
             width: photoBox.width,
             height: photoBox.height,
+            // The stand-in is this photo, so it answers the same as the canvas
+            // that replaces it. Without this the placeholder would flare or
+            // flatten for the moment it is on screen.
+            ...dynamicRangeStyle(hdr),
           }}
         />
       )}
       <canvas
         ref={canvasRef}
         className="absolute inset-0 h-full w-full transition-opacity duration-[--duration-base] ease-[--ease-out]"
-        style={{ opacity: hasProxy ? 1 : 0 }}
+        style={{ opacity: hasProxy ? 1 : 0, ...dynamicRangeStyle(hdr) }}
       />
       {(loading || detailBusy) && (
         <StatusPill>{photo?.isRaw ? 'Developing RAW' : 'Decoding'}</StatusPill>
@@ -374,7 +380,7 @@ export function Viewport({ photo }: Props) {
   const clipShadowAt = useUI((s) => s.clipShadow);
   const clipHighlightAt = useUI((s) => s.clipHighlight);
   const outputSpace = useUI((s) => s.softProof)
-  const hdr = useUI((s) => s.hdr)
+  const hdr = useUI(photoHdr(photo?.id))
   const hdrHeadroom = useUI((s) => s.hdrHeadroom)
 
   const storedCoverage = useStoredCoverage(edits, previewEdits, beforeMasks, beforeAfter)
@@ -509,11 +515,19 @@ export function Viewport({ photo }: Props) {
     setError(null)
     setLoading(true)
 
-    loadPreview(photoId, undefined, controller.signal)
-      .then((p) => {
-        if (alive && p && !real) setProxy(p)
-      })
-      .catch(() => {})
+    // The stand-in is for a conversion that has to be computed. When it is
+    // already on disk the real pixels are a file read away, so ordering the
+    // camera's rendering as well would open the original a second time and
+    // decode a JPEG that is discarded before it can be seen. Asked first, and
+    // asked cheaply: this is a lookup, not a read of the proxy itself.
+    void proxyIsReady(photoId).then((ready) => {
+      if (!alive || ready || real) return
+      loadPreview(photoId, undefined, controller.signal)
+        .then((p) => {
+          if (alive && p && !real) setProxy(p)
+        })
+        .catch(() => {})
+    })
 
     loadProxy(photoId, undefined, controller.signal)
       .then((p) => {
@@ -884,7 +898,7 @@ export function Viewport({ photo }: Props) {
     <div
       {...zp.bind}
       ref={mergeRefs(hostRef, zp.bind.ref)}
-      className="relative h-full w-full overflow-hidden bg-black select-none"
+      className="relative h-full w-full overflow-hidden bg-canvas select-none"
       style={{ ...zp.bind.style, cursor: zp.cursor }}
       onContextMenu={(e) => {
         // The canvas commands come first — that is what the user is pointing at
@@ -911,6 +925,7 @@ export function Viewport({ photo }: Props) {
         loading={loading}
         detailBusy={detailBusy}
         photo={photo}
+        hdr={hdr}
         error={error}
         overlays={(
           <ViewportOverlays

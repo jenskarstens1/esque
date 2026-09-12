@@ -202,7 +202,7 @@ export const Thumbnail = memo(function Thumbnail({
       className="group/th relative isolate overflow-hidden bg-raised/35"
     >
       {photo.readError ? (
-        <div className="absolute inset-0 grid place-items-center bg-white/[0.03] text-icon-quaternary">
+        <div className="absolute inset-0 grid place-items-center bg-wash-subtle text-icon-quaternary">
           <WarningIcon size={Math.min(20, Math.max(12, width * 0.11))} />
         </div>
       ) : (

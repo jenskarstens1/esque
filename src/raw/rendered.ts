@@ -22,6 +22,7 @@ import {
 import { parseIccProfile, profileFromChromaticities, type SourceProfile } from '../core/icc'
 import { floatToHalf, halfToFloat, HALF_ONE } from '../core/half'
 import { applyOrientationHalf, flipTransposes, orientationTransform } from './orientation'
+import { findGainMap, gainLut, packUltraHdr, type GainMapMeta } from './gainmap'
 import { decodeDeepPng, isDeepPng, type Chromaticities } from './png16'
 import { decodeTiff, isTiff } from './tiff16'
 import { classify, EMBEDDED_PREVIEW_EDGE, type LinearImage } from './decoded'
@@ -34,11 +35,12 @@ function writeWorkingHalf(
   g: number,
   b: number,
   m: Mat3 = SRGB_D65_TO_PROPHOTO_D50,
+  headroom = HALF_ONE,
 ) {
   out[offset] = floatToHalf(m[0] * r + m[1] * g + m[2] * b)
   out[offset + 1] = floatToHalf(m[3] * r + m[4] * g + m[5] * b)
   out[offset + 2] = floatToHalf(m[6] * r + m[7] * g + m[8] * b)
-  out[offset + 3] = HALF_ONE
+  out[offset + 3] = headroom
 }
 
 /** 8-bit source (rendered files) -> linear float, undoing the sRGB curve. */
@@ -94,55 +96,14 @@ export async function encodeJpeg(
 }
 
 /**
- * How much of a file to read looking for a gain map.
- *
- * Every container announces one in metadata near the front — a JPEG's XMP sits
- * in an APP1 segment a few kilobytes in — so the pixels never have to be
- * touched. A quarter of a megabyte clears even a file carrying a full Exif
- * thumbnail ahead of its XMP.
- */
-const GAIN_MAP_SCAN_BYTES = 256 * 1024
-
-/**
- * Above this, handing back the original costs more memory and cache than the
- * extra range is worth: the preview would decode at the full sensor size every
- * time the loupe opened it. Phone HDR files land around 2–5 MB.
- */
-const GAIN_MAP_MAX_BYTES = 32 * 1024 * 1024
-
-const GAIN_MAP_MARKERS = [
-  'hdrgm:', // Ultra HDR's XMP namespace prefix
-  'urn:iso:std:iso:ts:21496', // ISO 21496-1, the standardised gain map
-  'GainMap', // the multi-picture container's item semantic
-]
-
-/**
- * Whether a rendered file is a JPEG carrying an HDR gain map.
- *
- * Only JPEG qualifies, for two reasons: it is what phones and Lightroom
- * actually write gain maps into, and it is what the preview cache stores, so a
- * file passed through still matches the type the cache hands back. HEIC can't
- * be drawn by the browser at all and has to be re-encoded regardless.
- */
-function hasGainMap(buffer: ArrayBuffer): boolean {
-  if (buffer.byteLength > GAIN_MAP_MAX_BYTES) return false
-  const bytes = new Uint8Array(buffer)
-  // SOI plus the first byte of the marker that must follow it.
-  if (bytes[0] !== 0xff || bytes[1] !== 0xd8 || bytes[2] !== 0xff) return false
-  const head = new TextDecoder('latin1').decode(
-    bytes.subarray(0, Math.min(bytes.length, GAIN_MAP_SCAN_BYTES)),
-  )
-  return GAIN_MAP_MARKERS.some((m) => head.includes(m))
-}
-
-/**
  * JPEG/PNG/HEIC path: the browser already knows how to render these.
  *
- * `preserveHdr` hands an HDR original straight back instead. Re-encoding runs
- * the picture through a canvas, which only ever holds the base image — the gain
- * map that makes it HDR is dropped on the way in, and no quality setting brings
- * it back. The loupe and the Develop placeholder show this blob in an `<img>`,
- * where the browser applies the gain map itself.
+ * `preserveHdr` keeps an HDR original's gain map. Re-encoding normally runs the
+ * picture through a canvas, which only ever holds the base image — the map that
+ * makes it HDR is dropped on the way in, and no quality setting brings it back.
+ * So the two renditions are re-encoded separately and the container rebuilt
+ * around them. The loupe, the grid and the Develop placeholder all show this
+ * blob directly, where the browser applies the gain map itself.
  */
 export async function renderedThumb(
   buffer: ArrayBuffer,
@@ -150,8 +111,12 @@ export async function renderedThumb(
   quality: number,
   preserveHdr = false,
 ): Promise<Blob> {
-  if (preserveHdr && hasGainMap(buffer)) return new Blob([buffer], { type: 'image/jpeg' })
   const edge = maxEdge > 0 ? maxEdge : EMBEDDED_PREVIEW_EDGE
+
+  if (preserveHdr) {
+    const hdr = await hdrThumb(buffer, edge, quality).catch(() => null)
+    if (hdr) return hdr
+  }
 
   // TIFF and 16-bit PNG have to go the long way round. No Chromium build
   // decodes TIFF at all, so `createImageBitmap` throws and the import reports a
@@ -167,6 +132,53 @@ export async function renderedThumb(
   const bmp = await createImageBitmap(new Blob([buffer]), { imageOrientation: 'from-image' })
   return encodeJpeg(bmp, edge, 0, quality)
 }
+
+/**
+ * Scales an Ultra HDR file down without flattening it.
+ *
+ * Both renditions are ordinary JPEGs, so both re-encode the ordinary way. Only
+ * the container around them has to be rebuilt, and only its byte offsets are
+ * actually new — the metadata that describes the gain is carried across word
+ * for word.
+ *
+ * Orientation is deliberately left alone on both. The map is stored in the
+ * primary's frame, so rotating one and not the other would slide the highlights
+ * off the things that are meant to be bright; leaving the primary's Exif in
+ * place keeps them registered and lets the browser rotate the pair together.
+ */
+async function hdrThumb(buffer: ArrayBuffer, maxEdge: number, quality: number) {
+  const found = findGainMap(buffer)
+  if (!found) return null
+
+  const base = await createImageBitmap(new Blob([buffer]))
+  const map = await createImageBitmap(new Blob([found.bytes as BlobPart]))
+
+  // The map is low-frequency by construction and the spec has decoders resample
+  // it to the base, so it is stored at a fraction of the size. Matching the
+  // base would spend most of the thumbnail's bytes describing a blur.
+  const scale = Math.min(1, maxEdge / Math.max(base.width, base.height))
+  const mapEdge = Math.max(1, Math.round(Math.max(map.width, map.height) * scale))
+
+  const [baseJpeg, mapJpeg] = await Promise.all([
+    encodeJpeg(base, maxEdge, 0, quality),
+    encodeJpeg(map, mapEdge, 0, GAIN_MAP_QUALITY),
+  ])
+
+  const packed = packUltraHdr(
+    new Uint8Array(await baseJpeg.arrayBuffer()),
+    new Uint8Array(await mapJpeg.arrayBuffer()),
+    found.primaryXmp,
+    found.gainXmp,
+  )
+  return packed ? new Blob([packed as BlobPart], { type: 'image/jpeg' }) : null
+}
+
+/**
+ * A gain map is a smooth ramp, not a picture, so it survives compression that
+ * would visibly hurt the base — but banding in it becomes banding in the
+ * highlights, which is why this is not pushed lower.
+ */
+const GAIN_MAP_QUALITY = 0.9
 
 /**
  * Thumbnails a deep file by way of the working space, so the profile it carries
@@ -339,7 +351,40 @@ export async function decodeRenderedLinear(
   } catch (err) {
     throw classify(err)
   }
-  return bitmapToLinear(bmp, maxEdge, false)
+
+  // A gain map is the only way a rendered file carries light above white into
+  // the pipeline. Without this the Develop viewport would hold a phone's HDR
+  // photo at exactly the SDR base the canvas handed over, and the HDR toggle
+  // would have nothing to open up.
+  const gain = await loadGainMap(buffer, bmp)
+  return bitmapToLinear(bmp, maxEdge, false, gain)
+}
+
+/**
+ * Decodes a JPEG's gain map alongside its base image.
+ *
+ * Failure is answered with null rather than an error: a file whose secondary
+ * image will not decode is still a perfectly good SDR photograph, and refusing
+ * to open it would be a far worse outcome than showing it without its
+ * highlights.
+ */
+async function loadGainMap(buffer: ArrayBuffer, base: ImageBitmap): Promise<GainMapSource | null> {
+  const found = findGainMap(buffer)
+  if (!found) return null
+  try {
+    // The map's own orientation metadata is explicitly not used; it is already
+    // in the primary's frame. But the primary was decoded with 'from-image', so
+    // the map has to be rotated the same way to stay registered with it.
+    const bitmap = await createImageBitmap(new Blob([found.bytes as BlobPart]), {
+      imageOrientation: 'from-image',
+      resizeWidth: base.width,
+      resizeHeight: base.height,
+      resizeQuality: 'high',
+    })
+    return { bitmap, lut: gainLut(found.meta), meta: found.meta }
+  } catch {
+    return null
+  }
 }
 
 /**
@@ -467,8 +512,28 @@ function samplesToLinear(
   }
 }
 
-/** Shared tail of every rendered-image decode. */
-export function bitmapToLinear(bmp: ImageBitmap, maxEdge: number, fromRaw: boolean): LinearImage {
+/** A decoded gain map, resampled to the base image and reduced to a LUT. */
+interface GainMapSource {
+  bitmap: ImageBitmap
+  /** 8-bit sample -> linear multiplier, per channel. */
+  lut: Float32Array[]
+  meta: GainMapMeta
+}
+
+/**
+ * Shared tail of every rendered-image decode.
+ *
+ * A gain map does not change the colours this produces. It rides in alpha as
+ * the ratio each pixel would reach on a display with room for it, which is the
+ * same thing the RAW path's shoulder records and the same thing the output
+ * pass knows how to spend.
+ */
+export function bitmapToLinear(
+  bmp: ImageBitmap,
+  maxEdge: number,
+  fromRaw: boolean,
+  gain: GainMapSource | null = null,
+): LinearImage {
   const scale = Math.min(1, maxEdge / Math.max(bmp.width, bmp.height))
   const w = Math.max(1, Math.round(bmp.width * scale))
   const h = Math.max(1, Math.round(bmp.height * scale))
@@ -480,6 +545,17 @@ export function bitmapToLinear(bmp: ImageBitmap, maxEdge: number, fromRaw: boole
   bmp.close()
 
   const px = ctx.getImageData(0, 0, w, h).data
+
+  // The map is drawn through the same canvas at the same size, so the browser
+  // does the resampling the spec asks for and the two arrays index alike.
+  let map: Uint8ClampedArray | null = null
+  if (gain) {
+    ctx.clearRect(0, 0, w, h)
+    ctx.drawImage(gain.bitmap, 0, 0, w, h)
+    map = ctx.getImageData(0, 0, w, h).data
+    gain.bitmap.close()
+  }
+
   const lut = getSrgbLUT()
   const out = new Uint16Array(w * h * 4)
   for (let i = 0; i < w * h; i++) {
@@ -487,7 +563,7 @@ export function bitmapToLinear(bmp: ImageBitmap, maxEdge: number, fromRaw: boole
     const r = lut[px[s]]
     const g = lut[px[s + 1]]
     const b = lut[px[s + 2]]
-    writeWorkingHalf(out, s, r, g, b)
+    writeWorkingHalf(out, s, r, g, b, SRGB_D65_TO_PROPHOTO_D50, headroomAt(gain, map, s, r, g, b))
   }
   return {
     width: w,
@@ -500,4 +576,40 @@ export function bitmapToLinear(bmp: ImageBitmap, maxEdge: number, fromRaw: boole
     meta: null,
     whiteLevel: 1,
   }
+}
+
+/**
+ * How much brighter than its SDR rendering one pixel wants to be.
+ *
+ * The colour channels deliberately keep the base image's own values. That base
+ * *is* the SDR photograph — the rendering the phone chose, the one every other
+ * viewer shows — and multiplying the gain into it would blow every highlight
+ * the map covers to flat white the moment HDR was switched off. So the map is
+ * carried alongside as a ratio instead, in the alpha channel nothing else uses,
+ * and only the output pass spends it.
+ *
+ * The ratio is taken on the brightest channel so the expansion later stays a
+ * single scale and cannot shift hue, and it is floored at 1: a map may encode
+ * a boost below 1, but the SDR base is the reference rendering here, and HDR
+ * viewing is only ever allowed to add range to it.
+ */
+function headroomAt(
+  gain: GainMapSource | null,
+  map: Uint8ClampedArray | null,
+  offset: number,
+  r: number,
+  g: number,
+  b: number,
+): number {
+  if (!gain || !map) return HALF_ONE
+  const { lut, meta } = gain
+  // A single-channel map decodes to equal RGB, so reading three channels
+  // covers the grey and the per-channel cases with the same arithmetic.
+  const hr = (r + meta.offsetSdr[0]) * lut[0][map[offset]] - meta.offsetHdr[0]
+  const hg = (g + meta.offsetSdr[1]) * lut[1][map[offset + 1]] - meta.offsetHdr[1]
+  const hb = (b + meta.offsetSdr[2]) * lut[2][map[offset + 2]] - meta.offsetHdr[2]
+  const sdr = Math.max(r, g, b)
+  if (!(sdr > 0)) return HALF_ONE
+  const ratio = Math.max(hr, hg, hb) / sdr
+  return floatToHalf(ratio > 1 ? ratio : 1)
 }

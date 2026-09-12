@@ -1,6 +1,7 @@
 import { db } from '../catalog/db'
 import {
   cacheDelete,
+  cacheHas,
   cacheRead,
   cacheWrite,
   proxyKey,
@@ -94,6 +95,22 @@ function validHeader(
   }
   if (header.dataBytes !== width * height * 8) return false
   return bufferBytes === HEADER_BYTES + header.dataBytes
+}
+
+/**
+ * Whether this photo's decode is already on disk, without reading 35 MB to
+ * find out.
+ *
+ * Develop opens a RAW by racing the camera's embedded rendering against the
+ * real conversion, because the conversion takes seconds. When the conversion is
+ * already cached it takes a file read instead, and the race stops being worth
+ * running: the stand-in costs a second open of the original, an embedded JPEG
+ * decode and a worker slot, to be discarded a few milliseconds later by pixels
+ * that were never far away. Asking first is cheap — a stat, not a read.
+ */
+export async function hasProxyCache(photo: Photo, edge: number): Promise<boolean> {
+  if (!photo.isRaw) return false
+  return cacheHas(keyFor(photo, edge))
 }
 
 /**

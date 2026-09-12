@@ -4,6 +4,7 @@ import { useCatalog } from '../state/catalog'
 import { useDevelop } from '../develop/session'
 import { chordOf, resolve } from './commands'
 import { keyboardOverlayOpen } from '../lib/keyboardScope'
+import { isPageZoomChord, isPageZoomed } from '../lib/pageZoom'
 
 const isTyping = (t: EventTarget | null) => {
   const el = t as HTMLElement | null
@@ -24,6 +25,9 @@ export function useKeymap() {
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (e.defaultPrevented || isTyping(e.target) || keyboardOverlayOpen()) return
+      // ⌘0 is image fit here — but not while the page itself is zoomed, when it
+      // is the only way back to 100%. See the guard below.
+      if (isPageZoomChord(e) && isPageZoomed()) return
 
       const ui = useUI.getState()
       const cat = useCatalog.getState()
@@ -52,6 +56,13 @@ export function useKeymap() {
  * esque is an app, not a document — the browser's own zoom would scale the
  * chrome and wreck the 1:1 pixel view. Ctrl/⌘ + wheel, ⌘ +/-, and Safari's
  * gesture events are all swallowed so zoom always means *image* zoom.
+ *
+ * The guard lifts while the page is already zoomed. Page zoom is remembered per
+ * origin, so a window can open at 150% without anyone touching a zoom gesture
+ * here — and a guard that holds in that state locks the user inside it with no
+ * way out but a browser menu they will never think to open. Releasing the
+ * chords hands ⌘0 back to the browser until the page is at 100%, where the
+ * guard re-arms and ⌘0 goes back to meaning fit in window.
  */
 function useAppZoomGuard() {
   useEffect(() => {
@@ -59,10 +70,8 @@ function useAppZoomGuard() {
       if (e.ctrlKey || e.metaKey) e.preventDefault()
     }
     const onKey = (e: KeyboardEvent) => {
-      if (!(e.metaKey || e.ctrlKey)) return
-      if (e.key === '+' || e.key === '=' || e.key === '-' || e.key === '_' || e.key === '0') {
-        e.preventDefault()
-      }
+      if (!isPageZoomChord(e) || isPageZoomed()) return
+      e.preventDefault()
     }
     const stop = (e: Event) => e.preventDefault()
 

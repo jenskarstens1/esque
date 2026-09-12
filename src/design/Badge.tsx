@@ -16,7 +16,7 @@ function badgeClasses({
     size === 'sm' ? 'rounded-sm text-micro' : 'rounded-md text-mini',
     iconOnly ? 'p-0.5' : size === 'sm' ? 'px-1.5 py-0.5' : 'px-2 py-1',
     tone === 'accent'
-      ? 'bg-accent text-(--accent-ink)'
+      ? 'bg-accent text-accent-ink'
       : cn(
           surface === 'overlay' && 'material shadow-hud',
           surface === 'image' && 'bg-black/65 shadow-hud backdrop-blur-sm',

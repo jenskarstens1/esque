@@ -9,6 +9,7 @@ import { cn } from '../../lib/cn'
 import { useMenu } from '../../design/useMenu'
 import { histogramMenuItems } from '../../shell/appMenus'
 import { Badge } from '../../design/Badge'
+import { token } from '../../design/tokens'
 
 const H = 78
 
@@ -60,20 +61,12 @@ const SMOOTH = [1, 10, 45, 120, 210, 252, 210, 120, 45, 10, 1]
 const SMOOTH_SUM = 1024
 const SMOOTH_RADIUS = 5
 
-/** Channel colours are theme tokens; resolve them once instead of duplicating. */
-let channelColors: { r: string; g: string; b: string } | null = null
-function channels() {
-  if (!channelColors) {
-    const s = getComputedStyle(document.documentElement)
-    const read = (name: string, fallback: string) => s.getPropertyValue(name).trim() || fallback
-    channelColors = {
-      r: read('--color-hist-mix-r', '#8d0c0c'),
-      g: read('--color-hist-mix-g', '#12832a'),
-      b: read('--color-hist-mix-b', '#123f8d'),
-    }
-  }
-  return channelColors
-}
+/** Channel colours are theme tokens; the canvas has no cascade to read them from. */
+const channels = () => ({
+  r: token('--color-hist-mix-r'),
+  g: token('--color-hist-mix-g'),
+  b: token('--color-hist-mix-b'),
+})
 
 /**
  * The live histogram, fed straight from the render pipeline's readback so it
@@ -126,7 +119,7 @@ export function DevelopHistogram() {
     ctx.clearRect(0, 0, w, H)
 
     // Quarter-tone guides, barely there.
-    ctx.strokeStyle = 'rgba(255,255,255,.06)'
+    ctx.strokeStyle = token('--color-graph-grid')
     ctx.lineWidth = 0.5
     for (let i = 1; i < 4; i++) {
       const x = Math.round((i / 4) * w) + 0.25
@@ -195,14 +188,14 @@ export function DevelopHistogram() {
         if (i === 0) ctx.moveTo(x, y)
         else ctx.lineTo(x, y)
       }
-      ctx.strokeStyle = 'rgba(255,255,255,.2)'
+      ctx.strokeStyle = token('--color-graph-edge')
       ctx.lineWidth = 1
       ctx.lineJoin = 'round'
       ctx.stroke()
     }
 
     // A floor for the graph to stand on, so the fills end rather than fade.
-    ctx.fillStyle = 'rgba(255,255,255,.10)'
+    ctx.fillStyle = token('--color-graph-floor')
     ctx.fillRect(0, H - 0.5, w, 0.5)
 
     /*
@@ -213,7 +206,7 @@ export function DevelopHistogram() {
      * graph none of the inverted markers they used to need to stay legible.
      */
     if (zone) {
-      ctx.fillStyle = 'rgba(0,0,0,.46)'
+      ctx.fillStyle = token('--color-graph-shade')
       ctx.fillRect(0, 0, zone.from * w, H)
       ctx.fillRect(zone.to * w, 0, w - zone.to * w, H)
     }
@@ -296,7 +289,7 @@ export function DevelopHistogram() {
         onDoubleClick={onDoubleClick}
         title={photoId ? 'Drag a region to adjust it · double-click to reset' : undefined}
         className={cn(
-          'relative touch-none overflow-hidden rounded-md bg-black/45 select-none',
+          'relative touch-none overflow-hidden rounded-md bg-graph-well select-none',
           'shadow-[inset_0_0_0_0.5px_var(--color-hairline)]',
           photoId && 'cursor-ew-resize',
         )}
@@ -467,13 +460,13 @@ function ClipChip({
         // A transparent pseudo-element widens the target without fattening the ink.
         "after:absolute after:-inset-1 after:content-['']",
         'transition-[background-color] duration-[--duration-fast] ease-[--ease-out]',
-        active ? 'bg-white/14' : 'hover:bg-white/8',
+        active ? 'bg-wash-strong' : 'hover:bg-wash',
       )}
     >
       <span
         aria-hidden
         className="size-[7px] rounded-[1.5px] transition-[background-color] duration-[--duration-fast] ease-[--ease-out]"
-        style={{ backgroundColor: active || hot ? color : 'rgb(255 255 255 / 0.2)' }}
+        style={{ backgroundColor: active || hot ? color : 'var(--color-label-quaternary)' }}
       />
     </button>
   )

@@ -9,19 +9,13 @@ import { COMMON } from './common'
  * writes the selected output space directly.
  *
  * With HDR viewing on, the last thing this pass does before encoding is expand
- * the top of the display range into the headroom the display has above white.
- * That is a viewing transform and nothing more: the edit graph is untouched, so
- * turning HDR off puts exactly the previous pixels back.
+ * the top of the display range into the headroom the display has above white,
+ * driven by the scene peak the render pass recorded in alpha. That is a viewing
+ * transform and nothing more: the edit graph is untouched, so turning HDR off
+ * puts exactly the previous pixels back.
  */
 export const OUTPUT_FS = /* wgsl */ `
 ${COMMON}
-
-/**
- * The gap between 1.0 and the largest half float below it. The render targets
- * feeding this pass are RGBA16F, so this is the finest distinction their
- * highlights can carry, and it is what bounds the expansion below.
- */
-const HALF_STEP: f32 = 1.0 / 2048.0;
 
 struct U {
   uToOutput: mat3x3f,
@@ -79,49 +73,50 @@ fn gamutCompress(c: vec3f, weights: vec3f, amount: f32) -> vec3f {
 }
 
 /**
- * Re-opens the highlights that the render shoulder folded into the last stretch
- * below display white.
+ * The render pass's highlight roll-off, aimed at an arbitrary ceiling.
  *
- * The render pass rolls scene light off with \`shoulder\`, an exponential that
- * approaches display white and never reaches it. So a display value here can be
- * read back as the scene light it came from, and that light rolled off a second
- * time against the display's ceiling H instead of against 1 — which is the
- * whole transform:
- *
- *     scene  = k - r * ln(1 - t),  t = (x-k)/r,  r = 1-k
- *     expand = k + R * (1 - exp(-(scene-k)/R)),  R = H-k
- *
- * It is exactly the identity at H = 1, has slope exactly 1 where it meets the
- * knee, and is monotonic. Below the knee nothing moves at all.
- *
- * How far it can see is set by the render buffer, not by the algebra: the
- * inverse of an asymptote runs away to infinity, but half float cannot tell
- * white from one step below it, so scene light beyond what that step represents
- * was never written down. Stopping there is what keeps the curve continuous
- * through a clipped highlight — the flat white of a blown sky lands exactly
- * where the gradient running into it does, instead of jumping past it.
+ * At a ceiling of 1 this is exactly the shoulder from common.wgsl. At a ceiling
+ * of H it is the same curve rolling off against the display's headroom instead.
  */
-fn hdrExpand1(x: f32, k: f32, h: f32) -> f32 {
+fn shoulderTo(x: f32, k: f32, ceil: f32) -> f32 {
   if (x <= k) { return x; }
-  let r = max(1.0 - k, EPS);
-  let R = max(h - k, EPS);
-  let t = clamp((x - k) / r, 0.0, 1.0);
-  // One half-float step below white, in the same units as (1 - t).
-  let ut = max(1.0 - t, HALF_STEP / r);
-  let scene = k - r * log(ut);
-  return k + R * (1.0 - exp(-(scene - k) / R));
+  let R = max(ceil - k, EPS);
+  return k + R * (1.0 - exp(-(x - k) / R));
 }
 
 /**
- * Expansion is driven by the brightest channel and applied as one scale, the
- * same way the render shoulder is. Per channel it would pull a saturated
- * highlight toward white as the channels expanded by different amounts.
+ * Re-opens the highlights the earlier passes folded into the top of the display
+ * range.
+ *
+ * The range is read, not guessed. Alpha carries a ratio: how much brighter this
+ * pixel would be given somewhere to put it — a gain map's boost, the render
+ * shoulder's compression, exposure pushed past white, or all three composed.
+ * It is a ratio rather than an absolute because inverting the shoulder cannot
+ * work. That curve is an asymptote, so a two-stop overexposure and a twenty-stop
+ * specular land within one half-float step of each other, and an inverse has to
+ * invent a ceiling to stop at. The old one stopped at that half-float step,
+ * which is why asking for four stops of headroom and asking for one produced
+ * almost the same picture.
+ *
+ * The ratio is rolled off against the headroom H the display actually has, so:
+ *
+ *   - a ratio of 1 — no range recorded — returns the pixel untouched, which is
+ *     what a plain SDR photo must do even with HDR on;
+ *   - at H = 1 the roll-off is flat and every pixel is returned untouched, so
+ *     turning HDR off restores the previous picture exactly;
+ *   - more range on offer means more gain, approaching H and never passing it.
+ *
+ * The gain then fades out below the knee. A highlight the photographer
+ * deliberately pulled down to a midtone should stay a midtone — the grade is
+ * the picture, and HDR is only how much room the bright end of it gets. How
+ * bright is asked of the encoded value rather than the linear one it is applied
+ * to: the knee is a place in the picture, and light is not where the eye is.
  */
-fn hdrExpand(c: vec3f, k: f32, h: f32) -> vec3f {
-  if (h <= 1.0 + 1e-4) { return c; }
-  let peak = max(max(c.r, c.g), c.b);
-  if (peak <= k) { return c; }
-  return c * (hdrExpand1(peak, k, h) / max(peak, EPS));
+fn hdrExpand(c: vec3f, headroom: f32, bright: f32, k: f32, h: f32) -> vec3f {
+  if (h <= 1.0 + 1e-4 || headroom <= 1.0) { return c; }
+  let gain = shoulderTo(headroom, 1.0, h);
+  let t = clamp(bright / max(k, EPS), 0.0, 1.0);
+  return c * (1.0 + (gain - 1.0) * t * t);
 }
 
 /**
@@ -165,7 +160,15 @@ fn fs(@builtin(position) pos: vec4f, @location(0) uv: vec2f) -> @location(0) vec
 
   // Last, so the gamut work above still reasons about a [0,1] cube and the
   // expansion is a pure brightness scale on colours already inside the display.
-  disp = hdrExpand(disp, u.uHdrKnee, u.uHdrHeadroom);
+  // The encoded value is the same pixel as the eye reads it, which is what the
+  // knee means.
+  disp = hdrExpand(
+    disp,
+    src.a,
+    max(max(code.r, code.g), code.b),
+    u.uHdrKnee,
+    u.uHdrHeadroom,
+  );
 
   var encoded = transfer(disp, u.uGamma);
 

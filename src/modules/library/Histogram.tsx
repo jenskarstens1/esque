@@ -54,7 +54,7 @@ export function Histogram({
   return (
     <div className={cn('relative px-3 pt-1 pb-2', className)}>
       <div
-        className="relative overflow-hidden rounded-md bg-black/45 shadow-[inset_0_0_0_0.5px_var(--color-hairline)]"
+        className="relative overflow-hidden rounded-md bg-graph-well shadow-[inset_0_0_0_0.5px_var(--color-hairline)]"
         style={{ height }}
       >
         {/* Quarter-tone guides, barely there. */}
@@ -63,7 +63,7 @@ export function Histogram({
           className="absolute inset-0"
           style={{
             backgroundImage:
-              'linear-gradient(to right, rgb(255 255 255 / 0.055) 0.5px, transparent 0.5px)',
+              'linear-gradient(to right, var(--color-graph-grid) 0.5px, transparent 0.5px)',
             backgroundSize: '25% 100%',
             backgroundPosition: '25% 0',
           }}
@@ -76,7 +76,7 @@ export function Histogram({
             className="absolute inset-0 size-full"
           >
             <g style={{ mixBlendMode: 'screen' }}>
-              <path d={paths.l} fill="rgb(255 255 255 / 0.16)" />
+              <path d={paths.l} fill="var(--color-graph-fill)" />
               <path d={paths.r} fill="var(--color-hist-r)" opacity={0.62} />
               <path d={paths.g} fill="var(--color-hist-g)" opacity={0.62} />
               <path d={paths.b} fill="var(--color-hist-b)" opacity={0.62} />
@@ -114,7 +114,7 @@ function ClipDot({
       className={cn(
         'absolute top-1 size-1.5 rounded-full transition-colors duration-[--duration-base]',
         side === 'left' ? 'left-1.5' : 'right-1.5',
-        active ? 'bg-white' : 'bg-white/12',
+        active ? 'bg-graph-point-live' : 'bg-graph-halo',
       )}
     />
   )

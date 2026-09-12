@@ -64,25 +64,26 @@ fn fs(@location(0) uv: vec2f) -> @location(0) vec4f {
       let d = vec2f(f32(x), f32(y));
       let spatial = exp(-dot(d, d) * 0.36);
 
-      let nL = encode(textureSampleLevel(uImage, sampLin, uv + d * u.uTexel * lumaRadius, 0.0).rgb);
-      let l = luma(nL);
-      // pow(x, 2.0) where x = (l - cL)/lumaSigma can be negative; use x*x to
-      // avoid WGSL undefined behaviour for negative-base pow.
-      let dl = (l - cL) / lumaSigma;
-      let wl = spatial * exp(-(dl * dl));
-      accL = accL + l * wl;
-      wSumL = wSumL + wl;
+      if (u.uLuminance > 1e-3) {
+        let nL = encode(textureSampleLevel(uImage, sampLin, uv + d * u.uTexel * lumaRadius, 0.0).rgb);
+        let l = luma(nL);
+        // WGSL pow has undefined behaviour for a negative base; square directly.
+        let dl = (l - cL) / lumaSigma;
+        let wl = spatial * exp(-(dl * dl));
+        accL = accL + l * wl;
+        wSumL = wSumL + wl;
+      }
 
-      let nC = encode(textureSampleLevel(uImage, sampLin, uv + d * u.uTexel * colorRadius, 0.0).rgb);
-      let lc = max(luma(nC), EPS);
-      // Opponent chroma keeps luminance out of the range test. Comparing full
-      // RGB here rejected every neighbour on even a gentle brightness gradient,
-      // which made the Color slider leave most red/blue speckling untouched.
-      let chroma = vec2f(nC.r - lc, nC.b - lc);
-      let dc = distance(chroma, cC) / colorSigma;
-      let wc = spatial * exp(-(dc * dc));
-      accC = accC + chroma * wc;
-      wSumC = wSumC + wc;
+      if (u.uColor > 1e-3) {
+        let nC = encode(textureSampleLevel(uImage, sampLin, uv + d * u.uTexel * colorRadius, 0.0).rgb);
+        let lc = max(luma(nC), EPS);
+        // Opponent chroma keeps luminance out of the range test.
+        let chroma = vec2f(nC.r - lc, nC.b - lc);
+        let dc = distance(chroma, cC) / colorSigma;
+        let wc = spatial * exp(-(dc * dc));
+        accC = accC + chroma * wc;
+        wSumC = wSumC + wc;
+      }
     }
   }
 

@@ -3,6 +3,8 @@ import { defaultEdits, ALL_SECTIONS, cloneEdits, defaultMaskAdjustments } from '
 import { parseXmp, editsToSidecar, presetToXmp } from '../develop/xmp'
 import { applySidecarText, sidecarNames } from '../catalog/sidecar'
 import type { Edits, EditSection, Preset } from '../core/types'
+import { CUSTOM_PROFILE, profileEdits, profileName } from '../core/profiles'
+import { migrateEdits } from '../develop/migrate'
 
 /*
  * XMP round-trip check. Writes a fully-adjusted Edits tree to a sidecar and to
@@ -29,7 +31,7 @@ const fail = (m: string) => failures.push(m)
 /** Moves every leaf off its default so a dropped field cannot pass by luck. */
 function perturb(e: Edits): Edits {
   const next = cloneEdits(e)
-  next.profile = 'landscape'
+  next.profile = profileEdits('landscape')
   next.basic.temp = 4850
   next.basic.tint = -12
   next.basic.exposure = 0.65
@@ -501,6 +503,44 @@ else {
   if (applied && applied.changes.rating !== 5) fail(`apply: rating 9 became ${applied.changes.rating}`)
   if (applied && 'label' in applied.changes)
     fail(`apply: an unknown label was accepted as ${applied.changes.label}`)
+}
+
+// A hand-tuned profile is the case the named-only sidecar could not express:
+// there is no id that stands for these three numbers, so the values themselves
+// have to survive the trip or the photo reopens on a base rendering nobody
+// chose. The name is derived on the way back in rather than trusted.
+{
+  const custom = cloneEdits(defaultEdits('raw'))
+  custom.profile = { name: CUSTOM_PROFILE, rolloff: 31, contrast: 12, saturation: -37 }
+  const back = parseXmp(editsToSidecar(custom, ALL_SECTIONS, { filename: 'IMG_0003.ARW' }))?.edits?.profile
+  if (!back) fail('profile: a custom base did not round-trip at all')
+  else if (back.rolloff !== 31 || back.contrast !== 12 || back.saturation !== -37)
+    fail(`profile: custom values came back as ${back.rolloff}/${back.contrast}/${back.saturation}`)
+  else if (back.name !== CUSTOM_PROFILE) fail(`profile: custom base came back named ${back.name}`)
+}
+
+// Values that land exactly on a named base are named again, so a photo dragged
+// back to where Landscape left it does not read as Custom for ever.
+{
+  const named = cloneEdits(defaultEdits('raw'))
+  named.profile = { ...profileEdits('landscape'), name: CUSTOM_PROFILE }
+  const back = parseXmp(editsToSidecar(named, ALL_SECTIONS, { filename: 'IMG_0004.ARW' }))?.edits?.profile
+  if (back && back.name !== 'landscape') fail(`profile: Landscape values came back as ${back.name}`)
+  if (profileName({ rolloff: 20, contrast: 60, saturation: 10 }) !== 'landscape')
+    fail('profile: Landscape values did not resolve to Landscape')
+  if (profileName({ rolloff: 20, contrast: 61, saturation: 10 }) !== CUSTOM_PROFILE)
+    fail('profile: a nudged value did not resolve to Custom')
+}
+
+// A sidecar written before the profile became three sliders carries only the
+// id. It has to expand to the rendering that id always meant.
+{
+  const legacy = { ...cloneEdits(defaultEdits('raw')), version: 3, profile: 'vivid' } as unknown as Edits
+  const up = migrateEdits(legacy).profile
+  if (up.name !== 'vivid' || up.rolloff !== 22 || up.contrast !== 74 || up.saturation !== 22)
+    fail(`profile: v3 'vivid' migrated to ${JSON.stringify(up)}`)
+  const twice = migrateEdits(migrateEdits(legacy))
+  if (JSON.stringify(twice.profile) !== JSON.stringify(up)) fail('profile: migration is not idempotent')
 }
 
 window.__result = {

@@ -258,26 +258,6 @@ export const COMMANDS: Command[] = [
       ui.setViewMode('loupe')
     },
   },
-  {
-    id: 'view.compare',
-    label: 'Compare',
-    group: 'view',
-    keys: ['c'],
-    run: ({ ui }) => {
-      ui.setModule('library')
-      ui.setViewMode('compare')
-    },
-  },
-  {
-    id: 'view.survey',
-    label: 'Survey',
-    group: 'view',
-    keys: ['n'],
-    run: ({ ui }) => {
-      ui.setModule('library')
-      ui.setViewMode('survey')
-    },
-  },
   { id: 'view.develop', label: 'Develop', group: 'view', keys: ['d'], run: ({ ui }) => ui.setModule('develop') },
 
   // ---- Panels & chrome ----
@@ -310,7 +290,14 @@ export const COMMANDS: Command[] = [
     enabled: (c) => !inDevelop(c),
     run: ({ ui }) => ui.toggleFilterBar(),
   },
-  { id: 'view.hdr', label: 'HDR display', group: 'panels', keys: ['h'], run: ({ ui }) => ui.toggleHdr() },
+  {
+    id: 'view.hdr',
+    label: 'HDR display',
+    group: 'panels',
+    keys: ['h'],
+    enabled: hasTargets,
+    run: ({ ui, targets }) => ui.togglePhotoHdr(targets),
+  },
   {
     id: 'view.fullscreen',
     label: 'Full screen',

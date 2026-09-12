@@ -9,6 +9,7 @@ import {
   type MaskAdjustments,
 } from './types'
 import type { WhitePoint } from './color'
+import { profileEdits } from './profiles'
 import { RENDERED_WHITE_POINT } from './workingImage'
 
 const zeroBands = (): BandValues =>
@@ -17,13 +18,10 @@ const zeroBands = (): BandValues =>
 /**
  * Which kind of file the defaults are for.
  *
- * A RAW is scene-linear and undemosaiced, so it arrives soft and needs a
- * capture-sharpening baseline plus modest luminance and colour noise reduction
- * before you have anything worth judging. A JPEG or TIFF has already been
- * through the camera's (or another editor's) sharpener and denoiser, so the
- * same baseline would be a second pass over the same pixels: haloed edges and
- * smeared detail that the user never asked for. Rendered files therefore start
- * all four controls at zero.
+ * Sharpening starts off for every file, leaving the amount to the photographer.
+ * RAWs retain ISO-calibrated noise reduction. A JPEG or TIFF has already been
+ * through the camera's (or another editor's) denoiser, so rendered files start
+ * noise reduction at zero rather than applying a second pass.
  */
 export type FileKind = 'raw' | 'rendered'
 
@@ -42,29 +40,15 @@ function isoValue(iso: number, values: number[], fallback: number): number {
  * follow it — but gently, because a default that hides noise also hides the
  * photograph.
  *
- * Low-ISO defaults are calibrated against paired camera JPEGs at the same output
- * size. The old 45/25 sharpening/colour baseline left every tested RAW visibly
- * behind its JPEG: edge acutance was 30 vs 34 on Canon 5D IV, 48 vs 54 on Nikon
- * D800, and 76 vs 89 on Fujifilm X-T50. It also left almost twice the residual
- * chroma texture on the X-Trans frame. A 70/55 baseline lands at 34/55/88 while
- * matching or beating the JPEG's chroma cleanliness on all three.
- *
- * The curves are set against the camera's own JPEG, measuring detail and noise
- * separately — detail as gradient energy in the most structured fifth of the
- * frame, noise as median local deviation in the flattest fifth, since a single
- * gradient figure cannot tell texture from grain and will happily reward simply
- * switching denoising off.
- *
- * At ISO 6400 the earlier calibration puts the camera at noise 3.1 / detail 7.1. Luminance noise
- * reduction of 70 lands at 2.8 / 7.2 — the camera's cleanliness with slightly
- * more surviving texture — where the old value of 90 gave 2.0 / 6.3, cleaner
- * than the camera but visibly softer. Sharpening holds near its baseline rather
- * than collapsing, masking keeps grain out of flat areas, and colour noise
- * reduction stays strong because it costs almost no detail.
+ * Noise-reduction curves retain their camera-JPEG calibration: luminance NR
+ * stays off at base ISO and rises to 70 at ISO 6400, while colour NR stays
+ * strong because it costs almost no detail. Sharpening is off at every ISO,
+ * including unknown ISO. Radius, detail and masking remain ready for an
+ * explicit sharpening adjustment; they have no effect while amount is zero.
  */
 export function rawDetailDefaults(iso = 0): DetailEdits {
   return {
-    sharpenAmount: isoValue(iso, [70, 70, 70, 55, 45, 35, 30], 60),
+    sharpenAmount: 0,
     sharpenRadius: 1,
     sharpenDetail: 25,
     sharpenMasking: isoValue(iso, [0, 0, 5, 10, 20, 30, 40], 10),
@@ -91,7 +75,7 @@ export const defaultEdits = (
   const rawDetail = rawDetailDefaults(kind === 'raw' ? iso : 0)
   return {
   version: EDITS_VERSION,
-  profile: 'standard',
+  profile: profileEdits('standard'),
 
   basic: {
     wbMode: 'asShot',
@@ -178,7 +162,6 @@ export const defaultEdits = (
   detail: {
     ...rawDetail,
     // Rendered files have already been sharpened and denoised in-camera.
-    sharpenAmount: kind === 'raw' ? rawDetail.sharpenAmount : 0,
     sharpenMasking: kind === 'raw' ? rawDetail.sharpenMasking : 0,
     luminanceNR: kind === 'raw' ? rawDetail.luminanceNR : 0,
     colorNR: kind === 'raw' ? rawDetail.colorNR : 0,
@@ -285,7 +268,7 @@ export const defaultMaskAdjustments = (): MaskAdjustments => ({
 })
 
 export const SECTION_LABELS: Record<EditSection, string> = {
-  profile: 'Profile',
+  profile: 'RAW Profile',
   basic: 'Basic',
   tone: 'Tone Mapping',
   curve: 'Tone Curve',

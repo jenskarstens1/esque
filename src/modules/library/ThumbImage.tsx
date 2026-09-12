@@ -1,5 +1,7 @@
 import { ResolvingImage } from '../../design/ResolvingImage'
 import { healOrientation } from '../../catalog/aspect'
+import { dynamicRangeStyle } from '../../core/hdr'
+import { photoHdr, useUI } from '../../state/ui'
 import { cn } from '../../lib/cn'
 import type { Photo } from '../../core/types'
 
@@ -25,8 +27,15 @@ export function ThumbImage({
   /** Rejected photos sit back without leaving the wall. */
   dim?: boolean
 }) {
+  const hdr = useUI(photoHdr(photo.id))
   return (
-    <div className={cn('absolute inset-0 overflow-hidden bg-white/[0.045]', className)}>
+    <div
+      className={cn('absolute inset-0 overflow-hidden bg-wash-subtle', className)}
+      // The grid is where a wall of HDR frames would otherwise fight each
+      // other for attention, so each tile answers for its own photo rather
+      // than inheriting one verdict from the document.
+      style={dynamicRangeStyle(hdr)}
+    >
       <ResolvingImage
         src={url}
         alt={photo.filename}

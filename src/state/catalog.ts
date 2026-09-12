@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { persist } from 'zustand/middleware'
 import type { ColorLabel, PickFlag, Photo } from '../core/types'
 
 export type Source =
@@ -74,7 +75,28 @@ interface CatalogState {
   setPrimary: (id: string | null) => void
 }
 
-export const useCatalog = create<CatalogState>((set, get) => ({
+/**
+ * Where the viewer was: which source, how it was filtered and sorted, and
+ * which photograph they had open.
+ *
+ * A reload is not a new session — the catalogue, its previews and the edits
+ * are all still on the machine, so coming back to the first photo of "All
+ * Photographs" throws away the only part of the state that was in the
+ * photographer's head. `visibleIds` is deliberately absent: it is the view the
+ * Library publishes from the live query, and a saved copy of it would be a
+ * claim about rows that may no longer exist.
+ */
+const persisted = (s: CatalogState) => ({
+  source: s.source,
+  filters: s.filters,
+  sortKey: s.sortKey,
+  sortAsc: s.sortAsc,
+  selected: s.selected,
+  primaryId: s.primaryId,
+  anchorId: s.anchorId,
+})
+
+export const useCatalog = create<CatalogState>()(persist((set, get) => ({
   source: { kind: 'all' },
   filters: emptyFilters(),
   sortKey: 'capture',
@@ -141,6 +163,35 @@ export const useCatalog = create<CatalogState>((set, get) => ({
   },
 
   setPrimary: (primaryId) => set({ primaryId }),
+}), {
+  name: 'esque.catalog',
+  partialize: persisted,
+  // A saved source can name a folder or collection that has since been
+  // deleted, which would restore the photographer into a view with nothing in
+  // it and no obvious way out. The whole catalogue is the honest fallback.
+  onRehydrateStorage: () => (state) => {
+    if (!state) return
+    // Keep the store's own invariant: the primary is a member of the selection.
+    const selected = state.primaryId && !state.selected.includes(state.primaryId)
+      ? [state.primaryId]
+      : state.selected
+    if (selected !== state.selected) useCatalog.setState({ selected })
+
+    const { source } = state
+    if (source.kind !== 'folder' && source.kind !== 'collection') return
+    void (async () => {
+      const { db } = await import('../catalog/db')
+      const row =
+        source.kind === 'folder'
+          ? await db.folders.get(source.id)
+          : await db.collections.get(source.id)
+      // Only reset if nothing has moved on since — the viewer may well have
+      // clicked somewhere else while IndexedDB was answering.
+      if (!row && useCatalog.getState().source === source) {
+        useCatalog.setState({ source: { kind: 'all' } })
+      }
+    })()
+  },
 }))
 
 // ---------------------------------------------------------------------------

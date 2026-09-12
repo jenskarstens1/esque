@@ -40,12 +40,10 @@ export interface DevelopSession extends EditSaveState {
    */
   imageId: string | null
   /**
-   * Which baseline this photo's defaults come from. A RAW starts with capture
-   * sharpening and colour noise reduction because it has been demosaiced and
-   * nothing else has touched it; a JPEG has already been sharpened and
-   * denoised in-camera, so the same numbers would be a second pass. Reset,
-   * "modified" dots and the compare reference all have to agree on which
-   * baseline they mean.
+   * Which baseline this photo's defaults come from. Sharpening starts off for
+   * every kind; RAWs retain ISO-calibrated noise reduction, while a JPEG has
+   * already been denoised in-camera. Reset, "modified" dots and the compare
+   * reference all have to agree on which baseline they mean.
    */
   kind: FileKind
   /** Capture ISO, used by RAW detail defaults and resets. */

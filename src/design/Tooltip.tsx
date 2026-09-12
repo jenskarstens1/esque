@@ -94,7 +94,7 @@ export function Tooltip({
           >
             {content}
             {shortcut && (
-              <kbd className="rounded-xs bg-white/10 px-1 font-mono text-micro text-label-secondary">
+              <kbd className="rounded-xs bg-wash px-1 font-mono text-micro text-label-secondary">
                 {shortcut}
               </kbd>
             )}

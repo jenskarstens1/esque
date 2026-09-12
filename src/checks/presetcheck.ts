@@ -2,6 +2,7 @@ import { changedPaths, defaultEdits, getPath, rawDetailDefaults, SECTION_LABELS 
 import { applyPreset, BUILTIN_PRESETS, PRESET_SCOPES, scopePaths } from '../develop/presets'
 import { parsePresetFile, presetToXmp } from '../develop/xmp'
 import type { Edits, Preset } from '../core/types'
+import { profileEdits } from '../core/profiles'
 
 /*
  * Preset application check.
@@ -33,7 +34,7 @@ const ok = (cond: boolean, m: string) => {
  */
 function editedRaw(): Edits {
   const e = defaultEdits('raw')
-  e.profile = 'portrait'
+  e.profile = profileEdits('portrait')
   e.basic.wbMode = 'custom'
   e.basic.temp = 3150
   e.basic.tint = 14
@@ -297,21 +298,23 @@ const profilePreset: Preset = {
   builtin: false,
   sections: ['profile'],
   paths: ['profile'],
-  edits: { profile: 'landscape' },
+  edits: { profile: profileEdits('landscape') },
   createdAt: 0,
 }
 {
   const before = editedRaw()
   const after = applyPreset(before, profilePreset)
-  ok(after.profile === 'landscape', `profile preset: applied as ${after.profile}`)
+  ok(after.profile.name === 'landscape', `profile preset: applied as ${after.profile.name}`)
+  // The profile is a group of values now, so it changes as several leaves.
+  const touched = changedPaths(before, after)
   ok(
-    JSON.stringify(changedPaths(before, after)) === JSON.stringify(['profile']),
-    'profile preset: touched something other than the profile',
+    touched.length > 0 && touched.every((p) => p === 'profile' || p.startsWith('profile.')),
+    `profile preset: touched something other than the profile (${touched.join(', ')})`,
   )
 
   const reread = parsePresetFile(
     'profile.xmp',
-    presetToXmp(profilePreset, { ...defaultEdits('raw'), profile: 'landscape' }),
+    presetToXmp(profilePreset, { ...defaultEdits('raw'), profile: profileEdits('landscape') }),
   )
   if (!reread) fail('profile preset: did not re-import')
   else {
@@ -319,7 +322,7 @@ const profilePreset: Preset = {
       JSON.stringify(reread.paths) === JSON.stringify(['profile']),
       `profile preset: re-imported as ${JSON.stringify(reread.paths)}`,
     )
-    ok(applyPreset(before, reread).profile === 'landscape', 'profile preset: lost the profile')
+    ok(applyPreset(before, reread).profile.name === 'landscape', 'profile preset: lost the profile')
   }
 }
 
@@ -340,19 +343,18 @@ const profilePreset: Preset = {
   ok(after.basic.wbMode === 'asShot', 'legacy: no longer replaces the whole section')
 }
 
-// --- Raw and rendered files start from different defaults -----------------
+// --- Sharpening is opt-in; noise defaults still depend on the file --------
 
 {
   const raw = defaultEdits('raw')
   const rendered = defaultEdits('rendered')
-  ok(raw.detail.sharpenAmount === 60, `raw: capture sharpening is ${raw.detail.sharpenAmount}`)
+  ok(raw.detail.sharpenAmount === 0, `raw: sharpening is ${raw.detail.sharpenAmount}`)
   ok(raw.detail.sharpenMasking === 10, `raw: sharpening mask is ${raw.detail.sharpenMasking}`)
-  // Luminance noise reduction is never a default: it is the one control that
-  // trades away detail, and at base ISO there is nothing for it to remove.
+  // Luminance noise reduction stays off at base ISO.
   ok(raw.detail.luminanceNR === 0, `raw: luminance NR is ${raw.detail.luminanceNR}`)
   ok(rawDetailDefaults(100).luminanceNR === 0, 'raw: luminance NR is not zero at base ISO')
   ok(
-    rawDetailDefaults(100).sharpenAmount === 70,
+    rawDetailDefaults(100).sharpenAmount === 0,
     `raw: base-ISO sharpening is ${rawDetailDefaults(100).sharpenAmount}`,
   )
   ok(
@@ -363,11 +365,9 @@ const profilePreset: Preset = {
     rawDetailDefaults(12800).luminanceNR <= 75,
     `raw: luminance NR reaches ${rawDetailDefaults(12800).luminanceNR} at ISO 12800`,
   )
-  // Sharpening eases off at high ISO but must never collapse: rendering less
-  // surviving detail than the camera's own JPEG defeats the point of the RAW.
   ok(
-    rawDetailDefaults(12800).sharpenAmount >= 25,
-    `raw: sharpening falls to ${rawDetailDefaults(12800).sharpenAmount} at ISO 12800`,
+    rawDetailDefaults(12800).sharpenAmount === 0,
+    `raw: high-ISO sharpening is ${rawDetailDefaults(12800).sharpenAmount}`,
   )
   ok(raw.detail.colorNR === 55, `raw: colour NR is ${raw.detail.colorNR}`)
   ok(rendered.detail.sharpenAmount === 0, `rendered: sharpening is ${rendered.detail.sharpenAmount}`)
@@ -378,7 +378,6 @@ const profilePreset: Preset = {
     JSON.stringify(changedPaths(raw, rendered)) ===
       JSON.stringify([
         'basic.temp',
-        'detail.sharpenAmount',
         'detail.sharpenMasking',
         'detail.colorNR',
       ]),
