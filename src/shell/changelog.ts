@@ -49,52 +49,47 @@ export const RELEASES: Release[] = [
     version: '0.4.2',
     date: '2026-09-13',
     summary:
-      'Faster editing and reopening of RAW photos, more control over rendering, and a workspace that remembers where you left off.',
+      'Faster RAW editing, HDR controls and a workspace that remembers your place.',
     changes: [
       {
         kind: 'added',
         term: 'HDR photos',
-        text: 'The HDR toolbar button and H shortcut toggle HDR for the selected photos without changing the global default. Supported gain-map images retain their highlight detail, and Develop respects each photo\'s dynamic-range limit in both the loading preview and live canvas. Visible HDR needs a compatible browser and display.',
+        text: 'Toggle HDR per photo with the toolbar or H shortcut, with gain-map support and corrected highlight headroom on compatible displays.',
       },
       {
         kind: 'added',
         term: 'RAW profile controls',
-        text: 'Profiles expose highlight roll-off, base contrast and saturation as editable values. Choose a named base or adjust it into a Custom profile; the values travel with presets and sidecars. Rendered files keep their existing look rather than receiving a RAW profile.',
+        text: 'Adjust highlight roll-off, base contrast and saturation, or start from a named profile.',
       },
       {
         kind: 'improved',
         term: 'Adjustment speed',
-        text: 'Exposure, tone, colour, crop and layer changes reuse capture-stage processing instead of repeating noise reduction and sharpening. Preset previews also avoid rebuilding the preset library during slider adjustments.',
+        text: 'Faster slider adjustments and preset previews reuse processing that has not changed.',
       },
       {
         kind: 'improved',
         term: 'Persistent RAW cache',
-        text: 'Working and higher-detail RAW decodes survive reloads and browser restarts, so reopening a cached tier does not demosaic again. Virtual copies share cached pixels, and changing preview quality keeps the other tiers. Settings offers size and retention controls plus browser storage-protection status; uncached tiers and exports still need the original.',
+        text: 'Cached RAW photos reopen faster after reloads and browser restarts. Manage cache size, retention and storage protection in Settings.',
       },
       {
         kind: 'improved',
         term: 'Sharpening defaults',
-        text: 'New photos and detail resets start with sharpening off, while RAW noise reduction keeps its ISO-based defaults. Older edits, snapshots, presets, sidecars and backups matching the previous sharpening defaults migrate to zero; matching deliberate settings also reset. Foreign sidecars with Adobe\'s factory sharpening are treated as unspecified, while foreign presets and other sharpening values are preserved.',
+        text: 'New photos and resets start with sharpening off. Saved settings matching the old defaults also reset to zero, including deliberate settings with those same values.',
       },
       {
         kind: 'improved',
         term: 'Snapshots',
-        text: 'The plus button captures the current settings immediately with an automatic Snapshot #n name. Double-click a name to rename it inline. Empty snapshots no longer leave a padded gap, and snapshot and history scrollbars align with the panel edge.',
+        text: 'Capture in one click; double-click the name to rename.',
       },
       {
         kind: 'improved',
         term: 'Workspace controls',
-        text: 'Themes, sliders, curves, histograms and map controls have been refined for clearer editing. Folder import actions share a menu, and a browser page-zoom notice helps explain unexpected changes in workspace scale.',
+        text: 'Refined themes and editing controls, simpler import actions and a browser zoom notice.',
       },
       {
         kind: 'fixed',
         term: 'Returning to work',
-        text: 'Reloading restores the catalog selection and view instead of losing your place. Cached RAW pixels remain available when the original is temporarily disconnected, with stale or invalid cache entries rejected.',
-      },
-      {
-        kind: 'fixed',
-        term: 'HDR headroom',
-        text: 'Enabling HDR restores the two-stop headroom even when an older edit saved it as zero, so the toggle no longer leaves the photo constrained to SDR.',
+        text: 'Reloading restores your catalog selection and view.',
       },
     ],
   },
