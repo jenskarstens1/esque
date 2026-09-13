@@ -8,6 +8,7 @@ import { nextId } from '../lib/math'
 import { toast } from '../design/toast'
 import { cloneEdits, defaultEdits, editsKind } from '../core/defaults'
 import type { Collection, ColorLabel, Edits, PickFlag, Photo, SmartRule } from '../core/types'
+import type { CatalogDatabase } from './archive'
 
 const ids = (target: string | string[]) => (Array.isArray(target) ? target : [target])
 
@@ -160,21 +161,35 @@ export async function createVirtualCopy(sourceId: string): Promise<string | null
   return copy.id
 }
 
-/** Removes photos from the catalog. Files on disk are never touched. */
-export async function removePhotos(target: string | string[]) {
+/** Removes catalog rows and managed originals. Files on disk are never touched. */
+export async function removePhotos(target: string | string[], database: CatalogDatabase = db) {
   const requested = ids(target)
   // A virtual copy resolves its pixels through its master's row, so a master
   // removed on its own would leave its copies pointing at nothing and unable
   // to open. They go with it, as they do in Lightroom.
-  const dependents = await db.photos
-    .where('masterId')
-    .anyOf(requested)
-    .primaryKeys()
-  const list = [...new Set([...requested, ...(dependents as string[])])]
-  // Read the rows before deleting them: a preview's cache key carries the
-  // photo's revision, so the key can't be reconstructed once the row is gone.
-  const doomed = (await db.photos.bulkGet(list)).filter((p): p is Photo => !!p)
-  await db.photos.bulkDelete(list)
+  const { list, doomed } = await database.transaction('rw', [
+    database.photos, database.originals, database.collections,
+  ], async () => {
+    const dependents = await database.photos
+      .where('masterId')
+      .anyOf(requested)
+      .primaryKeys()
+    const list = [...new Set([...requested, ...(dependents as string[])])]
+    // Read the rows before deleting them: a preview's cache key carries the
+    // photo's revision, so the key can't be reconstructed once the row is gone.
+    const doomed = (await database.photos.bulkGet(list)).filter((p): p is Photo => !!p)
+    await database.originals.bulkDelete(doomed.filter((photo) => photo.masterId === null).map((photo) => photo.id))
+    await database.photos.bulkDelete(list)
+    const collections = await database.collections.toArray()
+    await Promise.all(
+      collections
+        .filter((c) => !c.smart && c.photoIds.some((id) => list.includes(id)))
+        .map((c) =>
+          database.collections.update(c.id, { photoIds: c.photoIds.filter((id) => !list.includes(id)) }),
+        ),
+    )
+    return { list, doomed }
+  })
   await Promise.all(
     doomed.flatMap((p) => [
       cacheDelete(p.thumbKey ?? thumbKey(p.id)),
@@ -182,14 +197,6 @@ export async function removePhotos(target: string | string[]) {
     ]),
   )
   for (const id of list) dropDetail(id)
-  const collections = await db.collections.toArray()
-  await Promise.all(
-    collections
-      .filter((c) => !c.smart && c.photoIds.some((id) => list.includes(id)))
-      .map((c) =>
-        db.collections.update(c.id, { photoIds: c.photoIds.filter((id) => !list.includes(id)) }),
-      ),
-  )
 }
 
 export async function removeFolder(folderId: string) {

@@ -13,14 +13,11 @@
 /**
  * How dark the chrome is.
  *
- * Three steps rather than two. `dark` is the reference: a near-black surround
- * is what a photograph should be judged against, and it is what the app opens
- * on. `light` exists because a bright room makes that surround glare, not
- * because anyone edits in it by choice. `dim` is the middle Lightroom has
- * always offered — dark enough not to bias the eye, light enough to read the
- * panels by in daylight.
+ * `dark` is the default medium-grey chrome, formerly called Dim.
+ * `light` provides a brighter alternative. The photograph's surround can be
+ * chosen independently of either appearance.
  */
-export type Appearance = "dark" | "dim" | "light";
+export type Appearance = "dark" | "light";
 
 /**
  * The tone the photograph sits on.
@@ -44,7 +41,6 @@ export type TextSize = "small" | "default" | "medium" | "large";
 
 export const APPEARANCE_LABELS: Record<Appearance, string> = {
   dark: "Dark",
-  dim: "Dim",
   light: "Light",
 };
 

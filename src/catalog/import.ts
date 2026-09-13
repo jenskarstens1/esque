@@ -1,12 +1,14 @@
 import { db } from "./db";
-import { cacheWrite, thumbKey } from "./opfs";
+import { cacheDelete, cacheWrite, thumbKey } from "./opfs";
 import {
   extOf,
   isRawFile,
   isSupported,
   scanFolder,
   type ScannedFile,
+  type LocalFile,
 } from "./fs";
+import { prepareOriginal } from "./originals";
 import {
   rawPool,
   rawFailure,
@@ -16,7 +18,7 @@ import {
 } from "../raw/pool";
 import { nextId } from "../lib/math";
 import { detectHdrContent } from "../core/hdrContent";
-import { applySidecarText } from "./sidecar";
+import { applySidecarText, sidecarNames } from "./sidecar";
 import { useUI } from "../state/ui";
 import type { CatalogFolder, Photo, PhotoMetadata } from "../core/types";
 
@@ -176,6 +178,7 @@ async function assignRenderedMetadata(file: File, meta: PhotoMetadata) {
 
 async function readImportSidecar(scanned: ScannedFile) {
   if (!scanned.sidecar || !useUI.getState().importSidecars) return null;
+  if (scanned.sidecar instanceof File) return scanned.sidecar.text();
   return scanned.sidecar
     .getFile()
     .then((file) => file.text())
@@ -189,10 +192,10 @@ async function ingest(
   now: number,
   signal?: AbortSignal,
   loose = false,
+  id = nextId(),
 ): Promise<Photo | null> {
-  const file = await scanned.handle.getFile();
+  const file = scanned.handle ? await scanned.handle.getFile() : scanned.file;
   const isRaw = isRawFile(scanned.name);
-  const id = nextId();
   const meta = emptyMeta();
   let failure: string | null = null;
 
@@ -267,8 +270,107 @@ async function ingest(
     stackPosition: 0,
     stackCollapsed: false,
     readError: failure,
-    fileHandle: loose ? scanned.handle : null,
+    fileHandle: loose ? scanned.handle ?? null : null,
   };
+}
+
+function validateImportPath(path: string) {
+  if (!path || path.startsWith("/") || path.includes("\\") ||
+    path.split("/").some((part) => !part || part === "." || part === "..")) {
+    throw new Error(`Invalid import path: ${path}`);
+  }
+}
+
+function uniqueImportPath(path: string, used: Set<string>) {
+  const dot = path.lastIndexOf(".");
+  let candidate = path;
+  for (let n = 2; used.has(candidate); n++) {
+    candidate = dot > path.lastIndexOf("/")
+      ? `${path.slice(0, dot)} (${n})${path.slice(dot)}`
+      : `${path} (${n})`;
+  }
+  return candidate;
+}
+
+/**
+ * Files selected without native handles are copied into durable catalog storage.
+ * The source and photo commit together; cache eviction never owns originals.
+ */
+export async function importLocalFiles(
+  sources: LocalFile[],
+  opts: {
+    signal?: AbortSignal;
+    onProgress?: (p: ImportProgress) => void;
+  } = {},
+) {
+  const { signal, onProgress } = opts;
+  const picked = sources.filter(({ file }) => isSupported(file.name));
+  const sidecars = new Map(sources
+    .filter(({ file }) => file.name.toLowerCase().endsWith(".xmp"))
+    .map(({ file, path }) => [path.toLowerCase(), file]));
+  const folder = await looseFolder();
+  const used = new Set(await db.photos.where("folderId").equals(folder.id)
+    .toArray().then((photos) => photos.map((photo) => photo.relPath)));
+  const imported: string[] = [];
+  let skipped = 0;
+  let failed = 0;
+  let done = 0;
+  let storageFull = false;
+  const report = (patch: Partial<ImportProgress> = {}) => onProgress?.({
+    phase: "reading", total: picked.length, done, skipped, current: "", ...patch,
+  });
+  for (const { file, path } of picked) {
+    if (signal?.aborted) break;
+    report({ current: path });
+    const id = nextId();
+    try {
+      validateImportPath(path);
+      const sidecar = sidecarNames(path).map((name) => sidecars.get(name.toLowerCase())).find(Boolean);
+      const original = await prepareOriginal(id, file, path, sidecar);
+      signal?.throwIfAborted();
+      const prior = await db.originals.where("identity").equals(original.identity).primaryKeys();
+      if ((await db.photos.bulkGet(prior)).some(Boolean)) {
+        skipped++;
+        done++;
+        report();
+        continue;
+      }
+      const relPath = uniqueImportPath(path, used);
+      const photo = await ingest(folder.id, {
+        file, relPath, name: file.name, size: file.size,
+        modifiedAt: file.lastModified, sidecar,
+      }, Date.now(), signal, true, id);
+      signal?.throwIfAborted();
+      if (photo) {
+        await db.transaction("rw", [db.photos, db.originals], async () => {
+          await db.originals.put(original);
+          await db.photos.put(photo);
+        });
+        used.add(relPath);
+        imported.push(photo.id);
+      }
+    } catch (error) {
+      await cacheDelete(thumbKey(id));
+      if (signal?.aborted) break;
+      console.error(`[esque] Could not import ${path}.`, error);
+      failed++;
+      // Continuing after exhausted storage would fail every remaining photo.
+      if (error instanceof Error && error.name === "QuotaExceededError") {
+        storageFull = true;
+        break;
+      }
+    }
+    done++;
+    report();
+  }
+  const photoCount = await db.photos.where("folderId").equals(folder.id).count();
+  await db.folders.update(folder.id, { photoCount });
+  if (storageFull) {
+    throw new Error(`Browser storage is full. ${imported.length} photos were imported before stopping. Free space or use a browser with native folder access.`);
+  }
+  await runImportDefaults(imported, signal, report, skipped);
+  report({ phase: signal?.aborted ? "cancelled" : "done" });
+  return { folder: { ...folder, photoCount }, added: imported.length, skipped, failed };
 }
 
 /**
@@ -547,14 +649,7 @@ export async function importFiles(
       skipped++;
       continue;
     }
-    let relPath = handle.name;
-    for (let n = 2; used.has(relPath); n++) {
-      const dot = handle.name.lastIndexOf(".");
-      relPath =
-        dot > 0
-          ? `${handle.name.slice(0, dot)} (${n})${handle.name.slice(dot)}`
-          : `${handle.name} (${n})`;
-    }
+    const relPath = uniqueImportPath(handle.name, used);
     const item = {
       handle,
       relPath,

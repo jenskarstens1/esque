@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import { toast } from '../design/toast'
 import { useImporter } from './importer'
 import { useUI } from './ui'
+import { localFiles, type LocalFile } from '../catalog/fs'
 
 /**
  * Drag-and-drop import, listened for across the whole window.
@@ -42,40 +43,64 @@ function claimed(target: EventTarget | null) {
  * item list is emptied the moment the handler returns, so the promises are
  * started here and awaited afterwards.
  */
-function handlesFrom(transfer: DataTransfer) {
-  const pending: Promise<FileSystemHandle | null>[] = []
-  let files = 0
-  for (const item of Array.from(transfer.items)) {
-    if (item.kind !== 'file') continue
-    files++
-    const handle = item.getAsFileSystemHandle?.()
-    if (handle) pending.push(handle)
+async function readEntry(entry: FileSystemEntry, prefix = ''): Promise<LocalFile[]> {
+  if (entry.name.startsWith('.') || entry.name.endsWith('.lrdata')) return []
+  const path = prefix ? `${prefix}/${entry.name}` : entry.name
+  if (entry.isFile) {
+    const file = await new Promise<File>((resolve, reject) =>
+      (entry as FileSystemFileEntry).file(resolve, reject))
+    return [{ file, path }]
   }
-  return { pending, files }
+  if (!entry.isDirectory) throw new Error(`Cannot read dropped item: ${path}`)
+  const reader = (entry as FileSystemDirectoryEntry).createReader()
+  const files: LocalFile[] = []
+  for (;;) {
+    const batch = await new Promise<FileSystemEntry[]>((resolve, reject) =>
+      reader.readEntries(resolve, reject))
+    if (!batch.length) return files
+    for (const child of batch) files.push(...await readEntry(child, path))
+  }
+}
+
+export async function readDropSources(transfer: DataTransfer) {
+  const items = Array.from(transfer.items).filter((item) => item.kind === 'file')
+  const fallbackFiles = Array.from(transfer.files)
+  // Capture every entry/File and start every handle request before returning
+  // control to the event loop; browsers clear the drag data store afterwards.
+  const captured = items.map((item) => {
+    const file = item.getAsFile()
+    const entry = item.webkitGetAsEntry?.()
+    let handle: Promise<FileSystemHandle | null> | undefined
+    try {
+      handle = item.getAsFileSystemHandle?.()?.catch((error: unknown) => {
+        console.warn('[esque] Native drop access failed; trying the selected file.', error)
+        return null
+      })
+    } catch (error) {
+      console.warn('[esque] Native drop access failed; trying the selected file.', error)
+    }
+    return { file, entry, handle }
+  })
+  const handles: FileSystemHandle[] = []
+  const files: LocalFile[] = []
+  for (const item of captured) {
+    const handle = await item.handle
+    if (handle) handles.push(handle)
+    else if (item.entry?.isDirectory) files.push(...await readEntry(item.entry))
+    else if (item.file) files.push(...localFiles([item.file]))
+    else if (item.entry) files.push(...await readEntry(item.entry))
+    else throw new Error('A dropped item could not be read. Use Import Photos or Import Folder instead.')
+  }
+  if (!items.length) files.push(...localFiles(fallbackFiles))
+  return { handles, files }
 }
 
 async function accept(transfer: DataTransfer) {
-  const { pending, files } = handlesFrom(transfer)
-  if (!pending.length) {
-    // Every other browser hands back a `File` with no handle behind it, which
-    // the catalog cannot re-read later. Saying so beats importing photographs
-    // that break on the next launch.
-    if (files) {
-      toast.error(
-        'Drag and drop unavailable',
-        'esque needs a Chromium browser to read dropped files.',
-      )
-    }
-    return
-  }
-  const handles = (await Promise.all(pending.map((p) => p.catch(() => null)))).filter(
-    (h): h is FileSystemHandle => !!h,
-  )
-  if (!handles.length) return
+  const { handles, files } = await readDropSources(transfer)
   // Develop has one photograph open and no way to show an import; the Library
   // is where the new photos actually appear, so that is where the drop lands.
   useUI.getState().setModule('library')
-  await useImporter.getState().runDropped(handles)
+  await useImporter.getState().runDropped(handles, files)
 }
 
 /** Attaches the window-wide listeners. Returns the teardown. */
@@ -116,7 +141,9 @@ export function installDropImport(): () => void {
     event.preventDefault()
     depth = 0
     show(false)
-    void accept(event.dataTransfer!)
+    void accept(event.dataTransfer!).catch((error: unknown) => {
+      toast.error('Drop could not be imported', error instanceof Error ? error.message : String(error))
+    })
   }
 
   const onEnd = () => {

@@ -75,7 +75,7 @@ async function flush(id: string) {
       complained = true;
       toast.error(
         "Could not write a sidecar",
-        "esque no longer has permission to write beside these photos. Turn sidecar writing off and on again in Settings to re-authorise the folder.",
+        "Automatic sidecars need a writable source folder. For browser-local copies, use Export with XMP sidecars. For linked folders, turn automatic writes off and on in Settings to renew permission.",
       );
     }
   } catch {

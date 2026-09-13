@@ -46,6 +46,44 @@ export const KIND_ORDER: ChangeKind[] = ['added', 'improved', 'fixed']
 
 export const RELEASES: Release[] = [
   {
+    version: '0.4.3',
+    date: '2026-09-13',
+    summary:
+      'Broader browser support, reliable local photo storage and a simpler Dark and Light appearance.',
+    changes: [
+      {
+        kind: 'improved',
+        term: 'Browser compatibility',
+        text: 'Import and reconnect photos with standard file and folder pickers in Firefox and Safari. Local copies survive reloads, and exports download without folder permission. Editing still requires working WebGPU.',
+      },
+      {
+        kind: 'improved',
+        term: 'Appearance',
+        text: 'Dim is now Dark and is the default appearance, replacing the old near-black theme. Light remains available, and saved Dim preferences carry over automatically.',
+      },
+      {
+        kind: 'improved',
+        term: 'Settings',
+        text: 'Thumbnail size is controlled in the Library toolbar rather than Settings.',
+      },
+      {
+        kind: 'fixed',
+        term: 'Local photo storage',
+        text: 'Browser-local originals and sidecars stay available for editing, virtual copies and export when filesystem access is unavailable. Restricted storage uses an IndexedDB fallback, and clearing previews does not remove originals. Keep your original files backed up: clearing browser data can remove local copies.',
+      },
+      {
+        kind: 'fixed',
+        term: 'Drag and drop',
+        text: 'Dropped photos and folders work without native file handles, preserve nested paths and keep existing edits when unchanged files are reimported.',
+      },
+      {
+        kind: 'fixed',
+        term: 'Rendering availability',
+        text: 'Unsupported or disconnected graphics devices show clear guidance instead of a blank viewport. WebKit decoder workers keep working when development-server responses are revalidated.',
+      },
+    ],
+  },
+  {
     version: '0.4.2',
     date: '2026-09-13',
     summary:

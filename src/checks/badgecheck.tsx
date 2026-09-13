@@ -86,7 +86,7 @@ runCheck(async () => {
 
   const appearance = document.documentElement.getAttribute('data-appearance')
   try {
-    for (const theme of ['dark', 'dim', 'light']) {
+    for (const theme of ['dark', 'light']) {
       document.documentElement.setAttribute('data-appearance', theme)
       await wait(30)
       const badges = [...document.querySelectorAll<HTMLElement>('[data-badge]')]

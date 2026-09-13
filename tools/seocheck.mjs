@@ -157,8 +157,8 @@ try {
       await editor.screenshot({ path: join(screenshots, `seo-editor-${name}.png`), animations: 'disabled' })
   }
   assert.ok(await dismissWelcome(editor), 'The welcome dialog must remain dismissible')
-  assert.ok(await editor.getByRole('main').getByRole('button', { name: /^Import folder/ }).isVisible())
-  assert.ok(await editor.getByRole('main').getByRole('button', { name: /^Import file/ }).isVisible())
+  assert.ok(await editor.getByRole('main').getByRole('button', { name: 'Choose Folder', exact: true }).isVisible())
+  assert.ok(await editor.getByRole('main').getByRole('button', { name: 'Choose Photos', exact: true }).isVisible())
   assert.deepEqual(errors, [], 'Editor startup must not throw')
   await context.close()
   console.log('SEO metadata, sitemap, robots, social image, no-JavaScript content and editor startup passed.')

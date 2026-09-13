@@ -196,7 +196,7 @@ function Prose({ children }: { children: ReactNode }) {
 const FACTS: Array<[string, string]> = [
   [
     'Files',
-    'Photos stay in the folder you choose, under their own names. Nothing is uploaded, and the catalog and its previews are kept in this browser.',
+    'Nothing is uploaded. Native pickers read photos from disk; other browsers keep local copies. Keep your originals and backups: clearing browser data can remove the catalog and its copies.',
   ],
   [
     'Edits',
@@ -234,8 +234,8 @@ function AboutFace({ phone }: { phone: boolean }) {
         </SmallRow>
 
         <SmallRow term="Requirements" phone={phone}>
-          Chrome, Edge or another Chromium browser. Folder access and WebGPU are not available
-          elsewhere yet.
+          Use a current Chrome, Edge, Firefox or Safari with working WebGPU and graphics
+          acceleration enabled. Support depends on your operating system and GPU.
         </SmallRow>
 
         <SmallRow term="Licence" phone={phone}>

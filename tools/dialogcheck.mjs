@@ -2,7 +2,7 @@
  * Settings, export options, legacy preferences and shared icon regression checks.
  * Uses a fresh browser profile and synthetic photos, never the user's catalog.
  *
- * node tools/dialogcheck.mjs [dev-server origin]
+ * node tools/dialogcheck.mjs [dev-server origin] [--settings-only]
  */
 import assert from 'node:assert/strict'
 import { mkdir } from 'node:fs/promises'
@@ -12,6 +12,7 @@ import { dismissWelcome } from './lib/welcome.mjs'
 
 const origin = new URL(process.argv[2] ?? 'http://127.0.0.1:5173/')
 const screenshots = process.env.ESQUE_DIALOG_SCREENSHOTS
+const settingsOnly = process.argv.includes('--settings-only')
 const viewports = [
   { name: 'desktop', width: 1440, height: 900, touch: false },
   { name: 'tablet', width: 834, height: 1112, touch: true },
@@ -102,9 +103,67 @@ async function seedPhoto(page) {
   })
 }
 
+async function appearanceStartup(browser) {
+  const darkTokens = {
+    canvas: '#141417', base: '#1e1e21', panel: '#26262a', raised: '#313136',
+    control: '#3b3b41', hover: '#46464d', active: '#515159',
+    scrim: 'rgb(0 0 0 / 0.5)', hairline: 'rgb(255 255 255 / 0.08)',
+    'hairline-strong': 'rgb(255 255 255 / 0.14)',
+    'slider-track': '#45464b', 'slider-fill': '#b4b4ba',
+  }
+  const lightTokens = {
+    canvas: '#b6b6ba', base: '#e8e8ec', panel: '#f4f4f6', raised: '#e6e6ea',
+    control: '#fbfbfc', hover: '#eeeef1', active: '#e2e2e7',
+    scrim: 'rgb(0 0 0 / 0.25)', hairline: 'rgb(0 0 0 / 0.11)',
+    'hairline-strong': 'rgb(0 0 0 / 0.18)',
+    'slider-track': '#d4d4d9', 'slider-fill': '#6b6b73',
+  }
+  for (const saved of [null, 'dim', 'dark', 'light']) {
+    const context = await browser.newContext()
+    try {
+      const page = await context.newPage()
+      await context.addInitScript(({ saved, expectedOrigin }) => {
+        if (location.origin !== expectedOrigin || sessionStorage.getItem('appearance-check-seeded')) return
+        if (saved !== null)
+          localStorage.setItem('esque.ui', JSON.stringify({ version: 0, state: { appearance: saved } }))
+        sessionStorage.setItem('appearance-check-seeded', 'true')
+      }, { saved, expectedOrigin: origin.origin })
+      await page.goto(origin.href, { waitUntil: 'domcontentloaded' })
+      const expected = saved === 'light' ? 'light' : 'dark'
+      for (let load = 0; load < 2; load++) {
+        await page.waitForFunction(() => !!window.__esque)
+        const state = await page.evaluate((tokens) => {
+          const root = document.documentElement
+          const style = getComputedStyle(root)
+          return {
+            appearance: window.__esque.useUI.getState().appearance,
+            attribute: root.dataset.appearance,
+            scheme: style.colorScheme,
+            themeColor: document.querySelector('meta[name="theme-color"]').content,
+            background: getComputedStyle(document.body).backgroundColor,
+            tokens: Object.fromEntries(tokens.map((token) =>
+              [token, style.getPropertyValue(`--color-${token}`).trim()])),
+          }
+        }, Object.keys(darkTokens))
+        assert.equal(state.appearance, expected)
+        assert.equal(state.attribute, expected)
+        assert.equal(state.scheme, expected)
+        assert.deepEqual(state.tokens, expected === 'light' ? lightTokens : darkTokens)
+        assert.equal(state.themeColor, expected === 'light' ? '#e8e8ec' : '#1e1e21')
+        assert.equal(state.background, expected === 'light' ? 'rgb(232, 232, 236)' : 'rgb(30, 30, 33)')
+        if (load === 0) await page.reload({ waitUntil: 'domcontentloaded' })
+      }
+      console.log(`${saved ?? 'fresh'} appearance: startup, palette and reload passed`)
+    } finally {
+      await context.close()
+    }
+  }
+}
+
 const browser = await launchBrowser('chromium')
 const failures = []
 try {
+  await appearanceStartup(browser)
   for (const viewport of viewports) {
     const { name, width, height, touch } = viewport
     const phone = width < 768
@@ -138,7 +197,8 @@ try {
       const previous = await preferences(page)
       assert.equal(previous.accentRetained, false)
       assert.equal('accent' in previous.stored, false)
-      assert.equal(previous.appearance, 'dim')
+      assert.equal(previous.appearance, 'dark')
+      assert.equal(previous.stored.appearance, 'dark')
       assert.equal(previous.surround, 'grey')
       assert.equal(previous.textSize, 'large')
       assert.equal(previous.thumbSize, 224)
@@ -162,9 +222,16 @@ try {
       assert.equal(await settings.getByRole('tab', { name: 'Interface', exact: true }).getAttribute('aria-selected'), 'true')
       assert.equal(await settings.getByRole('radiogroup', { name: /Accent/ }).count(), 0)
       assert.equal(await settings.getByText('Accent', { exact: true }).count(), 0)
+      assert.equal(await settings.getByRole('slider', { name: 'Thumbnail size', exact: true }).count(), 0)
+      assert.equal(await settings.getByText('Thumbnail size', { exact: true }).count(), 0)
       await layout(settings, `${name} large text`)
 
-      for (const appearance of ['light', 'dim', 'dark']) {
+      assert.deepEqual(
+        await settings.getByRole('combobox', { name: 'Appearance', exact: true })
+          .locator('option').evaluateAll((options) => options.map((option) => [option.value, option.textContent])),
+        [['dark', 'Dark'], ['light', 'Light']],
+      )
+      for (const appearance of ['light', 'dark']) {
         await settings.getByRole('combobox', { name: 'Appearance', exact: true }).selectOption(appearance)
         assert.equal(await page.locator('html').getAttribute('data-appearance'), appearance)
         const accent = await page.evaluate(() => {
@@ -210,6 +277,12 @@ try {
       assert.equal(await settings.getByRole('tab', { name: 'Display', exact: true }).getAttribute('aria-selected'), 'true')
       await settings.getByRole('button', { name: 'Done', exact: true }).click()
       await settings.waitFor({ state: 'detached' })
+
+      if (settingsOnly) {
+        assert.deepEqual(errors, [], `${name}: no browser errors`)
+        console.log(`${name}: settings and legacy preferences passed`)
+        continue
+      }
 
       await seedPhoto(page)
       const exporter = page.getByRole('dialog', { name: 'Export', exact: true })
@@ -276,8 +349,10 @@ try {
       assert.deepEqual(errors, [], `${name}: no browser errors`)
       console.log(`${name}: preferences, navigation, export formats/options, presets and icon weight passed`)
     } catch (error) {
+      console.error(`${name}: ${error.stack ?? error}`)
       if (screenshots)
         await page.screenshot({ path: join(screenshots, `failure-${name}.png`), animations: 'disabled' })
+          .catch((captureError) => console.error(`Could not capture ${name}: ${captureError.message}`))
       failures.push(`${name}: ${error.stack ?? error}`)
     } finally {
       await context.close()

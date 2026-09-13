@@ -1,6 +1,6 @@
 import { db } from './db'
 import { cacheDelete, cacheHas, cacheWrite, previewKey, scheduleEvict, thumbKey } from './opfs'
-import { resolveFile } from './fs'
+import { loadPhotoFile } from './originals'
 import { RAW_POOL_SIZE, rawPool } from '../raw/pool'
 import type { Photo } from '../core/types'
 
@@ -28,23 +28,7 @@ async function slot<T>(job: () => Promise<T>): Promise<T> {
   }
 }
 
-export async function loadPhotoFile(photoId: string): Promise<File | null> {
-  const photo = await db.photos.get(photoId)
-  if (!photo) return null
-  // Individually imported files carry their own handle; there is no folder to
-  // walk a relative path against.
-  if (photo.fileHandle) {
-    try {
-      return await photo.fileHandle.getFile()
-    } catch {
-      return null
-    }
-  }
-  const folder = await db.folders.get(photo.folderId)
-  if (!folder?.handle) return null
-  // Virtual copies reference the master's file on disk.
-  return resolveFile(folder.handle, photo.relPath)
-}
+export { loadPhotoFile } from './originals'
 
 /**
  * Generates the standard preview for a photo if it isn't cached yet.

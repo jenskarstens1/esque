@@ -1,6 +1,7 @@
 import Dexie, { type EntityTable } from 'dexie'
 import { db, type BinaryCacheEntry, type CacheMetadata } from '../catalog/db'
-import { createBinaryCache } from '../catalog/cache'
+import { createBinaryCache, opfsSupported } from '../catalog/cache'
+import { prepareOriginal } from '../catalog/originals'
 import { cacheBudget, cacheDelete, cacheRead, cacheWrite, proxyKey } from '../catalog/opfs'
 import { requestStorageProtection, storageProtection } from '../catalog/storage'
 import type { Photo } from '../core/types'
@@ -64,13 +65,15 @@ class CheckDB extends Dexie {
 }
 
 async function recencyChecks(id: string) {
-  const root = await navigator.storage.getDirectory()
-  const parent = await root.getDirectoryHandle(id, { create: true })
-  for (const backend of ['idb', 'opfs'] as const) {
+  for (const backend of ['idb', 'browser'] as const) {
     const name = `${id}-${backend}`
     const database = new CheckDB(name)
-    const directory = await parent.getDirectoryHandle(backend, { create: true })
-    const getRoot = async () => backend === 'opfs' ? directory : null
+    const storage: { root?: FileSystemDirectoryHandle } = {}
+    const getRoot = async () => {
+      if (backend === 'idb' || !opfsSupported()) return null
+      storage.root = await navigator.storage.getDirectory()
+      return storage.root.getDirectoryHandle(name, { create: true })
+    }
     try {
       const first = createBinaryCache(database, getRoot)
       await first.cacheWrite('proxy/recent', new Uint8Array(16))
@@ -89,7 +92,7 @@ async function recencyChecks(id: string) {
       const touched = await database.cacheMetadata.get('proxy/recent')
       ok(saved && touched && touched.accessedAt >= saved.accessedAt, `${backend}: access history did not persist`)
       await database.cacheMetadata.toCollection().modify({ accessedAt: 1 })
-      if (backend === 'idb') await database.cache.toCollection().modify({ modifiedAt: 1 })
+      await database.cache.toCollection().modify({ modifiedAt: 1 })
       await delay()
       await createBinaryCache(database, getRoot).cacheEvict(1000, 1)
       ok((await reopened.cacheStats()).files === 0, `${backend}: age limits did not expire unused entries`)
@@ -107,8 +110,147 @@ async function recencyChecks(id: string) {
       ok(await database.cacheMetadata.count() === 2, `${backend}: clearing previews left decode metadata`)
     } finally {
       await database.delete()
-      await parent.removeEntry(backend, { recursive: true })
+      if (storage.root) await storage.root.removeEntry(name, { recursive: true })
     }
+  }
+}
+
+async function missingApiChecks(database: CheckDB) {
+  const descriptor = Object.getOwnPropertyDescriptor(navigator.storage, 'getDirectory')
+  try {
+    Object.defineProperty(navigator.storage, 'getDirectory', { configurable: true, value: undefined })
+    ok(!opfsSupported(), 'An undefined getDirectory property was reported supported')
+    const cache = createBinaryCache(database)
+    const bytes = new Uint8Array([99, 1, 2, 3, 99]).subarray(1, 4)
+    await cache.cacheWrite('preview/bytes', bytes)
+    const file = await cache.cacheRead('preview/bytes')
+    ok(file && [...new Uint8Array(await file.arrayBuffer())].join() === '1,2,3',
+      'Missing OPFS API or typed-array offsets broke IDB roundtrip')
+    ok((await cache.cacheStats()).bytes === 3, 'ArrayBuffer cache statistics used the wrong size')
+    // A legacy Blob row can be injected even when this browser cannot store one.
+    const legacy = (row: BinaryCacheEntry) => ({
+      ...row, blob: new Blob(['legacy'], { type: 'image/legacy' }), type: undefined,
+    })
+    database.cache.hook('reading', legacy)
+    try {
+      const old = await cache.cacheRead('preview/bytes')
+      ok(old?.type === 'image/legacy' && await old.text() === 'legacy', 'A legacy IDB Blob row became unreadable')
+    } finally {
+      database.cache.hook('reading').unsubscribe(legacy)
+    }
+    await cache.cacheDelete('preview/bytes')
+  } finally {
+    if (descriptor) Object.defineProperty(navigator.storage, 'getDirectory', descriptor)
+    else Reflect.deleteProperty(navigator.storage, 'getDirectory')
+  }
+}
+
+async function fallbackChecks(id: string) {
+  const database = new CheckDB(`${id}-failures`)
+  const rejects = async (run: () => Promise<unknown>, error: Error, message: string) => {
+    let caught: unknown
+    try { await run() } catch (failure) { caught = failure }
+    // Dexie wraps native DOMExceptions while retaining their name and message.
+    ok(caught === error || (caught instanceof Error && caught.name === error.name &&
+      caught.message.includes(error.message)), message)
+  }
+  try {
+    for (const name of ['NotSupportedError', 'SecurityError', 'NotAllowedError', 'UnknownError']) {
+      const error = new DOMException('Injected root acquisition failure', name)
+      let attempts = 0
+      let warnings = 0
+      const warn = console.warn
+      console.warn = (...args: unknown[]) => {
+        if (args[0] === '[esque] OPFS cache unavailable; using IndexedDB instead.' && args[1] === error) warnings++
+        else warn(...args)
+      }
+      try {
+        const cache = createBinaryCache(database, async () => { attempts++; throw error })
+        const key = `preview/${name}`
+        const payload = new Blob([new Uint8Array([0, 1, 128, 255])], { type: 'image/test' })
+        await Promise.all([cache.cacheWrite(key, payload), cache.cacheRead('preview/missing')])
+        const file = await cache.cacheRead(key)
+        ok(file?.type === payload.type && file.name === name, `${name}: fallback lost file metadata`)
+        ok(file && [...new Uint8Array(await file.arrayBuffer())].join() === '0,1,128,255',
+          `${name}: fallback changed binary data`)
+        const row = await database.cache.get(key)
+        ok(row && row.modifiedAt === file?.lastModified, `${name}: fallback lost modification time`)
+        ok(row?.blob instanceof ArrayBuffer && row.type === payload.type, `${name}: fallback requires IDB Blob support`)
+        ok(!!await database.cacheMetadata.get(key), `${name}: fallback lost access metadata`)
+        ok((await cache.cacheStats()).files === 1, `${name}: fallback statistics lost a blob`)
+        database.close()
+        await database.open()
+        const reopened = await createBinaryCache(database, async () => null).cacheRead(key)
+        ok(reopened && await reopened.text() === await payload.text(), `${name}: fallback did not survive reopening IDB`)
+        await cache.cacheDelete(key)
+        ok(!await cache.cacheRead(key), `${name}: fallback delete left a blob`)
+        ok(attempts === 1 && warnings === 1, `${name}: root probing or fallback warning repeated`)
+      } finally {
+        console.warn = warn
+      }
+    }
+
+    await missingApiChecks(database)
+
+    for (const name of ['QuotaExceededError', 'AbortError', 'NotReadableError', 'Error']) {
+      const error = new DOMException('Root acquisition must fail', name)
+      const cache = createBinaryCache(database, async () => { throw error })
+      await rejects(() => cache.cacheWrite('proxy/failure', new Uint8Array(4)), error, `${name}: root write failure was hidden`)
+      await rejects(() => cache.cacheRead('proxy/failure'), error, `${name}: root read failure became a cache miss`)
+    }
+
+    for (const name of ['UnknownError', 'QuotaExceededError', 'NotReadableError']) {
+      for (const stage of ['directory', 'handle', 'open', 'write', 'close', 'read'] as const) {
+        const error = new DOMException(`Injected ${stage} failure`, name)
+        const failAt = (current: typeof stage) => { if (stage === current) throw error }
+        let aborted = false
+        const file = {
+          getFile: async () => { failAt('read'); return new File(['data'], 'failure') },
+          createWritable: async () => {
+            failAt('open')
+            return {
+              write: async () => { failAt('write') },
+              close: async () => { failAt('close') },
+              abort: async () => { aborted = true },
+            }
+          },
+        }
+        const directory = {
+          getDirectoryHandle: async () => { failAt('directory'); return directory },
+          getFileHandle: async () => { failAt('handle'); return file },
+        } as unknown as FileSystemDirectoryHandle
+        const cache = createBinaryCache(database, async () => directory)
+        const operation = stage === 'read'
+          ? () => cache.cacheRead('proxy/failure')
+          : () => cache.cacheWrite('proxy/failure', new Uint8Array(4))
+        await rejects(operation, error, `${name}: ${stage} I/O failure was hidden`)
+        if (stage === 'directory' || stage === 'handle') {
+          await rejects(() => cache.cacheRead('proxy/failure'), error, `${name}: ${stage} read failure became a cache miss`)
+        }
+        if (stage === 'write' || stage === 'close') ok(aborted, `${name}: failed writer was not aborted`)
+        ok(await database.cache.count() === 0, `${name}: ${stage} I/O failure incorrectly fell back to IDB`)
+      }
+    }
+    const idb = createBinaryCache(database, async () => null)
+    const quota = new DOMException('IDB full', 'QuotaExceededError')
+    const rejectWrite = () => { throw quota }
+    database.cache.hook('creating', rejectWrite)
+    try {
+      await rejects(() => idb.cacheWrite('proxy/failure', new Uint8Array(4)), quota, 'IDB quota failure was hidden')
+    } finally {
+      database.cache.hook('creating').unsubscribe(rejectWrite)
+    }
+    await idb.cacheWrite('proxy/read-failure', new Uint8Array(4))
+    const readError = new DOMException('IDB read failed', 'UnknownError')
+    const rejectRead = () => { throw readError }
+    database.cache.hook('reading', rejectRead)
+    try {
+      await rejects(() => idb.cacheRead('proxy/read-failure'), readError, 'IDB read failure became a cache miss')
+    } finally {
+      database.cache.hook('reading').unsubscribe(rejectRead)
+    }
+  } finally {
+    await database.delete()
   }
 }
 
@@ -203,13 +345,10 @@ async function protectionChecks() {
 
 async function prepare(state: ReloadState) {
   const source = photo(state.id)
-  const root = await navigator.storage.getDirectory()
-  const directory = await root.getDirectoryHandle(state.id, { create: true })
-  const handle = await directory.getFileHandle(source.filename, { create: true })
-  const writer = await handle.createWritable()
-  await writer.write(new Uint8Array(source.fileSize))
-  await writer.close()
-  await db.photos.put({ ...source, fileHandle: handle })
+  const original = new File([new Uint8Array(source.fileSize)], source.filename, { lastModified: source.modifiedAt })
+  await db.originals.put(await prepareOriginal(source.id, original))
+  await db.photos.put(source)
+  await fallbackChecks(state.id)
   await recencyChecks(state.id)
   await integrityChecks(source)
   await protectionChecks()
@@ -234,7 +373,7 @@ async function prepare(state: ReloadState) {
     state.coldDecodes = decodes
     ok(decodes === 3, `Expected three cold decodes; got ${decodes}`)
     // There must be no dependency on the original to reopen a cached tier.
-    await directory.removeEntry(source.filename)
+    await db.originals.delete(source.id)
   } finally {
     rawPool.decodeLinear = decode
     clearProxies()
@@ -272,10 +411,10 @@ async function afterReload(state: ReloadState) {
     ok(shared?.photoId === copy.id && shared.quality === 'full', 'A virtual copy did not reuse its master decode')
     ok(decodes === 0, `Reload repeated ${decodes} RAW decodes`)
     const current = await storageProtection()
-    const requested = await requestStorageProtection()
-    ok(['persistent', 'best-effort', 'unsupported'].includes(current) &&
-      ['persistent', 'best-effort', 'unsupported'].includes(requested), 'Storage protection returned no explicit status')
-    return { coldDecodes: state.coldDecodes, reloadDecodes: decodes, storage: requested }
+    // Native persist() can wait indefinitely for Firefox's permission prompt.
+    // Request/denial behavior is covered by protectionChecks without user input.
+    ok(['persistent', 'best-effort', 'unsupported'].includes(current), 'Storage protection returned no explicit status')
+    return { coldDecodes: state.coldDecodes, reloadDecodes: decodes, storage: current }
   } finally {
     rawPool.decodeLinear = decode
   }
@@ -292,7 +431,7 @@ async function cleanup(state: ReloadState) {
   }
   await Promise.all([...new Set(keys)].map(cacheDelete))
   await db.photos.bulkDelete([state.id, `${state.id}-copy`])
-  await (await navigator.storage.getDirectory()).removeEntry(state.id, { recursive: true })
+  await db.originals.delete(state.id)
   clearProxies()
   useUI.setState({ previewQuality: state.previewQuality })
   sessionStorage.removeItem(sessionKey)

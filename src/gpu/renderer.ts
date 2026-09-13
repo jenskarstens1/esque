@@ -433,7 +433,9 @@ export class Renderer {
     opts?: { presenting?: boolean },
   ): Promise<Renderer> {
     const ctx = await createContext(canvas, { presenting: opts?.presenting })
-    if (!ctx) throw new Error('WebGPU is unavailable in this browser.')
+    if (!ctx) throw new Error(
+      'Photo editing needs a working WebGPU adapter. Update your browser and enable graphics acceleration, then reload. Your catalog and saved edits are unchanged.',
+    )
     return new Renderer(ctx, canvas)
   }
 

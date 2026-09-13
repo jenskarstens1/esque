@@ -1,5 +1,6 @@
 import { db } from './db'
 import { resolveFile, writeSibling } from './fs'
+import { managedSidecarText } from './originals'
 import { invalidateRendered } from './previews'
 import { parseXmp, parseSidecarMetadata, editsToSidecar } from '../develop/xmp'
 import { ALL_SECTIONS, adoptStoredEdits } from '../develop/session'
@@ -52,7 +53,7 @@ export const sidecarPath = (relPath: string) => sidecarNames(relPath)[0]
  */
 export async function readSidecarText(photo: Photo): Promise<string | null> {
   const folder = await db.folders.get(photo.folderId)
-  if (!folder?.handle) return null
+  if (!folder?.handle) return managedSidecarText(photo)
   for (const name of sidecarNames(photo.relPath)) {
     const file = await resolveFile(folder.handle, name)
     if (file) return await file.text()

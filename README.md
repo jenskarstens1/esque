@@ -12,9 +12,50 @@ An open-source, web-based Lightroom alternative.
 
 ## Requirements
 
-- A Chromium browser (Chrome or Edge). Importing uses the File System Access
-  API and rendering uses WebGPU.
+- A current Chrome, Edge, Firefox or Safari with working WebGPU for editing.
 - Node.js 20 or newer for development.
+
+### Browser compatibility
+
+File access is capability-based, rather than restricted by browser name:
+
+| Capability | How photos are opened |
+| --- | --- |
+| Native file/folder pickers (including desktop Chrome and Edge) | Direct access to the originals you select; folders can be synced. |
+| Standard file/folder inputs (including Firefox and Safari) | Selected originals and matching XMP sidecars are copied into this browser's catalog. Reimport to add new files. |
+| Drag and drop | Uses native handles when available, otherwise directory entries or ordinary files. |
+
+Browser-managed copies retain nested paths and remain available after reloads,
+for editing and export. Reimporting unchanged files preserves existing edits.
+Exports can be downloaded without folder-write permission; multiple files and
+sidecars are bundled in a ZIP.
+Automatic XMP writes and folder sync require native folder access; browser-local
+copies use explicit exports and reimports instead.
+
+**Keep your original files and backups.** Managed copies are local browser data,
+not a backup: clearing site data, storage eviction, or closing a private session
+can remove them. Catalog backups contain edits and metadata, not original image
+bytes. Restore a backup, then reconnect originals with the file/folder picker.
+Preview-cache clearing does not delete managed originals. Restricted OPFS falls
+back to IndexedDB; insufficient storage is reported rather than silently dropping
+the originals.
+
+Editing requires a usable WebGPU adapter, not just `navigator.gpu`. Safari ships
+WebGPU from version 26; Firefox support depends on OS and GPU, including recent
+Windows and Apple-silicon Mac versions. There is no WebGL or CPU editing fallback:
+unsupported hardware gets an explicit message. RAW decoding also requires the
+cross-origin isolation headers configured below. Physical mobile devices and
+every OS/GPU combination are not verified.
+Development and preview servers also apply these headers to `304 Not Modified`
+responses, so revalidated decoder workers keep their isolation policy in WebKit.
+
+With the dev server running and Playwright browsers installed, run
+`ESQUE_ORIGIN=http://localhost:5173 node tools/browsermatrix.mjs portablecheck cachecheck compositecheck downloadcheck`
+for focused checks, and
+`ESQUE_ORIGIN=http://localhost:5173 node tools/crossbrowserdrive.mjs` for the actual
+input → edit → reload → download workflow. GPU checks may need
+`ESQUE_HEADED=1`. Set `ESQUE_DISABLE_OPFS=1` on the workflow harness to exercise
+IndexedDB-only caching.
 
 ## Getting started
 
@@ -60,8 +101,8 @@ self-hosted deployment.
 - **Import.** Every stills RAW format LibRaw can open (Canon, Nikon, Sony,
   Fujifilm, DNG and the rest), compiled to WebAssembly, plus JPEG, PNG, TIFF,
   WebP, AVIF and HEIC. Pick folders and files, or drop them anywhere in the
-  window — a drop mixing folders and loose files imports as one job. Photos stay
-  where they are on disk.
+  window — a drop mixing folders and loose files imports as one job. Native
+  pickers reference photos on disk; standard inputs store browser-local copies.
 - **Library.** Folders, ratings, flags, colour labels and stacks, kept in
   IndexedDB with previews cached in OPFS.
 - **Develop.** A WebGPU pipeline covering white balance, tone, curves, colour

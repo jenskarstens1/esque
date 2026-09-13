@@ -10,14 +10,14 @@
 @theme {
   /* ---- Surfaces ------------------------------------------------------- */
   /* Neutral with a hair of blue, matching Apple's dark system greys. */
-  --color-canvas: #0b0b0d; /* the surround the photo sits on */
-  --color-base: #151517; /* app background behind panels */
-  --color-panel: #1c1c1f; /* sidebars, toolbars, filmstrip */
-  --color-raised: #26262a; /* rows, cards, wells, inputs */
-  --color-control: #2f2f34; /* buttons, slider tracks */
-  --color-hover: #3a3a40;
-  --color-active: #45454c;
-  --color-scrim: rgb(0 0 0 / 0.55);
+  --color-canvas: #141417; /* the surround the photo sits on */
+  --color-base: #1e1e21; /* app background behind panels */
+  --color-panel: #26262a; /* sidebars, toolbars, filmstrip */
+  --color-raised: #313136; /* rows, cards, wells, inputs */
+  --color-control: #3b3b41; /* buttons, slider tracks */
+  --color-hover: #46464d;
+  --color-active: #515159;
+  --color-scrim: rgb(0 0 0 / 0.5);
 
   /* ---- Labels (Apple's opacity hierarchy) ----------------------------- */
   --color-label: rgb(255 255 255 / 0.92);
@@ -41,8 +41,8 @@
   --color-icon-tertiary: #82828c;
   --color-icon-quaternary: #5c5c65;
 
-  /* ---- Separators ------------------------------------------------------ */  --color-hairline: rgb(255 255 255 / 0.09);
-  --color-hairline-strong: rgb(255 255 255 / 0.15);
+  /* ---- Separators ------------------------------------------------------ */  --color-hairline: rgb(255 255 255 / 0.08);
+  --color-hairline-strong: rgb(255 255 255 / 0.14);
 
   /* ---- Washes ----------------------------------------------------------- */
   /*
@@ -63,8 +63,8 @@
   /* Lifted from @adobe/spectrum-tokens so the control reads exactly like S2's
      thick-track / precise-thumb slider, nudged a hair blue to sit in esque's
      neutral family. */
-  --color-slider-track: #393a3f; /* S2 gray-300 */
-  --color-slider-fill: #aeaeb4; /* S2 gray-700 */
+  --color-slider-track: #45464b;
+  --color-slider-fill: #b4b4ba;
   --color-slider-thumb: #131316; /* S2 gray-25  */
   --color-slider-thumb-ring: #dbdbde; /* S2 gray-800 */
   --color-slider-thumb-ring-hover: #f2f2f4; /* S2 gray-900 */

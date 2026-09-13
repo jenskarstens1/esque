@@ -14,10 +14,12 @@ import { MERGE_TABLES, mergeCatalogArchive, type MergeResult } from '../catalog/
 import { MAX_ARCHIVE_BYTES, parseCatalogArchive, type CatalogArchive } from '../catalog/schema'
 import {
   commitReconnection, inspectFileReconnection, inspectFolderReconnection, missingSources,
+  inspectLocalFileReconnection, inspectLocalFolderReconnection,
   type MissingSources, type Reconnection,
 } from '../catalog/reconnect'
 import { formatBytes } from '../lib/math'
 import type { CatalogFolder, Photo } from '../core/types'
+import { filePickerSupported, fsSupported, pickLocalFiles } from '../catalog/fs'
 
 interface BackupPreview {
   name: string
@@ -181,7 +183,7 @@ function ReconnectDialog({
     <>
       <Button disabled={!!working} onClick={onBack}>Back</Button>
       <Button variant="primary" disabled={disabled || !canConnect} onClick={onConnect}>
-        {connection.kind === 'folder' ? 'Connect this folder' : 'Connect this original'}
+        {'entries' in connection ? 'Connect this folder' : 'Connect this original'}
       </Button>
     </>
   ) : (
@@ -208,8 +210,9 @@ function ReconnectDialog({
           filenames, byte sizes and modification dates, then ask you to confirm.
           We never search by basename or replace an existing connection.
         </p>
-        {!sourceSupported && <p role="alert" className="mb-3 text-ui text-label-secondary">
-          Use Chrome or Edge to reconnect originals. This browser cannot keep file access handles.
+        {!filePickerSupported() && <p className="mb-3 text-ui text-label-secondary">
+          This browser stores a local copy of selected originals in the catalog. Keep your own
+          backup: clearing site data removes these copies. Nothing is uploaded.
         </p>}
         {sources ? sources.originals.length ? (
           <SourceBrowser
@@ -253,8 +256,8 @@ export function CatalogBackup({ onBusyChange }: { onBusyChange: (busy: boolean) 
   const [connection, setConnection] = useState<Reconnection | null>(null)
   const input = useRef<HTMLInputElement>(null)
   const disabled = !!working || importing || exporting || detecting
-  const sourceSupported = typeof window.showOpenFilePicker === 'function'
-  const folderSupported = typeof window.showDirectoryPicker === 'function'
+  const sourceSupported = true
+  const folderSupported = fsSupported() || 'webkitdirectory' in document.createElement('input')
 
   useEffect(() => {
     let live = true
@@ -368,11 +371,21 @@ export function CatalogBackup({ onBusyChange }: { onBusyChange: (busy: boolean) 
   }
 
   const chooseFolder = (folder: CatalogFolder) => void run('Checking original paths…', 'Folder was not connected.', async () => {
+    if (!fsSupported()) {
+      const files = await pickLocalFiles({ directory: true })
+      if (files.length) setConnection(await inspectLocalFolderReconnection(folder.id, files))
+      return
+    }
     const handle = await pickOrCancel(() => window.showDirectoryPicker({ id: 'esque-reconnect-originals', mode: 'read' }))
     if (handle) setConnection(await inspectFolderReconnection(folder.id, handle))
   })
 
   const chooseFile = (photo: Photo) => void run('Checking original file…', 'Original was not connected.', async () => {
+    if (!filePickerSupported()) {
+      const files = await pickLocalFiles({ multiple: false })
+      if (files[0]) setConnection(await inspectLocalFileReconnection(photo.id, files[0]))
+      return
+    }
     const handles = await pickOrCancel(() => window.showOpenFilePicker({ id: 'esque-reconnect-original', multiple: false }))
     if (handles?.[0]) setConnection(await inspectFileReconnection(photo.id, handles[0]))
   })
@@ -389,7 +402,7 @@ export function CatalogBackup({ onBusyChange }: { onBusyChange: (busy: boolean) 
     })
   }
 
-  const canConnect = connection && (connection.kind === 'file' ||
+  const canConnect = connection && (!('entries' in connection) ||
     connection.entries.every((entry) => entry.status === 'matches'))
   const status = <BackupStatus working={working} error={error} notice={notice} />
 
@@ -594,7 +607,12 @@ function SourceBrowser({
 }
 
 function ConnectionReview({ connection }: { connection: Reconnection }) {
-  if (connection.kind === 'file') return <>
+  const managed = connection.kind === 'local-file' || connection.kind === 'local-folder'
+  const storageNotice = managed ? <p className="mt-2 text-mini leading-relaxed text-label-secondary">
+    Confirming stores a copy of the original bytes in this browser, using local storage space.
+    Keep a separate backup: clearing site data removes these originals. Source files are never modified.
+  </p> : null
+  if (!('entries' in connection)) return <>
     <p className="break-words text-ui font-medium text-label">{connection.photo.filename}</p>
     <p className="mt-2 text-ui leading-relaxed text-label-secondary">
       The selected file has the same filename, byte size and modification date.
@@ -605,11 +623,14 @@ function ConnectionReview({ connection }: { connection: Reconnection }) {
       Individually connected files can be edited and exported. Writing neighbouring XMP sidecars
       still needs a connected folder root.
     </p>
+    {storageNotice}
   </>
   const matched = connection.entries.filter((entry) => entry.status === 'matches').length
   const failures = connection.entries.filter((entry) => entry.status !== 'matches')
   return <>
-    <p className="break-words text-ui font-medium text-label">{connection.folder.name} → {connection.handle.name}</p>
+    <p className="break-words text-ui font-medium text-label">
+      {connection.folder.name} → {connection.kind === 'folder' ? connection.handle.name : connection.name}
+    </p>
     <p className="mt-2 text-ui tabular-nums text-label-secondary">
       {matched.toLocaleString()} / {connection.entries.length.toLocaleString()} exact relative paths, filenames, sizes and dates match.
     </p>
@@ -628,5 +649,6 @@ function ConnectionReview({ connection }: { connection: Reconnection }) {
       Confirm this is the folder you backed up. These checks are not a content hash.
       Only its missing source connection is added; existing handles and edits are kept.
     </p>}
+    {storageNotice}
   </>
 }

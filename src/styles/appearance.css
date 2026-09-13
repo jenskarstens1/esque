@@ -35,29 +35,6 @@
   --text-display: calc(1.75rem * var(--ui-scale));
 }
 
-/* ---- Dim ---------------------------------------------------------------- */
-/*
- * Lightroom's medium grey. Every surface lifted by roughly the same amount, so
- * the elevation order the dark set establishes — canvas under base under panel
- * under raised — survives intact rather than compressing into one grey.
- */
-html[data-appearance='dim'] {
-  --color-canvas: #141417;
-  --color-base: #1e1e21;
-  --color-panel: #26262a;
-  --color-raised: #313136;
-  --color-control: #3b3b41;
-  --color-hover: #46464d;
-  --color-active: #515159;
-  --color-scrim: rgb(0 0 0 / 0.5);
-
-  --color-hairline: rgb(255 255 255 / 0.08);
-  --color-hairline-strong: rgb(255 255 255 / 0.14);
-
-  --color-slider-track: #45464b;
-  --color-slider-fill: #b4b4ba;
-}
-
 /* ---- Light -------------------------------------------------------------- */
 /*
  * Not the dark set inverted. Inverting puts the lightest surface at the back,

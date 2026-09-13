@@ -1,4 +1,5 @@
-import { defineConfig } from 'vite'
+import type { IncomingMessage, ServerResponse } from 'node:http'
+import { defineConfig, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 
@@ -11,8 +12,21 @@ const crossOriginIsolation = {
   'Cross-Origin-Embedder-Policy': 'require-corp',
 }
 
+// Vite's transform 304 responses bypass server.headers. WebKit requires the
+// isolation policy on revalidated worker modules as well as their first load.
+function isolationHeaders(_req: IncomingMessage, res: ServerResponse, next: () => void) {
+  for (const [name, value] of Object.entries(crossOriginIsolation)) res.setHeader(name, value)
+  next()
+}
+
+const isolation: Plugin = {
+  name: 'worker-isolation-headers',
+  configureServer(server) { server.middlewares.use(isolationHeaders) },
+  configurePreviewServer(server) { server.middlewares.use(isolationHeaders) },
+}
+
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
+  plugins: [isolation, react(), tailwindcss()],
   worker: { format: 'es' },
   // libraw-wasm and @jsquash/jpeg both resolve their wasm via
   // `new URL('...', import.meta.url)`. Pre-bundling rewrites those URLs and

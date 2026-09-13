@@ -5,8 +5,9 @@ import type { Photo } from '../core/types'
 export type SourceDatabase = Pick<typeof db, 'photos' | 'folders' | 'originals'>
 export const originalId = (photo: Pick<Photo, 'id' | 'masterId'>) => photo.masterId ?? photo.id
 
-export const storeFile = (file: File): StoredFile => ({
-  blob: file.slice(0, file.size, file.type),
+// Restricted WebKit profiles can store bytes but reject IndexedDB Blob writes.
+export const storeFile = async (file: File, bytes?: ArrayBuffer): Promise<StoredFile> => ({
+  blob: bytes ?? await file.arrayBuffer(),
   name: file.name,
   type: file.type,
   lastModified: file.lastModified,
@@ -21,12 +22,13 @@ export async function prepareOriginal(
   importPath = file.webkitRelativePath || file.name,
   sidecar?: File,
 ): Promise<ManagedOriginal> {
-  const hash = await crypto.subtle.digest('SHA-256', await file.arrayBuffer())
+  const bytes = await file.arrayBuffer()
+  const hash = await crypto.subtle.digest('SHA-256', bytes)
   const digest = Array.from(new Uint8Array(hash), (byte) => byte.toString(16).padStart(2, '0')).join('')
   return {
-    ...storeFile(file), id, digest, importPath,
+    ...await storeFile(file, bytes), id, digest, importPath,
     identity: JSON.stringify([importPath, file.name, file.size, file.lastModified, digest]),
-    ...(sidecar ? { sidecar: storeFile(sidecar) } : {}),
+    ...(sidecar ? { sidecar: await storeFile(sidecar) } : {}),
   }
 }
 
@@ -65,7 +67,7 @@ export async function loadPhotoFile(
 
 export async function managedSidecarText(photo: Photo, database: SourceDatabase = db): Promise<string | null> {
   const source = await database.originals.get(originalId(photo))
-  return source?.sidecar ? source.sidecar.blob.text() : null
+  return source?.sidecar ? restoreFile(source.sidecar).text() : null
 }
 
 /** Uses the key index; source lists must not read gigabytes of original blobs. */

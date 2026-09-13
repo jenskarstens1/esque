@@ -319,8 +319,8 @@ function ViewportContents({
         <StatusPill>{photo?.isRaw ? 'Developing RAW' : 'Decoding'}</StatusPill>
       )}
       {error && (
-        <div className="pointer-events-none absolute inset-0 grid place-items-center px-8 text-center text-ui text-label-tertiary">
-          {error}
+        <div role="alert" className="pointer-events-none absolute inset-0 grid place-items-center px-8 text-center text-ui text-label">
+          <p className="max-w-md rounded-md bg-panel p-4 shadow-md">{error}</p>
         </div>
       )}
       {overlays}
@@ -349,6 +349,7 @@ export function Viewport({ photo }: Props) {
   const [proxy, setProxy] = useState<Proxy | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [rendererError, setRendererError] = useState<string | null>(null)
   /**
    * Whether the camera preview is still standing in for the render.
    *
@@ -478,10 +479,17 @@ export function Viewport({ photo }: Props) {
         }
         rendererRef.current = r
         setActiveRenderer(r)
+        setRendererError(null)
         setReady(true)
+        void r.ctx.device.lost.then((info) => {
+          if (cancelled || info.reason === 'destroyed') return
+          setReady(false)
+          setActiveRenderer(null)
+          setRendererError('The graphics device disconnected. Reload to resume editing. Your catalog and saved edits are unchanged.')
+        })
       })
       .catch((err: unknown) => {
-        if (!cancelled) setError(err instanceof Error ? err.message : String(err))
+        if (!cancelled) setRendererError(err instanceof Error ? err.message : String(err))
       })
     return () => {
       cancelled = true
@@ -926,7 +934,7 @@ export function Viewport({ photo }: Props) {
         detailBusy={detailBusy}
         photo={photo}
         hdr={hdr}
-        error={error}
+        error={rendererError ?? error}
         overlays={(
           <ViewportOverlays
             comparing={comparing}

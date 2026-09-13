@@ -5,7 +5,7 @@
     <link rel="icon" type="image/svg+xml" href="/mark.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="color-scheme" content="dark" />
-    <meta name="theme-color" content="#0a0a0b" />
+    <meta name="theme-color" content="#1e1e21" />
     <title>esque - Free, Open-Source Photo Editor in Your Browser</title>
     <meta
       name="description"
@@ -61,8 +61,8 @@
             "description": "A free, open-source photo editor in your browser and a Lightroom alternative. Organize, edit and export your photos, RAW included, with nothing uploaded.",
             "applicationCategory": "MultimediaApplication",
             "applicationSubCategory": "Photo editor",
-            "operatingSystem": "Any OS with a supported Chromium browser",
-            "browserRequirements": "Requires JavaScript, WebGPU and the File System Access API. Use Chrome, Edge or another compatible Chromium browser.",
+            "operatingSystem": "Any OS with a browser and GPU that support WebGPU",
+            "browserRequirements": "Requires JavaScript and working WebGPU. Use a current Chrome, Edge, Firefox or Safari on supported hardware.",
             "inLanguage": "en",
             "isAccessibleForFree": true,
             "license": "https://www.gnu.org/licenses/agpl-3.0.html",
@@ -91,7 +91,7 @@
     <style>
       /* Matches --color-base, so the pre-React paint is the app's own
          background rather than the browser's white. */
-      html { background: #151517; }
+      html { background: #1e1e21; }
       body { margin: 0; }
       /* With scripting on, the editor is coming: showing the crawler copy for
          the length of one bundle load is a flash of content the user never
@@ -103,7 +103,7 @@
         height: 100dvh;
         overflow: auto;
         padding: clamp(24px, 6vw, 72px);
-        background: #151517;
+        background: #1e1e21;
         color: #ebebf0;
         font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
       }
@@ -145,8 +145,8 @@
             JPEG, PNG, WebP, TIFF or DNG files without overwriting your originals.
           </p>
           <p>
-            The editor requires JavaScript, WebGPU and local file access in Chrome, Edge
-            or another compatible Chromium browser. esque is under active development
+            The editor requires JavaScript and working WebGPU in a current Chrome, Edge,
+            Firefox or Safari on supported hardware. esque is under active development
             and is free software under the AGPL-3.0 licence.
           </p>
           <noscript><p>Enable JavaScript to open the photo editor.</p></noscript>

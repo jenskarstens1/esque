@@ -289,7 +289,7 @@ async function checkCatalogUpgrade() {
       equal(migratedPreset?.edits, migratePartialEdits(preset.edits),
         `catalog v${version}: preset migrated`)
       equal(migratedPreset?.paths, preset.paths, `catalog v${version}: preset scope retained`)
-      ok(await (await upgraded.cache.get('proxy/keep'))?.blob.text() === 'pixels',
+      ok(await new Blob([(await upgraded.cache.get('proxy/keep'))!.blob]).text() === 'pixels',
         `catalog v${version}: RAW cache retained`)
       if (version === 4) {
         ok((await upgraded.cacheMetadata.get('proxy/keep'))?.accessedAt === 123,

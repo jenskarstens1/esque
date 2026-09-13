@@ -6,7 +6,7 @@
 import { encodePng16 } from '../export/png'
 import { encodeTiff } from '../export/tiff'
 import { db } from '../catalog/db'
-import { cacheDelete, cacheRead, proxyKey } from '../catalog/opfs'
+import { cacheDelete, cacheRead, cacheWrite, proxyKey } from '../catalog/opfs'
 import type { Photo } from '../core/types'
 import { readProxyCache, writeProxyCache } from '../develop/proxyCache'
 
@@ -260,14 +260,10 @@ async function checkDemandQueue(context: CheckContext) {
 }
 
 async function checkInProgressCache(context: CheckContext) {
-  // A writer creates the OPFS entry before close() publishes its bytes. React
-  // StrictMode can mount a second preview consumer inside that interval, so an
-  // empty in-progress file must remain a cache miss rather than becoming a
-  // permanently broken object URL.
+  // Empty entries, including OPFS files created before close() publishes their
+  // bytes, must stay cache misses rather than become broken object URLs.
   const emptyKey = 'decodecheck/in-progress.jpg'
-  const root = await navigator.storage.getDirectory()
-  const dir = await root.getDirectoryHandle('decodecheck', { create: true })
-  await dir.getFileHandle('in-progress.jpg', { create: true })
+  await cacheWrite(emptyKey, new Blob())
   if ((await cacheRead(emptyKey)) !== null) context.failures.push('empty in-progress cache entry was published')
   await cacheDelete(emptyKey)
 }
@@ -360,11 +356,15 @@ async function checkProxyCache(context: CheckContext) {
   }
 }
 
+let stage = 'encoded formats'
 async function run() {
   const context = { failures }
   await checkEncodedFormats(context)
+  stage = 'demand queue'
   await checkDemandQueue(context)
+  stage = 'in-progress cache'
   await checkInProgressCache(context)
+  stage = 'proxy cache'
   await checkProxyCache(context)
   return { pass: failures.length === 0, failures }
 }
@@ -374,7 +374,7 @@ run()
     window.__result = result
   })
   .catch((error) => {
-    window.__result = { pass: false, failures: [error instanceof Error ? error.message : String(error)] }
+    window.__result = { pass: false, failures: [`${stage}: ${error instanceof Error ? error.message : String(error)}`] }
   })
   .finally(() => {
     window.__done = true

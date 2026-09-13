@@ -365,8 +365,6 @@ function InterfacePane() {
   const toggleSoloPanels = useUI((s) => s.toggleSoloPanels);
   const showGridExtras = useUI((s) => s.showGridExtras);
   const toggleGridExtras = useUI((s) => s.toggleGridExtras);
-  const thumbSize = useUI((s) => s.thumbSize);
-  const setThumbSize = useUI((s) => s.setThumbSize);
 
   return (
     <>
@@ -406,20 +404,6 @@ function InterfacePane() {
             onChange={toggleGridExtras}
             label="Show grid badges"
           />
-        </Field>
-        <Field label="Thumbnail size">
-          <Slider
-            value={thumbSize}
-            onChange={setThumbSize}
-            min={90}
-            max={420}
-            step={1}
-            origin={90}
-            size="S"
-            className="min-w-0 flex-1"
-            aria-label="Thumbnail size"
-          />
-          <Readout>{thumbSize} px</Readout>
         </Field>
       </FieldGroup>
     </>
@@ -541,7 +525,10 @@ function FilesPane({ onBackupBusyChange }: { onBackupBusyChange: (busy: boolean)
         </Field>
       </FieldGroup>
       <FieldGroup title="Sidecar files">
-        <Field label="Automatic writes">
+        <Field
+          label="Automatic writes"
+          hint="Requires a writable source folder. For browser-local copies, use Export with XMP sidecars instead."
+        >
           <Checkbox
             checked={autoWriteSidecars}
             onChange={(on) => void toggleWrite(on)}

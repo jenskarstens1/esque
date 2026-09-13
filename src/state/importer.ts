@@ -1,6 +1,9 @@
 import { create } from 'zustand'
-import { importFiles, importFolder, syncFolder, type ImportProgress } from '../catalog/import'
-import { filePickerSupported, fsSupported, isSupported, pickFiles, pickFolder } from '../catalog/fs'
+import { importFiles, importFolder, importLocalFiles, syncFolder, type ImportProgress } from '../catalog/import'
+import {
+  filePickerSupported, fsSupported, isSupported, pickFiles, pickFolder,
+  pickLocalFiles, localFiles, type LocalFile,
+} from '../catalog/fs'
 import { scheduleEvict } from '../catalog/opfs'
 import { useCatalog } from './catalog'
 import { toast } from '../design/toast'
@@ -30,7 +33,7 @@ interface ImporterState {
   /** Imports individually picked files rather than a whole folder. */
   runFiles: (handles?: FileSystemFileHandle[] | null, multiple?: boolean) => Promise<void>
   /** Imports a dropped mix of folders and files as one job. */
-  runDropped: (handles: FileSystemHandle[]) => Promise<void>
+  runDropped: (handles: FileSystemHandle[], files?: LocalFile[]) => Promise<void>
   sync: (folder: CatalogFolder) => Promise<void>
   cancel: () => void
 }
@@ -127,12 +130,23 @@ export const useImporter = create<ImporterState>((set, get) => ({
 
   run: async (given) => {
     if (get().active) return
-    if (!fsSupported()) {
-      toast.error('Folder access unavailable', 'esque needs a Chromium browser to read folders.')
+    if (!given && !fsSupported()) {
+      try {
+        const files = await pickLocalFiles({ directory: true })
+        if (files.length) await get().runDropped([], localFiles(files))
+      } catch (error) {
+        showImportError(error, false)
+      }
       return
     }
-    const handle = given ?? (await pickFolder())
-    if (!handle) return
+    let handle: FileSystemDirectoryHandle | null
+    try {
+      handle = given ?? await pickFolder()
+    } catch (error) {
+      showImportError(error, false)
+      return
+    }
+    if (!handle || get().active) return
 
     const controller = new AbortController()
     set({
@@ -160,12 +174,23 @@ export const useImporter = create<ImporterState>((set, get) => ({
 
   runFiles: async (given, multiple = false) => {
     if (get().active) return
-    if (!filePickerSupported()) {
-      toast.error('File access unavailable', 'esque needs a Chromium browser to read files.')
+    if (!given?.length && !filePickerSupported()) {
+      try {
+        const files = await pickLocalFiles({ multiple })
+        if (files.length) await get().runDropped([], localFiles(files))
+      } catch (error) {
+        showImportError(error, false)
+      }
       return
     }
-    const handles = given?.length ? given : await pickFiles(multiple)
-    if (!handles.length) return
+    let handles: FileSystemFileHandle[]
+    try {
+      handles = given?.length ? given : await pickFiles(multiple)
+    } catch (error) {
+      showImportError(error, false)
+      return
+    }
+    if (!handles.length || get().active) return
 
     const controller = new AbortController()
     set({
@@ -201,7 +226,7 @@ export const useImporter = create<ImporterState>((set, get) => ({
    * cancel button stops the lot, and one summary reports it, because dropping
    * four folders was one action and four toasts would read as four mistakes.
    */
-  runDropped: async (handles) => {
+  runDropped: async (handles, local = []) => {
     if (get().active) {
       toast.show('Import already running', {
         detail: 'Wait for it to finish, then drop these in.',
@@ -213,9 +238,10 @@ export const useImporter = create<ImporterState>((set, get) => ({
     )
     const files = handles.filter((h): h is FileSystemFileHandle => h.kind === 'file')
     const loose = files.filter((h) => isSupported(h.name))
-    if (!folders.length && !loose.length) {
+    const localPhotos = local.filter(({ file }) => isSupported(file.name))
+    if (!folders.length && !loose.length && !localPhotos.length) {
       toast.show('Nothing to import', {
-        detail: files.length
+        detail: files.length || local.length
           ? 'None of those files are photos esque can read.'
           : 'Drop a folder or a photo.',
       })
@@ -225,7 +251,7 @@ export const useImporter = create<ImporterState>((set, get) => ({
     const controller = new AbortController()
     // The loose files are one source however many of them there are: they are
     // scanned, counted and reported together.
-    const total = folders.length + (loose.length ? 1 : 0)
+    const total = folders.length + (loose.length ? 1 : 0) + (localPhotos.length ? 1 : 0)
     const batch = (done: number) => (total > 1 ? { done, total } : null)
     set({
       active: true,
@@ -254,6 +280,15 @@ export const useImporter = create<ImporterState>((set, get) => ({
         landed = result.folder
         done++
       }
+      if (localPhotos.length && !controller.signal.aborted) {
+        set({ batch: batch(done) })
+        const result = await importLocalFiles(local, opts)
+        totals.added += result.added
+        totals.skipped += result.skipped
+        totals.failed += result.failed
+        landed = result.folder
+        done++
+      }
       if (loose.length && !controller.signal.aborted) {
         set({ batch: batch(done) })
         const result = await importFiles(loose, opts)
@@ -270,7 +305,12 @@ export const useImporter = create<ImporterState>((set, get) => ({
         scheduleEvict(true)
       }
       showImportResult(
-        { ...totals, name: droppedName(folders.length, loose.length, landed) },
+        {
+          ...totals,
+          name: localPhotos.length
+            ? 'Local copies are stored in this browser. Keep your original files and backups.'
+            : droppedName(folders.length, loose.length, landed),
+        },
         controller.signal.aborted,
         folders.length ? 'folder' : 'files',
       )

@@ -15,7 +15,7 @@ export interface Setting {
 
 /** File metadata is explicit: some engines clone a File as a plain Blob. */
 export interface StoredFile {
-  blob: Blob
+  blob: Blob | ArrayBuffer
   name: string
   type: string
   lastModified: number
@@ -32,7 +32,8 @@ export interface ManagedOriginal extends StoredFile {
 
 export interface BinaryCacheEntry {
   key: string
-  blob: Blob
+  blob: Blob | ArrayBuffer
+  type?: string
   modifiedAt: number
 }
 

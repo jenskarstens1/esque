@@ -4,6 +4,7 @@ type CacheDatabase = Pick<typeof db, 'cache' | 'cacheMetadata'>
 type Entry = { key: string; size: number; mtime: number; backend: 'opfs' | 'idb' }
 export type CacheData = Blob | ArrayBuffer | Uint8Array
 
+/** API presence is only a hint; root acquisition below determines usability. */
 export const opfsSupported = () =>
   typeof navigator !== 'undefined' && typeof navigator.storage?.getDirectory === 'function'
 
@@ -16,6 +17,7 @@ const CACHE_DIRS = new Set(['thumb', 'preview', 'proxy', 'ai', 'models'])
 
 const asBlob = (data: CacheData) => data instanceof Blob ? data
   : new Blob([data instanceof Uint8Array ? new Uint8Array(data).buffer : data])
+const byteSize = (data: Blob | ArrayBuffer) => data instanceof Blob ? data.size : data.byteLength
 
 /** Injectable storage keeps the fallback and its failures testable in isolated catalogs. */
 export function createBinaryCache(
@@ -49,7 +51,13 @@ export function createBinaryCache(
 
   const root = () => {
     rootPromise ??= getRoot().catch((error: unknown) => {
-      if (unavailable(error)) return null
+      // WebKit private sessions expose getDirectory but reject acquisition with
+      // UnknownError. This exception is safe to fall back from only at the root,
+      // never after acquiring a file or starting an actual read/write.
+      if (unavailable(error) || (error instanceof Error && error.name === 'UnknownError')) {
+        console.warn('[esque] OPFS cache unavailable; using IndexedDB instead.', error)
+        return null
+      }
       rootPromise = null
       throw error
     })
@@ -85,7 +93,10 @@ export function createBinaryCache(
       }
     }
     if (!writable) {
-      await database.cache.put({ key, blob: asBlob(data), modifiedAt: Date.now() })
+      // Private WebKit can use IDB but cannot persist Blob backing files.
+      // Store cloneable bytes, keeping legacy Blob rows readable without migration.
+      const blob = asBlob(data)
+      await database.cache.put({ key, blob: await blob.arrayBuffer(), type: blob.type, modifiedAt: Date.now() })
       await markUsed(key, true)
       return
     }
@@ -105,10 +116,11 @@ export function createBinaryCache(
     try {
       const stored = await database.cache.get(key)
       if (stored) {
-        if (!stored.blob.size) return null
+        if (!byteSize(stored.blob)) return null
         if (touch) await markUsed(key)
         return new File([stored.blob], key.split('/').at(-1)!, {
-          type: stored.blob.type, lastModified: stored.modifiedAt,
+          type: stored.type ?? (stored.blob instanceof Blob ? stored.blob.type : ''),
+          lastModified: stored.modifiedAt,
         })
       }
       const path = await dirFor(key, false)
@@ -120,10 +132,8 @@ export function createBinaryCache(
       if (touch) await markUsed(key)
       return file
     } catch (error) {
-      if (!missing(error) && !unavailable(error)) {
-        console.warn('[esque] Could not read the local cache.', error)
-      }
-      return null
+      if (missing(error)) return null
+      throw error
     }
   }
 
@@ -150,7 +160,7 @@ export function createBinaryCache(
   async function entries(): Promise<Entry[]> {
     const out: Entry[] = []
     await database.cache.each((entry) => {
-      out.push({ key: entry.key, size: entry.blob.size, mtime: entry.modifiedAt, backend: 'idb' })
+      out.push({ key: entry.key, size: byteSize(entry.blob), mtime: entry.modifiedAt, backend: 'idb' })
     })
     const visit = async (directory: FileSystemDirectoryHandle, prefix: string) => {
       for await (const [name, handle] of directory.entries()) {

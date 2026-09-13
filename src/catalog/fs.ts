@@ -26,19 +26,20 @@ export const isSupported = (name: string) => {
 export const isRawFile = (name: string) => RAW_EXTENSIONS.has(extOf(name))
 
 export const fsSupported = () =>
-  typeof window !== 'undefined' && 'showDirectoryPicker' in window
+  typeof window !== 'undefined' && typeof window.showDirectoryPicker === 'function'
 
 export async function pickFolder(): Promise<FileSystemDirectoryHandle | null> {
   if (!fsSupported()) return null
   try {
     return await window.showDirectoryPicker({ mode: 'readwrite', id: 'esque-photos' })
-  } catch {
-    return null // user cancelled
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') return null
+    throw error
   }
 }
 
 export const filePickerSupported = () =>
-  typeof window !== 'undefined' && 'showOpenFilePicker' in window
+  typeof window !== 'undefined' && typeof window.showOpenFilePicker === 'function'
 
 /**
  * Picks loose files rather than a whole folder. Chromium hands back file
@@ -61,9 +62,55 @@ export async function pickFiles(multiple = false): Promise<FileSystemFileHandle[
         },
       ],
     })
-  } catch {
-    return [] // user cancelled
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') return []
+    throw error
   }
+}
+
+export interface LocalFile {
+  file: File
+  path: string
+}
+
+export const localFiles = (files: File[]): LocalFile[] =>
+  files.map((file) => ({ file, path: file.webkitRelativePath || file.name }))
+
+/** Standard inputs keep import available without native filesystem handles. */
+export function pickLocalFiles(
+  { directory = false, multiple = true, accept = '' }: {
+    directory?: boolean
+    multiple?: boolean
+    accept?: string
+  } = {},
+): Promise<File[]> {
+  return new Promise((resolve, reject) => {
+    const input = document.createElement('input')
+    input.type = 'file'
+    input.multiple = multiple
+    input.accept = accept
+    input.hidden = true
+    if (directory) {
+      if (!('webkitdirectory' in input)) {
+        reject(new Error('Folder selection is unavailable. Use Import Photos to select files instead.'))
+        return
+      }
+      input.webkitdirectory = true
+    }
+    const finish = (files: File[]) => {
+      input.remove()
+      resolve(files)
+    }
+    input.addEventListener('change', () => finish(Array.from(input.files ?? [])), { once: true })
+    input.addEventListener('cancel', () => finish([]), { once: true })
+    document.body.append(input)
+    try {
+      input.click()
+    } catch (error) {
+      input.remove()
+      reject(error)
+    }
+  })
 }
 
 export type PermissionResult = 'granted' | 'denied' | 'prompt'
@@ -90,8 +137,7 @@ export async function ensurePermission(
   return r === 'granted'
 }
 
-export interface ScannedFile {
-  handle: FileSystemFileHandle
+export type ScannedFile = {
   relPath: string
   name: string
   size: number
@@ -104,8 +150,11 @@ export interface ScannedFile {
    * be one more round trip each, almost all of them misses, on exactly the
    * folders that are slowest to walk.
    */
-  sidecar?: FileSystemFileHandle
-}
+  sidecar?: FileSystemFileHandle | File
+} & (
+  | { handle: FileSystemFileHandle; file?: never }
+  | { file: File; handle?: never }
+)
 
 /** The sidecar spellings in the wild: Adobe replaces the extension, others append. */
 const sidecarKeys = (name: string) => {

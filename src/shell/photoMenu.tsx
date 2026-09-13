@@ -94,7 +94,7 @@ async function saveMetadata(ids: string[]) {
   } else {
     toast.error(
       'Nothing could be saved',
-      'Sidecars are written next to the original, which needs a folder esque still has permission to write to.',
+      'Writing beside originals requires a writable source folder. For browser-local copies, use Export with XMP sidecars instead.',
     )
   }
 }

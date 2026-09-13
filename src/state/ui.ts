@@ -594,11 +594,13 @@ export const useUI = create<UIState>()(
     }),
     {
       name: "esque.ui",
-      // Retire saved accent choices without resetting the rest of the workspace.
+      // Retire saved accent choices and rename Dim without resetting the workspace.
       merge: (persisted, current) => {
         if (!persisted || typeof persisted !== "object") return current;
         const saved = { ...persisted };
         if ("accent" in saved) delete saved.accent;
+        if ("appearance" in saved && saved.appearance === "dim")
+          saved.appearance = "dark";
         return { ...current, ...saved };
       },
       // View state is per-session; layout preferences persist.

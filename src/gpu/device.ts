@@ -82,8 +82,16 @@ export async function createContext(
   let adapter: GPUAdapter | null = null
   try {
     adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' })
-  } catch {
-    return null
+  } catch (error) {
+    console.warn('[esque] Preferred GPU adapter unavailable; trying the default adapter.', error)
+  }
+  if (!adapter) {
+    try {
+      adapter = await navigator.gpu.requestAdapter()
+    } catch (error) {
+      console.warn('[esque] No usable WebGPU adapter.', error)
+      return null
+    }
   }
   if (!adapter) return null
 
@@ -117,6 +125,10 @@ export async function createContext(
   const surface = presenting
     ? ((canvas as HTMLCanvasElement).getContext('webgpu') as GPUCanvasContext | null)
     : null
+  if (presenting && !surface) {
+    device.destroy()
+    return null
+  }
 
   const ctx: Ctx = {
     device,
